@@ -2,31 +2,96 @@ openapi: 3.1.0
 info:
   title: Silicon Hook API
   version: 0.1.0
-  description: Authenticated webhook ingress, event history, and delivery to Silicon DM.
+  summary: Durable, authenticated webhook ingress for Silicons.
+  description: |
+    Silicon Hook creates signed webhook endpoints, retains the latest 10,000
+    events per endpoint, and durably forwards accepted events to Silicon DM.
+    Timestamps are UTC RFC 3339 values. Endpoint keys route requests but do not
+    authenticate them.
+  contact: { email: engineering@teamofsilicons.com }
+  license: { name: Proprietary, identifier: LicenseRef-Proprietary }
 servers:
-  - url: https://hook.teamofsilicons.com/api/v1
+  - { url: 'https://hook.teamofsilicons.com', description: Production }
 security:
   - bearerAuth: []
-  - oboAccess: []
+  - oboProof: []
+    appId: []
 tags:
-  - name: Hooks
-  - name: Events
-  - name: Internal
+  - { name: System, description: Process health and build information. }
+  - { name: Hooks, description: Authenticated webhook connection lifecycle. }
+  - { name: Events, description: Signed ingress and retained event history. }
+  - { name: Internal, description: Service-authenticated platform integration. }
+
 paths:
-  /silicons/{silicon_id}/hooks:
+  /healthz:
+    get:
+      tags: [System]
+      operationId: getLiveness
+      summary: Check process liveness
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/HealthOk' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '500': { $ref: '#/components/responses/InternalError' }
+  /readyz:
+    get:
+      tags: [System]
+      operationId: getReadiness
+      summary: Check database and schema readiness
+      description: >-
+        Verifies the exact embedded migration set and checksums, the required
+        PostgreSQL columns, constraints, indexes, triggers, and functions, and
+        the API role's least-privilege grants.
+      security: []
+      responses:
+        '200': { $ref: '#/components/responses/HealthOk' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/v1/version:
+    get:
+      tags: [System]
+      operationId: getVersion
+      summary: Read the running service version
+      security: []
+      responses:
+        '200':
+          description: Running service and contract version.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/VersionInfo' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
+  /api/v1/silicons/{silicon_id}/hooks:
     get:
       tags: [Hooks]
       operationId: listHooks
+      summary: List a Silicon's retained hooks
       parameters:
         - $ref: '#/components/parameters/OrgId'
         - $ref: '#/components/parameters/SiliconId'
-        - { name: include_deleted, in: query, schema: { type: boolean, default: false } }
+        - name: include_deleted
+          in: query
+          schema: { type: boolean, default: false }
       responses:
-        '200': { description: Hooks visible to the actor, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Hook' } } } } } } }
-        default: { $ref: '#/components/responses/Error' }
+        '200':
+          description: Hooks visible to the actor.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HookPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
     post:
       tags: [Hooks]
       operationId: createHook
+      summary: Create a signed webhook connection
       parameters:
         - $ref: '#/components/parameters/OrgId'
         - $ref: '#/components/parameters/SiliconId'
@@ -35,11 +100,27 @@ paths:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 200 }, description: { type: string, maxLength: 2000 } } }
+            schema: { $ref: '#/components/schemas/HookCreate' }
       responses:
-        '201': { description: Hook created; signing_secret is shown once, content: { application/json: { schema: { allOf: [{ $ref: '#/components/schemas/Hook' }, { type: object, required: [signing_secret], properties: { signing_secret: { type: string } } }] } } } }
-        default: { $ref: '#/components/responses/Error' }
-  /silicons/{silicon_id}/hooks/{hook_id}:
+        '201':
+          description: Hook created; the signing secret is shown once.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HookWithSecret' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '410': { $ref: '#/components/responses/Gone' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/silicons/{silicon_id}/hooks/{hook_id}:
     parameters:
       - $ref: '#/components/parameters/OrgId'
       - $ref: '#/components/parameters/SiliconId'
@@ -47,116 +128,583 @@ paths:
     get:
       tags: [Hooks]
       operationId: getHook
+      summary: Read one webhook connection
       responses:
-        '200': { description: Hook, content: { application/json: { schema: { $ref: '#/components/schemas/Hook' } } } }
-        default: { $ref: '#/components/responses/Error' }
+        '200':
+          description: Hook metadata without its signing secret.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hook' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
     delete:
       tags: [Hooks]
       operationId: deleteHook
+      summary: Soft-delete a webhook connection
       responses:
-        '204': { description: Hook disabled and retained for 45 days }
-        default: { $ref: '#/components/responses/Error' }
-  /silicons/{silicon_id}/hooks/{hook_id}/restore:
+        '204': { description: Hook disabled and retained for 45 days. }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/silicons/{silicon_id}/hooks/{hook_id}/restore:
     post:
       tags: [Hooks]
       operationId: restoreHook
+      summary: Restore a recoverable webhook connection
       parameters:
         - $ref: '#/components/parameters/OrgId'
         - $ref: '#/components/parameters/SiliconId'
         - $ref: '#/components/parameters/HookId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '200': { description: Hook restored, content: { application/json: { schema: { $ref: '#/components/schemas/Hook' } } } }
-        default: { $ref: '#/components/responses/Error' }
-  /silicons/{silicon_id}/hooks/{hook_id}/secret/rotate:
+        '200':
+          description: Hook restored with its existing endpoint and secret.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hook' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '410': { $ref: '#/components/responses/Gone' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/silicons/{silicon_id}/hooks/{hook_id}/secret/rotate:
     post:
       tags: [Hooks]
       operationId: rotateHookSecret
+      summary: Rotate a webhook signing secret
       parameters:
         - $ref: '#/components/parameters/OrgId'
         - $ref: '#/components/parameters/SiliconId'
         - $ref: '#/components/parameters/HookId'
+        - $ref: '#/components/parameters/IdempotencyKey'
       responses:
-        '200': { description: New secret shown once, content: { application/json: { schema: { type: object, required: [signing_secret], properties: { signing_secret: { type: string } } } } } }
-        default: { $ref: '#/components/responses/Error' }
-  /silicons/{silicon_id}/events:
+        '200':
+          description: New secret shown once; the old secret is invalid immediately.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/SigningSecretResponse' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '410': { $ref: '#/components/responses/Gone' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/silicons/{silicon_id}/events:
     get:
       tags: [Events]
       operationId: listSiliconEvents
+      summary: List retained events across a Silicon's hooks
       parameters:
         - $ref: '#/components/parameters/OrgId'
         - $ref: '#/components/parameters/SiliconId'
-        - { name: hook_id, in: query, schema: { type: string, format: uuid } }
-        - { name: event_type, in: query, schema: { type: string } }
-        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
-        - { name: cursor, in: query, schema: { type: string } }
+        - name: hook_id
+          in: query
+          schema: { type: string, format: uuid }
+        - name: event_type
+          in: query
+          schema: { $ref: '#/components/schemas/EventType' }
+        - name: limit
+          in: query
+          schema: { type: integer, minimum: 1, maximum: 10000, default: 100 }
+        - name: cursor
+          in: query
+          schema: { type: string, minLength: 1, maxLength: 2048 }
       responses:
-        '200': { description: 'Up to the last 10,000 retained events', content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/EventRecord' } }, next_cursor: { type: [string, 'null'] } } } } } }
-        default: { $ref: '#/components/responses/Error' }
+        '200':
+          description: Up to the requested number of retained events.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
   /silicon/{silicon_id}/{endpoint_key}:
     post:
       tags: [Events]
       operationId: receiveWebhookEvent
-      summary: Public webhook ingress for a configured Silicon hook
+      summary: Canonical public webhook ingress.
       security: []
       parameters:
         - $ref: '#/components/parameters/SiliconId'
-        - { name: endpoint_key, in: path, required: true, schema: { type: string, pattern: '^[A-Fa-f0-9]{6}$' } }
-        - { name: X-Hook-Signature, in: header, required: true, schema: { type: string }, description: HMAC signature over timestamp and raw body }
-        - { name: X-Hook-Timestamp, in: header, required: true, schema: { type: integer }, description: Unix timestamp used for replay protection }
-        - { name: Idempotency-Key, in: header, required: true, schema: { type: string } }
+        - $ref: '#/components/parameters/EndpointKey'
+        - $ref: '#/components/parameters/HookSignature'
+        - $ref: '#/components/parameters/HookTimestamp'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
             schema: { $ref: '#/components/schemas/EventEnvelopeInput' }
       responses:
-        '202': { description: Event persisted and queued for DM, content: { application/json: { schema: { type: object, required: [event_id, status], properties: { event_id: { type: string, format: uuid }, status: { const: accepted } } } } } }
-        default: { $ref: '#/components/responses/Error' }
-  /internal/iam/hooks:
+        '202':
+          description: Event persisted and durably queued for DM.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventAccepted' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/silicon/{silicon_id}/{endpoint_key}:
     post:
-      tags: [Internal]
-      operationId: createIamHook
-      security: [{ serviceAuth: [] }]
+      tags: [Events]
+      operationId: receiveWebhookEventCompatibility
+      summary: Compatibility alias for public webhook ingress.
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/SiliconId'
+        - $ref: '#/components/parameters/EndpointKey'
+        - $ref: '#/components/parameters/HookSignature'
+        - $ref: '#/components/parameters/HookTimestamp'
+        - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
         required: true
         content:
           application/json:
-            schema: { type: object, required: [org_id, silicon_id], properties: { org_id: { type: string }, silicon_id: { type: string } } }
+            schema: { $ref: '#/components/schemas/EventEnvelopeInput' }
       responses:
-        '201': { description: Default Silicon IAM hook, content: { application/json: { schema: { $ref: '#/components/schemas/Hook' } } } }
-        default: { $ref: '#/components/responses/Error' }
+        '202':
+          description: Event persisted and durably queued for DM.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EventAccepted' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/internal/iam/hooks:
+    post:
+      tags: [Internal]
+      operationId: createIamHook
+      summary: Provision a Silicon's default IAM hook
+      security: [{ serviceAuth: [] }]
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/IamHookCreate' }
+      responses:
+        '201':
+          description: Default Silicon IAM hook and one-time signing secret.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HookWithSecret' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '410': { $ref: '#/components/responses/Gone' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
 components:
   securitySchemes:
-    bearerAuth: { type: http, scheme: bearer, bearerFormat: IAM access token }
-    oboAccess: { type: apiKey, in: header, name: X-IAM-OBO-Access-Proof, description: Short-lived IAM OBO Access proof; X-App-ID is also required }
-    serviceAuth: { type: http, scheme: bearer, bearerFormat: IAM service token }
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: IAM opaque access token
+    oboProof:
+      type: apiKey
+      in: header
+      name: X-IAM-OBO-Access-Proof
+      description: |
+        Short-lived audience/action/resource-bound IAM OBO proof. Collection
+        and event-history actions bind the target Silicon ID; per-hook actions
+        bind the hook UUID.
+    appId:
+      type: apiKey
+      in: header
+      name: X-App-ID
+    serviceAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: IAM service access token
+
   parameters:
-    OrgId: { name: X-Org-ID, in: header, required: true, schema: { type: string } }
-    SiliconId: { name: silicon_id, in: path, required: true, schema: { type: string } }
-    HookId: { name: hook_id, in: path, required: true, schema: { type: string, format: uuid } }
-    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 255 } }
+    OrgId:
+      name: X-Org-ID
+      in: header
+      required: true
+      schema: { $ref: '#/components/schemas/OrganizationId' }
+    SiliconId:
+      name: silicon_id
+      in: path
+      required: true
+      schema: { $ref: '#/components/schemas/SiliconId' }
+    HookId:
+      name: hook_id
+      in: path
+      required: true
+      schema: { type: string, format: uuid }
+    EndpointKey:
+      name: endpoint_key
+      in: path
+      required: true
+      schema: { type: string, pattern: '^[A-Fa-f0-9]{6}$' }
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: true
+      schema:
+        type: string
+        minLength: 8
+        maxLength: 255
+        pattern: '^[!-~]+$'
+    HookSignature:
+      name: X-Hook-Signature
+      in: header
+      required: true
+      description: HMAC-SHA-256 of timestamp, a period, and the exact raw body.
+      schema: { type: string, pattern: '^v1=[a-f0-9]{64}$' }
+    HookTimestamp:
+      name: X-Hook-Timestamp
+      in: header
+      required: true
+      description: Unix timestamp within 300 seconds of PostgreSQL's authoritative time.
+      schema: { type: integer, format: int64 }
+
   responses:
-    Error: { description: Error, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+    BadRequest:
+      description: Required HTTP syntax, headers, or JSON are malformed.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    HealthOk:
+      description: Process or dependency is healthy.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Health' }
+    Unauthorized:
+      description: Credential is absent, invalid, expired, or revoked.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Forbidden:
+      description: The authenticated actor lacks authority.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NotFound:
+      description: The resource does not exist or is not visible.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Conflict:
+      description: Idempotency or resource-state conflict.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Gone:
+      description: A recovery or one-time-secret replay window has expired.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    RequestTimeout:
+      description: Request processing exceeded the service deadline.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    PayloadTooLarge:
+      description: >-
+        The raw body exceeds its route limit, or the normalized DM request
+        exceeds the 1,052,672-byte durable-acceptance limit.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnsupportedMediaType:
+      description: The endpoint requires application/json.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    UnprocessableEntity:
+      description: The request violates input rules.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    InternalError:
+      description: An unexpected internal invariant or programming failure occurred.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    ServiceUnavailable:
+      description: A required dependency cannot make a safe decision.
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
   schemas:
+    OrganizationId:
+      type: string
+      minLength: 1
+      maxLength: 100
+      pattern: '^[!-~]+$'
+    SiliconId:
+      type: string
+      minLength: 1
+      maxLength: 255
+      pattern: '^[!-~]+$'
+    ExternalId:
+      type: string
+      minLength: 1
+      maxLength: 255
+      pattern: '^[!-~]+$'
+    Health:
+      type: object
+      additionalProperties: false
+      required: [status]
+      properties:
+        status: { type: string, enum: [ok, ready] }
+    VersionInfo:
+      type: object
+      additionalProperties: false
+      required: [service, version]
+      properties:
+        service: { const: silicon-hook }
+        version: { type: string }
     ActorRef:
       type: object
+      additionalProperties: false
       required: [type, id]
-      properties: { type: { type: string, enum: [carbon, silicon, application, service] }, id: { type: string } }
+      properties:
+        type: { type: string, enum: [carbon, silicon, application, service] }
+        id: { $ref: '#/components/schemas/ExternalId' }
+    HookStatus:
+      type: string
+      enum: [active, deleted]
+    HookBase:
+      type: object
+      required: [id, org_id, silicon_id, name, endpoint_url, endpoint_key, status, created_by, created_at]
+      properties:
+        id: { type: string, format: uuid }
+        org_id: { $ref: '#/components/schemas/OrganizationId' }
+        silicon_id: { $ref: '#/components/schemas/SiliconId' }
+        name: { type: string, minLength: 1, maxLength: 200, pattern: '^[^\u0000]*$' }
+        description: { type: [string, 'null'], maxLength: 2000, pattern: '^[^\u0000]*$' }
+        endpoint_url: { type: string, format: uri }
+        endpoint_key: { type: string, pattern: '^[A-F0-9]{6}$' }
+        status: { $ref: '#/components/schemas/HookStatus' }
+        created_by: { $ref: '#/components/schemas/ActorRef' }
+        created_at: { type: string, format: date-time }
+        deleted_at: { type: [string, 'null'], format: date-time }
+        recoverable_until: { type: [string, 'null'], format: date-time }
     Hook:
       type: object
-      required: [id, org_id, silicon_id, name, endpoint_url, status, created_by, created_at]
-      properties: { id: { type: string, format: uuid }, org_id: { type: string }, silicon_id: { type: string }, name: { type: string }, description: { type: [string, 'null'] }, endpoint_url: { type: string, format: uri }, endpoint_key: { type: string }, status: { type: string, enum: [active, deleted] }, created_by: { $ref: '#/components/schemas/ActorRef' }, created_at: { type: string, format: date-time }, deleted_at: { type: [string, 'null'], format: date-time } }
-    EventEnvelopeInput:
+      allOf:
+        - $ref: '#/components/schemas/HookBase'
+      unevaluatedProperties: false
+    HookWithSecret:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/HookBase'
+      required: [signing_secret]
+      properties:
+        signing_secret: { type: string, pattern: '^whsec_[A-Za-z0-9_-]{43}$' }
+      unevaluatedProperties: false
+    HookCreate:
+      type: object
+      additionalProperties: false
+      required: [name]
+      properties:
+        name: { type: string, minLength: 1, maxLength: 200, pattern: '^[^\u0000]*$' }
+        description: { type: [string, 'null'], maxLength: 2000, pattern: '^[^\u0000]*$' }
+    HookPage:
+      type: object
+      additionalProperties: false
+      required: [items]
+      properties:
+        items:
+          type: array
+          maxItems: 1000
+          items: { $ref: '#/components/schemas/Hook' }
+    SigningSecretResponse:
+      type: object
+      additionalProperties: false
+      required: [signing_secret]
+      properties:
+        signing_secret: { type: string, pattern: '^whsec_[A-Za-z0-9_-]{43}$' }
+    EventType:
+      type: string
+      minLength: 1
+      maxLength: 200
+      pattern: '^[a-z0-9_.-]+$'
+    JsonbValue:
+      description: JSON value compatible with PostgreSQL jsonb; U+0000 is excluded recursively.
+      oneOf:
+        - type: 'null'
+        - type: boolean
+        - type: number
+        - type: string
+          pattern: '^[^\u0000]*$'
+        - type: array
+          items: { $ref: '#/components/schemas/JsonbValue' }
+        - type: object
+          propertyNames: { pattern: '^[^\u0000]*$' }
+          additionalProperties: { $ref: '#/components/schemas/JsonbValue' }
+    EventEnvelopeCore:
       type: object
       required: [type, payload]
-      properties: { type: { type: string, pattern: '^[a-z0-9_.-]+$' }, source: { type: string }, subject: { type: string }, occurred_at: { type: string, format: date-time }, schema_version: { type: string, default: '1.0' }, trace_id: { type: string }, payload: { type: object, additionalProperties: true } }
-    EventRecord:
+      properties:
+        type: { $ref: '#/components/schemas/EventType' }
+        payload:
+          type: object
+          propertyNames: { pattern: '^[^\u0000]*$' }
+          additionalProperties: { $ref: '#/components/schemas/JsonbValue' }
+    EventEnvelopeInput:
+      type: object
+      description: >-
+        Raw JSON is limited to 1 MiB. Its normalized minimal DM representation
+        must also fit the 1,052,672-byte durable-acceptance limit.
       allOf:
-        - $ref: '#/components/schemas/EventEnvelopeInput'
-        - type: object
-          required: [id, org_id, silicon_id, hook_id, received_at, delivery]
-          properties: { id: { type: string, format: uuid }, org_id: { type: string }, silicon_id: { type: string }, hook_id: { type: string, format: uuid }, received_at: { type: string, format: date-time }, delivery: { type: object, required: [status, attempts], properties: { status: { type: string, enum: [pending, delivered, retrying, failed] }, attempts: { type: integer, minimum: 0 }, last_attempt_at: { type: [string, 'null'], format: date-time }, failure_reason: { type: [string, 'null'] } } } }
+        - $ref: '#/components/schemas/EventEnvelopeCore'
+      properties:
+        source:
+          type: [string, 'null']
+          maxLength: 500
+          pattern: '^[^\u0000-\u001F\u007F]*$'
+        subject:
+          type: [string, 'null']
+          maxLength: 500
+          pattern: '^[^\u0000-\u001F\u007F]*$'
+        occurred_at: { type: [string, 'null'], format: date-time }
+        schema_version:
+          type: [string, 'null']
+          minLength: 1
+          maxLength: 50
+          pattern: '^[!-~]+$'
+          default: '1.0'
+        trace_id:
+          type: [string, 'null']
+          maxLength: 255
+          pattern: '^[!-~]*$'
+      unevaluatedProperties: false
+    Delivery:
+      type: object
+      additionalProperties: false
+      required: [status, attempts]
+      properties:
+        status: { type: string, enum: [pending, delivered, retrying, failed] }
+        attempts: { type: integer, minimum: 0 }
+        last_attempt_at: { type: [string, 'null'], format: date-time }
+        failure_reason: { type: [string, 'null'], maxLength: 2000 }
+    EventRecord:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelopeCore'
+      required: [occurred_at, schema_version, trace_id, id, org_id, silicon_id, hook_id, received_at, delivery]
+      properties:
+        source:
+          type: string
+          maxLength: 500
+          pattern: '^[^\u0000-\u001F\u007F]*$'
+        subject:
+          type: string
+          maxLength: 500
+          pattern: '^[^\u0000-\u001F\u007F]*$'
+        occurred_at: { type: string, format: date-time }
+        schema_version:
+          type: string
+          minLength: 1
+          maxLength: 50
+          pattern: '^[!-~]+$'
+        trace_id:
+          type: string
+          maxLength: 255
+          pattern: '^[!-~]*$'
+        id: { type: string, format: uuid }
+        org_id: { $ref: '#/components/schemas/OrganizationId' }
+        silicon_id: { $ref: '#/components/schemas/SiliconId' }
+        hook_id: { type: string, format: uuid }
+        received_at: { type: string, format: date-time }
+        delivery: { $ref: '#/components/schemas/Delivery' }
+      unevaluatedProperties: false
+    EventPage:
+      type: object
+      additionalProperties: false
+      description: The item limit is a ceiling; a 16 MiB page budget may produce a shorter page with a continuation cursor.
+      required: [items, next_cursor]
+      properties:
+        items:
+          type: array
+          maxItems: 10000
+          items: { $ref: '#/components/schemas/EventRecord' }
+        next_cursor: { type: [string, 'null'] }
+    EventAccepted:
+      type: object
+      additionalProperties: false
+      required: [event_id, status]
+      properties:
+        event_id: { type: string, format: uuid }
+        status: { const: accepted }
+    IamHookCreate:
+      type: object
+      additionalProperties: false
+      required: [org_id, silicon_id]
+      properties:
+        org_id: { $ref: '#/components/schemas/OrganizationId' }
+        silicon_id: { $ref: '#/components/schemas/SiliconId' }
     Error:
       type: object
+      additionalProperties: false
       required: [error]
-      properties: { error: { type: object, required: [code, message], properties: { code: { type: string }, message: { type: string }, request_id: { type: string } } } }
+      properties:
+        error:
+          type: object
+          additionalProperties: false
+          required: [code, message, request_id]
+          properties:
+            code: { type: string }
+            message: { type: string }
+            request_id: { type: string }
+            details: {}
