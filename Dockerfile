@@ -20,4 +20,3 @@ COPY --from=builder /build/target/release/hook-migrate /usr/local/bin/hook-migra
 USER hook
 EXPOSE 8080
 ENTRYPOINT ["/usr/local/bin/hook-api"]
-

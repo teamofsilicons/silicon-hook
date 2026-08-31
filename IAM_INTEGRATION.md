@@ -1,6 +1,7 @@
 # Silicon Hook ↔ Silicon IAM integration contract
 
-**Contract version:** `silicon-hook-iam/v1`  
+**Contract version:** `silicon-hook-iam/v1`
+
 **Status:** Hook implemented; the sibling IAM service requires the changes in
 the compatibility section before production end-to-end operation is possible.
 
