@@ -1,0 +1,89 @@
+services:
+  postgres:
+    image: postgres:16-bookworm
+    environment:
+      POSTGRES_DB: silicon_hook
+      POSTGRES_USER: silicon_hook
+      POSTGRES_PASSWORD: silicon_hook
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U silicon_hook -d silicon_hook"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    ports:
+      - "5432:5432"
+    volumes:
+      - hook-postgres:/var/lib/postgresql/data
+      - ./deploy/postgres/bootstrap-local.sql:/docker-entrypoint-initdb.d/10-runtime-roles.sql:ro
+
+  migrate:
+    build: .
+    entrypoint: ["/usr/local/bin/hook-migrate"]
+    environment:
+      HOOK_ENVIRONMENT: development
+      HOOK_MIGRATOR_DATABASE_URL: postgres://silicon_hook:silicon_hook@postgres:5432/silicon_hook
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  api:
+    build: .
+    environment:
+      HOOK_ENVIRONMENT: development
+      HOOK_BIND_ADDR: 0.0.0.0:8080
+      HOOK_PUBLIC_BASE_URL: http://localhost:8080
+      HOOK_DATABASE_URL: postgres://silicon_hook_api:silicon_hook_api@postgres:5432/silicon_hook
+      HOOK_ENCRYPTION_KEYS: 1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
+      HOOK_ENCRYPTION_CURRENT_VERSION: "1"
+      HOOK_CURSOR_SIGNING_KEY: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE
+      HOOK_IAM_BASE_URL: http://host.docker.internal:8081
+      HOOK_IAM_APP_ID: silicon-hook
+      HOOK_IAM_APP_SECRET: development-only-change-me
+      HOOK_ALLOW_LOCAL_AUTH: "true"
+      HOOK_LOCAL_IAM_SERVICE_TOKEN: development-iam-service-token
+    depends_on:
+      runtime-grants:
+        condition: service_completed_successfully
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "http://localhost:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  worker:
+    build: .
+    entrypoint: ["/usr/local/bin/hook-worker"]
+    environment:
+      HOOK_ENVIRONMENT: development
+      HOOK_DATABASE_URL: postgres://silicon_hook_worker:silicon_hook_worker@postgres:5432/silicon_hook
+      HOOK_DM_BASE_URL: http://host.docker.internal:8082/api/v1
+      HOOK_DM_SERVICE_TOKEN: development-hook-service-token
+      HOOK_DM_MAX_REQUEST_BYTES: "1052672"
+      HOOK_WORKER_DELIVERY_CONCURRENCY: "16"
+      HOOK_MAINTENANCE_BATCH_SIZE: "1000"
+      HOOK_MAINTENANCE_BATCHES_PER_CYCLE: "32"
+      HOOK_MAINTENANCE_INTERVAL_SECONDS: "5"
+    depends_on:
+      runtime-grants:
+        condition: service_completed_successfully
+
+  runtime-grants:
+    image: postgres:16-bookworm
+    entrypoint: ["sh", "-ec"]
+    command:
+      - >-
+        exec psql --host=postgres --username=silicon_hook --dbname=silicon_hook
+        --set=api_role=silicon_hook_api --set=worker_role=silicon_hook_worker
+        --file=/opt/silicon-hook/grant-runtime.sql
+    environment:
+      PGPASSWORD: silicon_hook
+    volumes:
+      - ./deploy/postgres/grant-runtime.sql:/opt/silicon-hook/grant-runtime.sql:ro
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+volumes:
+  hook-postgres:
