@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    name: Rust, PostgreSQL, and API contract
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install the pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
+          rustup default 1.98.0
+
+      - name: Check formatting
+        run: cargo fmt --all --check
+
+      - name: Check every target
+        run: cargo check --locked --all-targets --all-features
+
+      - name: Run strict Clippy
+        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+
+      - name: Run unit and PostgreSQL integration tests
+        run: cargo test --locked --all-targets --all-features
+
+      - name: Build warning-free documentation
+        env:
+          RUSTDOCFLAGS: -D warnings
+        run: cargo doc --locked --no-deps --all-features
+
+      - name: Validate OpenAPI
+        run: npx --yes @redocly/cli@2.49.0 lint openapi.yaml
+
+      - name: Install dependency-policy checker
+        run: cargo install cargo-deny --locked --version 0.20.2
+
+      - name: Enforce dependency policy
+        run: cargo deny --locked check
