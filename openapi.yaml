@@ -1,0 +1,162 @@
+openapi: 3.1.0
+info:
+  title: Silicon Hook API
+  version: 0.1.0
+  description: Authenticated webhook ingress, event history, and delivery to Silicon DM.
+servers:
+  - url: https://hook.teamofsilicons.com/api/v1
+security:
+  - bearerAuth: []
+  - oboAccess: []
+tags:
+  - name: Hooks
+  - name: Events
+  - name: Internal
+paths:
+  /silicons/{silicon_id}/hooks:
+    get:
+      tags: [Hooks]
+      operationId: listHooks
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/SiliconId'
+        - { name: include_deleted, in: query, schema: { type: boolean, default: false } }
+      responses:
+        '200': { description: Hooks visible to the actor, content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/Hook' } } } } } } }
+        default: { $ref: '#/components/responses/Error' }
+    post:
+      tags: [Hooks]
+      operationId: createHook
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/SiliconId'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [name], properties: { name: { type: string, minLength: 1, maxLength: 200 }, description: { type: string, maxLength: 2000 } } }
+      responses:
+        '201': { description: Hook created; signing_secret is shown once, content: { application/json: { schema: { allOf: [{ $ref: '#/components/schemas/Hook' }, { type: object, required: [signing_secret], properties: { signing_secret: { type: string } } }] } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /silicons/{silicon_id}/hooks/{hook_id}:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - $ref: '#/components/parameters/SiliconId'
+      - $ref: '#/components/parameters/HookId'
+    get:
+      tags: [Hooks]
+      operationId: getHook
+      responses:
+        '200': { description: Hook, content: { application/json: { schema: { $ref: '#/components/schemas/Hook' } } } }
+        default: { $ref: '#/components/responses/Error' }
+    delete:
+      tags: [Hooks]
+      operationId: deleteHook
+      responses:
+        '204': { description: Hook disabled and retained for 45 days }
+        default: { $ref: '#/components/responses/Error' }
+  /silicons/{silicon_id}/hooks/{hook_id}/restore:
+    post:
+      tags: [Hooks]
+      operationId: restoreHook
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/SiliconId'
+        - $ref: '#/components/parameters/HookId'
+      responses:
+        '200': { description: Hook restored, content: { application/json: { schema: { $ref: '#/components/schemas/Hook' } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /silicons/{silicon_id}/hooks/{hook_id}/secret/rotate:
+    post:
+      tags: [Hooks]
+      operationId: rotateHookSecret
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/SiliconId'
+        - $ref: '#/components/parameters/HookId'
+      responses:
+        '200': { description: New secret shown once, content: { application/json: { schema: { type: object, required: [signing_secret], properties: { signing_secret: { type: string } } } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /silicons/{silicon_id}/events:
+    get:
+      tags: [Events]
+      operationId: listSiliconEvents
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/SiliconId'
+        - { name: hook_id, in: query, schema: { type: string, format: uuid } }
+        - { name: event_type, in: query, schema: { type: string } }
+        - { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 10000, default: 100 } }
+        - { name: cursor, in: query, schema: { type: string } }
+      responses:
+        '200': { description: 'Up to the last 10,000 retained events', content: { application/json: { schema: { type: object, properties: { items: { type: array, items: { $ref: '#/components/schemas/EventRecord' } }, next_cursor: { type: [string, 'null'] } } } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /silicon/{silicon_id}/{endpoint_key}:
+    post:
+      tags: [Events]
+      operationId: receiveWebhookEvent
+      summary: Public webhook ingress for a configured Silicon hook
+      security: []
+      parameters:
+        - $ref: '#/components/parameters/SiliconId'
+        - { name: endpoint_key, in: path, required: true, schema: { type: string, pattern: '^[A-Fa-f0-9]{6}$' } }
+        - { name: X-Hook-Signature, in: header, required: true, schema: { type: string }, description: HMAC signature over timestamp and raw body }
+        - { name: X-Hook-Timestamp, in: header, required: true, schema: { type: integer }, description: Unix timestamp used for replay protection }
+        - { name: Idempotency-Key, in: header, required: true, schema: { type: string } }
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/EventEnvelopeInput' }
+      responses:
+        '202': { description: Event persisted and queued for DM, content: { application/json: { schema: { type: object, required: [event_id, status], properties: { event_id: { type: string, format: uuid }, status: { const: accepted } } } } } }
+        default: { $ref: '#/components/responses/Error' }
+  /internal/iam/hooks:
+    post:
+      tags: [Internal]
+      operationId: createIamHook
+      security: [{ serviceAuth: [] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, required: [org_id, silicon_id], properties: { org_id: { type: string }, silicon_id: { type: string } } }
+      responses:
+        '201': { description: Default Silicon IAM hook, content: { application/json: { schema: { $ref: '#/components/schemas/Hook' } } } }
+        default: { $ref: '#/components/responses/Error' }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer, bearerFormat: IAM access token }
+    oboAccess: { type: apiKey, in: header, name: X-IAM-OBO-Access-Proof, description: Short-lived IAM OBO Access proof; X-App-ID is also required }
+    serviceAuth: { type: http, scheme: bearer, bearerFormat: IAM service token }
+  parameters:
+    OrgId: { name: X-Org-ID, in: header, required: true, schema: { type: string } }
+    SiliconId: { name: silicon_id, in: path, required: true, schema: { type: string } }
+    HookId: { name: hook_id, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, minLength: 8, maxLength: 255 } }
+  responses:
+    Error: { description: Error, content: { application/json: { schema: { $ref: '#/components/schemas/Error' } } } }
+  schemas:
+    ActorRef:
+      type: object
+      required: [type, id]
+      properties: { type: { type: string, enum: [carbon, silicon, application, service] }, id: { type: string } }
+    Hook:
+      type: object
+      required: [id, org_id, silicon_id, name, endpoint_url, status, created_by, created_at]
+      properties: { id: { type: string, format: uuid }, org_id: { type: string }, silicon_id: { type: string }, name: { type: string }, description: { type: [string, 'null'] }, endpoint_url: { type: string, format: uri }, endpoint_key: { type: string }, status: { type: string, enum: [active, deleted] }, created_by: { $ref: '#/components/schemas/ActorRef' }, created_at: { type: string, format: date-time }, deleted_at: { type: [string, 'null'], format: date-time } }
+    EventEnvelopeInput:
+      type: object
+      required: [type, payload]
+      properties: { type: { type: string, pattern: '^[a-z0-9_.-]+$' }, source: { type: string }, subject: { type: string }, occurred_at: { type: string, format: date-time }, schema_version: { type: string, default: '1.0' }, trace_id: { type: string }, payload: { type: object, additionalProperties: true } }
+    EventRecord:
+      allOf:
+        - $ref: '#/components/schemas/EventEnvelopeInput'
+        - type: object
+          required: [id, org_id, silicon_id, hook_id, received_at, delivery]
+          properties: { id: { type: string, format: uuid }, org_id: { type: string }, silicon_id: { type: string }, hook_id: { type: string, format: uuid }, received_at: { type: string, format: date-time }, delivery: { type: object, required: [status, attempts], properties: { status: { type: string, enum: [pending, delivered, retrying, failed] }, attempts: { type: integer, minimum: 0 }, last_attempt_at: { type: [string, 'null'], format: date-time }, failure_reason: { type: [string, 'null'] } } } }
+    Error:
+      type: object
+      required: [error]
+      properties: { error: { type: object, required: [code, message], properties: { code: { type: string }, message: { type: string }, request_id: { type: string } } } }
