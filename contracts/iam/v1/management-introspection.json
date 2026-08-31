@@ -1,0 +1,15 @@
+{
+  "active": true,
+  "actor": {
+    "principal_id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91c2",
+    "type": "carbon",
+    "public_id": "alice"
+  },
+  "org_id": "acme",
+  "membership_id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91c5",
+  "organization_role": "admin",
+  "capabilities": ["hook.hooks.delete"],
+  "visible_silicon_ids": ["support:acme"],
+  "audience": "silicon-hook",
+  "expires_at": 1788172800
+}
