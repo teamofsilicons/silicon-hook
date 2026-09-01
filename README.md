@@ -36,8 +36,8 @@ PostgreSQL is authoritative. API replicas do not migrate at startup, delivery
 does not depend on in-memory queues, and IAM authorization is checked online.
 
 > **Cross-service release gate:** Hook's current product contract requires DM's
-> service-authenticated system-event ingress. The reviewed Silicon DM `0.2.0`
-> candidate removes that route and its WebSocket event frame. Do not deploy
+> service-authenticated system-event ingress. Silicon DM `0.2.0` on `main`
+> removes that route and its WebSocket event frame. Do not deploy
 > these versions together until the product contract is reconciled and either
 > DM restores Hook-event delivery or Hook is given a different destination.
 
@@ -97,8 +97,8 @@ work are durable locally. A later DM `202` acknowledges durable handoff to DM.
 DM, not Hook, owns WebSocket heartbeats, connected-client acknowledgments,
 sequence state, and replay of unacknowledged events.
 
-The current local DM `0.2.0` alignment worktree removes that Hook-event
-boundary. It is therefore a release blocker, not a compatible deployment; see
+Silicon DM `0.2.0` on `main` removes that Hook-event boundary. It is therefore
+a release blocker, not a compatible deployment; see
 [DM_INTEGRATION.md](./DM_INTEGRATION.md) for the exact contract and resolution
 choices.
 

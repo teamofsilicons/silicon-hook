@@ -2,8 +2,8 @@
 
 **Contract version:** `silicon-hook-dm/v1`
 
-**Status:** Hook implemented; the current local Silicon DM `0.2.0` alignment
-worktree is incompatible and must not be deployed with this Hook contract.
+**Status:** Hook implemented; Silicon DM `0.2.0` on `main` is incompatible and
+must not be deployed with this Hook contract.
 
 Hook's product understanding requires every durably accepted webhook event to
 reach the target Silicon through DM. This document fixes that boundary without
@@ -51,12 +51,12 @@ not Hook delivery state and heartbeats are never Hook events.
 
 ## Compatibility audit
 
-As audited on 2026-09-01, the current uncommitted Silicon DM product-alignment
-worktree removes `/api/v1/internal/hook-events`, `SystemEvent`, the Hook service
-authentication path, and realtime system-event frames under its proposed
-D-049/D-051 decisions. Deploying that state would make DM return `404` for every
-Hook delivery and strand accepted events in terminal failure, so end-to-end
-WebSocket delivery and client acknowledgment would not occur.
+As audited on 2026-09-01 at Silicon DM commit `432d058`, the committed `main`
+contract removes `/api/v1/internal/hook-events`, `SystemEvent`, the Hook service
+authentication path, and realtime system-event frames under its accepted
+D-049/D-051 decisions. Deploying that version would make DM return `404` for
+every Hook delivery and strand accepted events in terminal failure, so
+end-to-end WebSocket delivery and client acknowledgment would not occur.
 
 Production release requires one explicit product decision:
 

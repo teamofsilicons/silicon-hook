@@ -907,13 +907,13 @@ the service-authenticated default IAM Hook provisioning operation, and signed
 IAM event delivery. Removing any of them would be an explicit versioned
 cross-service breaking change rather than an inference from omitted prose.
 
-## D-077 — The DM 0.2 candidate conflicts with Hook's delivery contract
+## D-077 — The DM 0.2 contract conflicts with Hook's delivery contract
 
 **Status:** Release blocked pending an explicit cross-service product decision
 
 Hook's current product understanding still requires every accepted webhook
 event to be delivered to Silicon DM and then conveyed to the target Silicon.
-The reviewed Silicon DM `0.2.0` candidate explicitly retires
+The reviewed Silicon DM `0.2.0` contract on `main` explicitly retires
 `POST /api/v1/internal/hook-events`, its `SystemEvent` type, and the corresponding
 WebSocket frame. Deploying the two contracts together would make every Hook
 delivery terminate at DM with `404`; client acknowledgment and replay could
@@ -926,4 +926,4 @@ is blocked until product ownership chooses and versions one of two compatible
 directions: restore durable Hook-event ingestion and replay in DM, or revise
 Hook's understanding and assign a different durable delivery destination.
 This decision records the incompatibility; it does not authorize changes in the
-separately dirty DM worktree.
+separate DM repository.

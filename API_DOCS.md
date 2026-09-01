@@ -261,8 +261,8 @@ Silicon identity rather than only during the 45-day recovery window.
 ## Delivery to Silicon DM
 
 **Compatibility gate:** This section is Hook's required product contract. The
-reviewed Silicon DM `0.2.0` candidate retires its internal Hook-event route and
-system-event WebSocket frame, so it is not compatible with this Hook build. A
+reviewed Silicon DM `0.2.0` contract on `main` retires its internal Hook-event
+route and system-event WebSocket frame, so it is not compatible with this Hook build. A
 combined release is blocked until the cross-service product decision either
 restores DM's durable Hook-event contract or assigns Hook a different delivery
 destination. Hook keeps accepted events durable in its outbox, but DM `404`
