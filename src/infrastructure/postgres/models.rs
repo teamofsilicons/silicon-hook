@@ -20,6 +20,7 @@ pub(super) struct HookRow {
     pub(super) secret_nonce: Vec<u8>,
     pub(super) encrypted_signing_secret: Vec<u8>,
     pub(super) created_at: OffsetDateTime,
+    pub(super) disabled_at: Option<OffsetDateTime>,
     pub(super) deleted_at: Option<OffsetDateTime>,
 }
 

@@ -11,7 +11,7 @@
   "org_id": "acme",
   "membership_id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91c5",
   "organization_role": "admin",
-  "capabilities": ["hook.hooks.delete"],
+  "capabilities": ["hook.hooks.delete", "hook.hooks.enabled.update"],
   "visible_silicon_ids": ["support:acme"],
   "action": "hook.hooks.delete",
   "resource": "018eb4ce-e57a-7d2c-8f9f-a35928ef91e1",

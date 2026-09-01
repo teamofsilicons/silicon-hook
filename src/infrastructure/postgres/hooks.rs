@@ -6,7 +6,7 @@ use uuid::Uuid;
 use crate::domain::{
     ActorId, ActorKind, ActorRef, ApplicationId, EncryptedSecret, EncryptionKeyId, EndpointKey,
     HOOK_RECOVERY_DAYS, Hook, HookDescription, HookId, HookName, HookSnapshot, HookStatus,
-    OrganizationId, SiliconId,
+    OrganizationId, SiliconId, TransitionError,
 };
 
 use super::{
@@ -14,12 +14,14 @@ use super::{
     idempotency::{ManagementReservation, finish_management_key, reserve_management_key},
     models::{HookRow, IngressHookRow},
     types::{
-        AuditAction, AuditContext, CreateHook, CreateHookOutcome, HookMutation,
-        IngressHookResolution, RestoreHook, RestoreHookOutcome, RotateSecret, RotateSecretOutcome,
+        AuditAction, AuditContext, BatchHookActivation, CreateHook, CreateHookOutcome,
+        HookMutation, IngressHookResolution, RestoreHook, RestoreHookOutcome, RotateSecret,
+        RotateSecretOutcome,
     },
 };
 
 const MAX_RETAINED_HOOKS_PER_SILICON: i64 = 1_000;
+const MAX_HOOK_ACTIVATION_BATCH_SIZE: usize = 1_000;
 
 impl PostgresStore {
     /// Returns one hook within its complete tenant scope.
@@ -39,7 +41,7 @@ impl PostgresStore {
             SELECT id, org_id, silicon_id, endpoint_key, name, description,
                    created_by_kind, created_by_id, created_via_app_id,
                    encryption_key_id, secret_nonce, encrypted_signing_secret,
-                   created_at, deleted_at
+                   created_at, disabled_at, deleted_at
             FROM hook.hooks
             WHERE org_id = $1 AND silicon_id = $2 AND id = $3
             ",
@@ -55,7 +57,8 @@ impl PostgresStore {
     /// Resolves an active ingress route, its encrypted secret, and one
     /// authoritative PostgreSQL timestamp in the same statement.
     ///
-    /// Deleted hooks are indistinguishable from unknown routes at this layer.
+    /// Disabled and deleted hooks are indistinguishable from unknown routes at
+    /// this layer.
     ///
     /// # Errors
     ///
@@ -73,10 +76,13 @@ impl PostgresStore {
             SELECT id, org_id, silicon_id, endpoint_key, name, description,
                    created_by_kind, created_by_id, created_via_app_id,
                    encryption_key_id, secret_nonce, encrypted_signing_secret,
-                   created_at, deleted_at, ingress_clock.database_time
+                   created_at, disabled_at, deleted_at, ingress_clock.database_time
             FROM hook.hooks
             CROSS JOIN ingress_clock
-            WHERE silicon_id = $1 AND endpoint_key = $2 AND deleted_at IS NULL
+            WHERE silicon_id = $1
+              AND endpoint_key = $2
+              AND disabled_at IS NULL
+              AND deleted_at IS NULL
             ",
         )
         .bind(silicon_id.as_str())
@@ -113,7 +119,7 @@ impl PostgresStore {
             SELECT id, org_id, silicon_id, endpoint_key, name, description,
                    created_by_kind, created_by_id, created_via_app_id,
                    encryption_key_id, secret_nonce, encrypted_signing_secret,
-                   created_at, deleted_at
+                   created_at, disabled_at, deleted_at
             FROM hook.hooks
             WHERE org_id = $1
               AND silicon_id = $2
@@ -136,6 +142,76 @@ impl PostgresStore {
             ));
         }
         rows.into_iter().map(Hook::try_from).collect()
+    }
+
+    /// Returns the requested hooks in deterministic UUID order within one tenant scope.
+    ///
+    /// Disabled and soft-deleted hooks are deliberately included. Callers compare
+    /// the result count with their unique input set before authorizing a batch.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when PostgreSQL fails or a stored row violates domain
+    /// invariants.
+    pub async fn get_hooks_by_ids(
+        &self,
+        organization_id: &OrganizationId,
+        silicon_id: &SiliconId,
+        hook_ids: &[HookId],
+    ) -> Result<Vec<Hook>, StoreError> {
+        if hook_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let hook_ids = hook_ids
+            .iter()
+            .copied()
+            .map(HookId::as_uuid)
+            .collect::<Vec<_>>();
+        let rows = sqlx::query_as::<_, HookRow>(
+            r"
+            SELECT id, org_id, silicon_id, endpoint_key, name, description,
+                   created_by_kind, created_by_id, created_via_app_id,
+                   encryption_key_id, secret_nonce, encrypted_signing_secret,
+                   created_at, disabled_at, deleted_at
+            FROM hook.hooks
+            WHERE org_id = $1 AND silicon_id = $2 AND id = ANY($3)
+            ORDER BY id
+            ",
+        )
+        .bind(organization_id.as_str())
+        .bind(silicon_id.as_str())
+        .bind(&hook_ids)
+        .fetch_all(&self.pool)
+        .await?;
+        rows.into_iter().map(Hook::try_from).collect()
+    }
+
+    /// Atomically sets the desired ingress state for a unique hook batch.
+    ///
+    /// Target rows are locked in UUID order. A missing, cross-tenant, or deleted
+    /// target aborts the complete batch. Hooks already in the requested state are
+    /// returned unchanged and do not receive duplicate audit records.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation error for an empty or duplicate batch, not-found for
+    /// an incomplete tenant-scoped set, or a state conflict when any hook is
+    /// soft-deleted.
+    pub async fn set_hooks_enabled(
+        &self,
+        command: &BatchHookActivation,
+    ) -> Result<Vec<Hook>, StoreError> {
+        let hook_ids = activation_hook_ids(command)?;
+        let mut transaction = self.pool.begin().await?;
+        let mut hooks = lock_hooks_for_activation(&mut transaction, command, &hook_ids).await?;
+        let expected_changes = apply_activation_transitions(&mut hooks, command)?;
+        let changed_ids = update_hook_activation(&mut transaction, command, &hook_ids).await?;
+        if changed_ids != expected_changes {
+            return Err(StoreError::StateConflict { entity: "hook" });
+        }
+        insert_activation_audits(&mut transaction, command, &changed_ids).await?;
+        transaction.commit().await?;
+        Ok(hooks)
     }
 
     /// Creates a hook, idempotency record, and audit entry atomically.
@@ -161,7 +237,7 @@ impl PostgresStore {
                     &response,
                 )
                 .await?;
-                if hook.status() != HookStatus::Active {
+                if hook.status() == HookStatus::Deleted {
                     return Err(StoreError::StateConflict { entity: "hook" });
                 }
                 if response.encrypted_secret.as_ref() != Some(hook.encrypted_signing_secret()) {
@@ -210,7 +286,7 @@ impl PostgresStore {
         Ok(CreateHookOutcome::Created(command.hook))
     }
 
-    /// Soft-deletes an active hook and appends its audit record atomically.
+    /// Soft-deletes a non-deleted hook and appends its audit record atomically.
     ///
     /// # Errors
     ///
@@ -232,7 +308,7 @@ impl PostgresStore {
         let updated = sqlx::query(
             r"
             UPDATE hook.hooks
-            SET deleted_at = $2, updated_at = $2
+            SET disabled_at = NULL, deleted_at = $2, updated_at = $2
             WHERE id = $1 AND deleted_at IS NULL
             ",
         )
@@ -275,7 +351,7 @@ impl PostgresStore {
                     &response,
                 )
                 .await?;
-                if hook.status() != HookStatus::Active {
+                if hook.status() == HookStatus::Deleted {
                     return Err(StoreError::StateConflict { entity: "hook" });
                 }
                 transaction.commit().await?;
@@ -319,7 +395,7 @@ impl PostgresStore {
         Ok(RestoreHookOutcome::Restored(hook))
     }
 
-    /// Immediately rotates an active hook's encrypted signing secret.
+    /// Immediately rotates a non-deleted hook's encrypted signing secret.
     ///
     /// # Errors
     ///
@@ -342,7 +418,7 @@ impl PostgresStore {
                     &response,
                 )
                 .await?;
-                if hook.status() != HookStatus::Active {
+                if hook.status() == HookStatus::Deleted {
                     return Err(StoreError::StateConflict { entity: "hook" });
                 }
                 if response.encrypted_secret.as_ref() != Some(hook.encrypted_signing_secret()) {
@@ -398,6 +474,168 @@ impl PostgresStore {
     }
 }
 
+fn activation_hook_ids(command: &BatchHookActivation) -> Result<Vec<Uuid>, StoreError> {
+    let mut hook_ids = command
+        .hook_ids
+        .iter()
+        .copied()
+        .map(HookId::as_uuid)
+        .collect::<Vec<_>>();
+    if hook_ids.is_empty() || hook_ids.len() > MAX_HOOK_ACTIVATION_BATCH_SIZE {
+        return Err(StoreError::InvalidArgument {
+            field: "hook_ids",
+            reason: "must contain between one and 1000 hooks",
+        });
+    }
+    hook_ids.sort_unstable();
+    if hook_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(StoreError::InvalidArgument {
+            field: "hook_ids",
+            reason: "must not contain duplicates",
+        });
+    }
+    Ok(hook_ids)
+}
+
+async fn lock_hooks_for_activation(
+    transaction: &mut Transaction<'_, Postgres>,
+    command: &BatchHookActivation,
+    hook_ids: &[Uuid],
+) -> Result<Vec<Hook>, StoreError> {
+    let rows = sqlx::query_as::<_, HookRow>(
+        r"
+        SELECT id, org_id, silicon_id, endpoint_key, name, description,
+               created_by_kind, created_by_id, created_via_app_id,
+               encryption_key_id, secret_nonce, encrypted_signing_secret,
+               created_at, disabled_at, deleted_at
+        FROM hook.hooks
+        WHERE org_id = $1 AND silicon_id = $2 AND id = ANY($3)
+        ORDER BY id
+        FOR UPDATE
+        ",
+    )
+    .bind(command.organization_id.as_str())
+    .bind(command.silicon_id.as_str())
+    .bind(hook_ids)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if rows.len() != hook_ids.len() {
+        return Err(StoreError::NotFound { entity: "hook" });
+    }
+    rows.into_iter().map(Hook::try_from).collect()
+}
+
+fn apply_activation_transitions(
+    hooks: &mut [Hook],
+    command: &BatchHookActivation,
+) -> Result<Vec<Uuid>, StoreError> {
+    let mut changed_ids = Vec::with_capacity(hooks.len());
+    for hook in hooks {
+        if hook.is_enabled() != command.enabled {
+            changed_ids.push(hook.id().as_uuid());
+        }
+        let transition = if command.enabled {
+            hook.enable(command.occurred_at)
+        } else {
+            hook.disable(command.occurred_at)
+        };
+        if let Err(error) = transition {
+            return Err(match error {
+                TransitionError::TimestampOutOfOrder { .. } => StoreError::InvalidArgument {
+                    field: "occurred_at",
+                    reason: "must not precede the prior lifecycle transition",
+                },
+                _ => StoreError::StateConflict { entity: "hook" },
+            });
+        }
+    }
+    Ok(changed_ids)
+}
+
+async fn update_hook_activation(
+    transaction: &mut Transaction<'_, Postgres>,
+    command: &BatchHookActivation,
+    hook_ids: &[Uuid],
+) -> Result<Vec<Uuid>, StoreError> {
+    let mut changed_ids = sqlx::query_scalar::<_, Uuid>(
+        r"
+        UPDATE hook.hooks
+        SET disabled_at = CASE WHEN $4 THEN NULL ELSE $5 END,
+            updated_at = $5
+        WHERE org_id = $1
+          AND silicon_id = $2
+          AND id = ANY($3)
+          AND deleted_at IS NULL
+          AND (($4 AND disabled_at IS NOT NULL)
+               OR (NOT $4 AND disabled_at IS NULL))
+        RETURNING id
+        ",
+    )
+    .bind(command.organization_id.as_str())
+    .bind(command.silicon_id.as_str())
+    .bind(hook_ids)
+    .bind(command.enabled)
+    .bind(command.occurred_at)
+    .fetch_all(&mut **transaction)
+    .await?;
+    changed_ids.sort_unstable();
+    Ok(changed_ids)
+}
+
+async fn insert_activation_audits(
+    transaction: &mut Transaction<'_, Postgres>,
+    command: &BatchHookActivation,
+    changed_ids: &[Uuid],
+) -> Result<(), StoreError> {
+    if changed_ids.is_empty() {
+        return Ok(());
+    }
+    let audit_ids = changed_ids
+        .iter()
+        .map(|_| Uuid::now_v7())
+        .collect::<Vec<_>>();
+    let action = if command.enabled {
+        AuditAction::Enabled
+    } else {
+        AuditAction::Disabled
+    };
+    let inserted = sqlx::query(
+        r"
+        INSERT INTO hook_private.audit_log (
+            id, occurred_at, action, org_id, silicon_id, hook_id,
+            actor_kind, actor_id, calling_app_id, request_id
+        )
+        SELECT audit.audit_id, $3, $4, hook.org_id, hook.silicon_id, hook.id,
+               $5, $6, $7, $8
+        FROM unnest($1::uuid[], $2::uuid[]) AS audit(hook_id, audit_id)
+        JOIN hook.hooks AS hook ON hook.id = audit.hook_id
+        WHERE hook.org_id = $9 AND hook.silicon_id = $10
+        ",
+    )
+    .bind(changed_ids)
+    .bind(&audit_ids)
+    .bind(command.occurred_at)
+    .bind(action.as_db_str())
+    .bind(super::actor_kind_as_str(command.audit.actor.kind()))
+    .bind(command.audit.actor.id().as_str())
+    .bind(
+        command
+            .audit
+            .calling_application_id
+            .as_ref()
+            .map(ApplicationId::as_str),
+    )
+    .bind(&command.audit.request_id)
+    .bind(command.organization_id.as_str())
+    .bind(command.silicon_id.as_str())
+    .execute(&mut **transaction)
+    .await?;
+    if usize::try_from(inserted.rows_affected()).ok() != Some(changed_ids.len()) {
+        return Err(StoreError::StateConflict { entity: "hook" });
+    }
+    Ok(())
+}
+
 async fn reserve_retained_hook_slot(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: &OrganizationId,
@@ -448,6 +686,8 @@ impl TryFrom<HookRow> for Hook {
     fn try_from(row: HookRow) -> Result<Self, Self::Error> {
         let status = if row.deleted_at.is_some() {
             HookStatus::Deleted
+        } else if row.disabled_at.is_some() {
+            HookStatus::Disabled
         } else {
             HookStatus::Active
         };
@@ -489,6 +729,7 @@ impl TryFrom<HookRow> for Hook {
                 .transpose()
                 .map_err(|error| StoreError::corrupt("hook", error))?,
             created_at: row.created_at,
+            disabled_at: row.disabled_at,
             deleted_at: row.deleted_at,
             encrypted_signing_secret,
         })
@@ -584,7 +825,7 @@ async fn select_scoped_hook_for_update(
         SELECT id, org_id, silicon_id, endpoint_key, name, description,
                created_by_kind, created_by_id, created_via_app_id,
                encryption_key_id, secret_nonce, encrypted_signing_secret,
-               created_at, deleted_at
+               created_at, disabled_at, deleted_at
         FROM hook.hooks
         WHERE org_id = $1 AND silicon_id = $2 AND id = $3
         FOR UPDATE

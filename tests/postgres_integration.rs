@@ -8,7 +8,7 @@ use serde_json::{Map, json};
 use silicon_hook::{
     application::{
         AcceptEventCommand, ApplicationError, Clock, CreateHookCommand, HookApplication,
-        ManagementContext,
+        ManagementContext, SetHooksEnabledCommand,
     },
     domain::{
         ActorKind, ActorRef, AuthorizationContext, Capability, EncryptedSecret, EncryptionKeyId,
@@ -19,10 +19,11 @@ use silicon_hook::{
     infrastructure::{
         crypto::{CursorCodec, SecretCipher, SecretKey, SecretKeyring, WebhookSignatureVerifier},
         postgres::{
-            AuditContext, CreateHook, CreateHookOutcome, EVENT_HISTORY_PAGE_BYTE_BUDGET,
-            EventPageRequest, HookMutation, IdempotencyScope, IngressAcceptance, NewEvent,
-            PersistedResponse, PostgresStore, RestoreHook, RestoreHookOutcome, RotateSecret,
-            RotateSecretOutcome, RuntimeDatabaseRole, SECRET_REPLAY_WINDOW, StoreError, migrate,
+            AuditContext, BatchHookActivation, CreateHook, CreateHookOutcome,
+            EVENT_HISTORY_PAGE_BYTE_BUDGET, EventPageRequest, HookMutation, IdempotencyScope,
+            IngressAcceptance, NewEvent, PersistedResponse, PostgresStore, RestoreHook,
+            RestoreHookOutcome, RotateSecret, RotateSecretOutcome, RuntimeDatabaseRole,
+            SECRET_REPLAY_WINDOW, StoreError, migrate,
         },
     },
 };
@@ -230,6 +231,45 @@ async fn persist_hook(
     endpoint_key: &str,
     encrypted_signing_secret: EncryptedSecret,
 ) -> Result<Hook> {
+    persist_hook_with_key(
+        store,
+        identity,
+        endpoint_key,
+        encrypted_signing_secret,
+        "create-key-0001",
+        1,
+    )
+    .await
+}
+
+async fn persist_hook_with_key(
+    store: &PostgresStore,
+    identity: &FixtureIdentity,
+    endpoint_key: &str,
+    encrypted_signing_secret: EncryptedSecret,
+    idempotency_key: &str,
+    digest_marker: u8,
+) -> Result<Hook> {
+    persist_hook_with_replay_command(
+        store,
+        identity,
+        endpoint_key,
+        encrypted_signing_secret,
+        idempotency_key,
+        digest_marker,
+    )
+    .await
+    .map(|(hook, _command)| hook)
+}
+
+async fn persist_hook_with_replay_command(
+    store: &PostgresStore,
+    identity: &FixtureIdentity,
+    endpoint_key: &str,
+    encrypted_signing_secret: EncryptedSecret,
+    idempotency_key: &str,
+    digest_marker: u8,
+) -> Result<(Hook, CreateHook)> {
     let hook = new_hook(
         identity,
         endpoint_key,
@@ -238,11 +278,9 @@ async fn persist_hook(
         datetime!(2026-08-31 12:00:00.123456 UTC),
         encrypted_signing_secret,
     )?;
-    match store
-        .create_hook(create_command(identity, hook, "create-key-0001", 1)?)
-        .await?
-    {
-        CreateHookOutcome::Created(created) => Ok(created),
+    let command = create_command(identity, hook, idempotency_key, digest_marker)?;
+    match store.create_hook(command.clone()).await? {
+        CreateHookOutcome::Created(created) => Ok((created, command)),
         CreateHookOutcome::Replayed { .. } => {
             bail!("a fresh integration database unexpectedly replayed hook creation")
         }
@@ -356,12 +394,14 @@ async fn mark_hook_deleted(
     deleted_at: OffsetDateTime,
     updated_at: OffsetDateTime,
 ) -> Result<()> {
-    sqlx::query("UPDATE hook.hooks SET deleted_at = $2, updated_at = $3 WHERE id = $1")
-        .bind(hook_id)
-        .bind(deleted_at)
-        .bind(updated_at)
-        .execute(store.pool())
-        .await?;
+    sqlx::query(
+        "UPDATE hook.hooks SET disabled_at = NULL, deleted_at = $2, updated_at = $3 WHERE id = $1",
+    )
+    .bind(hook_id)
+    .bind(deleted_at)
+    .bind(updated_at)
+    .execute(store.pool())
+    .await?;
     Ok(())
 }
 
@@ -488,6 +528,38 @@ async fn assert_schema_not_ready_contains(store: &PostgresStore, expected: &str)
     }
 }
 
+async fn verify_activation_schema_contract(database: &TestDatabase) -> Result<()> {
+    let pool = database.store.pool();
+    sqlx::query("ALTER TABLE hook.hooks DROP CONSTRAINT hooks_disabled_at_valid")
+        .execute(pool)
+        .await?;
+    assert_schema_not_ready_contains(&database.store, "hook.hooks.hooks_disabled_at_valid").await?;
+    sqlx::query(
+        "ALTER TABLE hook.hooks ADD CONSTRAINT hooks_disabled_at_valid \
+         CHECK (disabled_at IS NULL OR (isfinite(disabled_at) AND disabled_at >= created_at))",
+    )
+    .execute(pool)
+    .await?;
+
+    sqlx::query(
+        "ALTER TABLE hook.hooks DROP CONSTRAINT hooks_lifecycle_timestamps_mutually_exclusive",
+    )
+    .execute(pool)
+    .await?;
+    assert_schema_not_ready_contains(
+        &database.store,
+        "hook.hooks.hooks_lifecycle_timestamps_mutually_exclusive",
+    )
+    .await?;
+    sqlx::query(
+        "ALTER TABLE hook.hooks ADD CONSTRAINT hooks_lifecycle_timestamps_mutually_exclusive \
+         CHECK (disabled_at IS NULL OR deleted_at IS NULL)",
+    )
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn migrations_apply_to_a_fresh_postgresql_16_database() -> Result<()> {
     let database = TestDatabase::start_unmigrated().await?;
@@ -536,16 +608,19 @@ async fn migrations_apply_to_a_fresh_postgresql_16_database() -> Result<()> {
         .await?;
 
     assert!(tables_exist);
-    assert_eq!(applied_migrations, 1);
+    assert_eq!(applied_migrations, 2);
 
     let (migration_version, checksum) = sqlx::query_as::<_, (i64, Vec<u8>)>(
         "SELECT version, checksum FROM _sqlx_migrations ORDER BY version DESC LIMIT 1",
     )
     .fetch_one(pool)
     .await?;
-    sqlx::query("UPDATE _sqlx_migrations SET checksum = decode(repeat('00', 48), 'hex')")
-        .execute(pool)
-        .await?;
+    sqlx::query(
+        "UPDATE _sqlx_migrations SET checksum = decode(repeat('00', 48), 'hex') WHERE version = $1",
+    )
+    .bind(migration_version)
+    .execute(pool)
+    .await?;
     assert_schema_not_ready_contains(&database.store, "checksum").await?;
 
     sqlx::query("UPDATE _sqlx_migrations SET checksum = $1 WHERE version = $2")
@@ -563,6 +638,8 @@ async fn migrations_apply_to_a_fresh_postgresql_16_database() -> Result<()> {
     )
     .execute(pool)
     .await?;
+
+    verify_activation_schema_contract(&database).await?;
 
     sqlx::query("DROP TRIGGER events_are_immutable ON hook.events")
         .execute(pool)
@@ -770,6 +847,546 @@ async fn unicode_scalar_boundaries_round_trip_for_hooks_and_events() -> Result<(
     Ok(())
 }
 
+async fn seed_activation_history(
+    store: &PostgresStore,
+    hook: &Hook,
+    secret: &EncryptedSecret,
+) -> Result<()> {
+    let received_at = datetime!(2026-08-31 12:00:30 UTC);
+    let event = event_record(
+        hook,
+        EventId::new(),
+        RequestDigest::sha256(b"activation-history"),
+        received_at,
+        None,
+        None,
+    )?;
+    store
+        .accept_event(&NewEvent::new(
+            event,
+            secret.clone(),
+            RequestDigest::sha256(b"activation-history-authenticated"),
+            "activation-event-0001".to_owned(),
+        )?)
+        .await?;
+    Ok(())
+}
+
+async fn assert_disabled_hook_retention(
+    store: &PostgresStore,
+    identity: &FixtureIdentity,
+    hook: &Hook,
+    original_secret: &EncryptedSecret,
+    disabled_at: OffsetDateTime,
+) -> Result<()> {
+    assert!(
+        store
+            .find_active_hook_by_endpoint(&identity.silicon_id, hook.endpoint_key())
+            .await?
+            .is_none()
+    );
+    let rejected_event = event_record(
+        hook,
+        EventId::new(),
+        RequestDigest::sha256(b"disabled-ingress"),
+        disabled_at,
+        None,
+        None,
+    )?;
+    let rejected = store
+        .accept_event(&NewEvent::new(
+            rejected_event,
+            original_secret.clone(),
+            RequestDigest::sha256(b"disabled-ingress-authenticated"),
+            "activation-disabled-event".to_owned(),
+        )?)
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(StoreError::NotFound { entity: "hook" })
+    ));
+    let listed = store
+        .list_hooks(
+            &identity.organization_id,
+            &identity.silicon_id,
+            false,
+            disabled_at,
+        )
+        .await?;
+    assert_eq!(listed.len(), 2);
+    assert!(
+        listed
+            .iter()
+            .all(|item| item.status() == HookStatus::Disabled)
+    );
+    assert_eq!(
+        listed
+            .iter()
+            .find(|item| item.id() == hook.id())
+            .map(Hook::encrypted_signing_secret),
+        Some(original_secret)
+    );
+    let history = store
+        .list_events(&EventPageRequest {
+            organization_id: identity.organization_id.clone(),
+            silicon_id: identity.silicon_id.clone(),
+            filter: EventFilter::new(Some(hook.id()), None),
+            cursor: None,
+            limit: 10,
+        })
+        .await?;
+    assert_eq!(history.items.len(), 1);
+    Ok(())
+}
+
+async fn assert_disabled_rotation_replays(
+    store: &PostgresStore,
+    identity: &FixtureIdentity,
+    hook: &Hook,
+    disabled_at: OffsetDateTime,
+) -> Result<()> {
+    let rotation_time = disabled_at + time::Duration::seconds(30);
+    let rotated_secret = encrypted_secret("activation-v2", 23)?;
+    let rotation = RotateSecret {
+        organization_id: identity.organization_id.clone(),
+        silicon_id: identity.silicon_id.clone(),
+        hook_id: hook.id(),
+        encrypted_secret: rotated_secret.clone(),
+        idempotency: management_scope(
+            identity,
+            "hook.secret.rotate",
+            hook.id().to_string(),
+            "activation-rotation-0001",
+            23,
+        ),
+        response: PersistedResponse {
+            status: 200,
+            resource_id: Some(hook.id()),
+            encrypted_secret: Some(rotated_secret.clone()),
+            secret_replay_until: Some(
+                rotation_time
+                    .checked_add(SECRET_REPLAY_WINDOW)
+                    .context("activation rotation replay deadline overflow")?,
+            ),
+        },
+        audit: audit_context(identity, "request:activation:rotate"),
+        occurred_at: rotation_time,
+    };
+    let rotated = store.rotate_hook_secret(&rotation).await?;
+    assert!(matches!(
+        rotated,
+        RotateSecretOutcome::Rotated(ref current)
+            if current.status() == HookStatus::Disabled
+                && current.encrypted_signing_secret() == &rotated_secret
+    ));
+    let replay = store.rotate_hook_secret(&rotation).await?;
+    assert!(matches!(
+        replay,
+        RotateSecretOutcome::Replayed { ref hook, .. }
+            if hook.status() == HookStatus::Disabled
+                && hook.encrypted_signing_secret() == &rotated_secret
+    ));
+    Ok(())
+}
+
+async fn assert_activation_noop_and_reenable(
+    database: &TestDatabase,
+    identity: &FixtureIdentity,
+    first: &Hook,
+    disable: BatchHookActivation,
+) -> Result<()> {
+    let disabled_at = disable.occurred_at;
+    let disabled_audits = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM hook_private.audit_log WHERE action = 'hook.disabled'",
+    )
+    .fetch_one(database.store.pool())
+    .await?;
+    assert_eq!(disabled_audits, 2);
+    let repeated = database
+        .store
+        .set_hooks_enabled(&BatchHookActivation {
+            occurred_at: disabled_at + time::Duration::minutes(1),
+            ..disable.clone()
+        })
+        .await?;
+    assert!(
+        repeated
+            .iter()
+            .all(|hook| hook.disabled_at() == Some(disabled_at))
+    );
+    let repeated_audits = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM hook_private.audit_log WHERE action = 'hook.disabled'",
+    )
+    .fetch_one(database.store.pool())
+    .await?;
+    assert_eq!(repeated_audits, disabled_audits);
+
+    let enabled = database
+        .store
+        .set_hooks_enabled(&BatchHookActivation {
+            enabled: true,
+            occurred_at: datetime!(2026-08-31 12:03:00 UTC),
+            audit: audit_context(identity, "request:activation:enable"),
+            ..disable
+        })
+        .await?;
+    assert!(
+        enabled
+            .iter()
+            .all(|hook| { hook.status() == HookStatus::Active && hook.disabled_at().is_none() })
+    );
+    assert!(
+        database
+            .store
+            .find_active_hook_by_endpoint(&identity.silicon_id, first.endpoint_key())
+            .await?
+            .is_some()
+    );
+    let enabled_audits = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM hook_private.audit_log WHERE action = 'hook.enabled'",
+    )
+    .fetch_one(database.store.pool())
+    .await?;
+    assert_eq!(enabled_audits, 2);
+    Ok(())
+}
+
+#[tokio::test]
+async fn activation_pauses_ingress_but_preserves_listing_history_and_credentials() -> Result<()> {
+    let database = TestDatabase::start().await?;
+    let identity = FixtureIdentity::new()?;
+    let first_secret = encrypted_secret("activation-v1", 21)?;
+    let second_secret = encrypted_secret("activation-v1", 22)?;
+    let (first, first_create) = persist_hook_with_replay_command(
+        &database.store,
+        &identity,
+        "A11001",
+        first_secret.clone(),
+        "activation-create-0001",
+        21,
+    )
+    .await?;
+    let second = persist_hook_with_key(
+        &database.store,
+        &identity,
+        "A11002",
+        second_secret.clone(),
+        "activation-create-0002",
+        22,
+    )
+    .await?;
+    seed_activation_history(&database.store, &first, &first_secret).await?;
+
+    let disabled_at = datetime!(2026-08-31 12:01:00 UTC);
+    let requested_order = vec![second.id(), first.id()];
+    let disabled = application(database.store.clone(), disabled_at)?
+        .set_hooks_enabled(SetHooksEnabledCommand {
+            authorization: identity.authorization(),
+            silicon_id: identity.silicon_id.clone(),
+            hook_ids: requested_order.clone(),
+            enabled: false,
+            request_id: Some("request:activation:disable".to_owned()),
+        })
+        .await?;
+    assert_eq!(
+        disabled.iter().map(Hook::id).collect::<Vec<_>>(),
+        requested_order
+    );
+    let disable = BatchHookActivation {
+        organization_id: identity.organization_id.clone(),
+        silicon_id: identity.silicon_id.clone(),
+        hook_ids: vec![second.id(), first.id()],
+        enabled: false,
+        audit: audit_context(&identity, "request:activation:disable"),
+        occurred_at: disabled_at,
+    };
+    assert!(disabled.iter().all(|hook| {
+        hook.status() == HookStatus::Disabled && hook.disabled_at() == Some(disabled_at)
+    }));
+    let create_replay = database.store.create_hook(first_create).await?;
+    assert!(matches!(
+        create_replay,
+        CreateHookOutcome::Replayed { hook, .. }
+            if hook.status() == HookStatus::Disabled
+                && hook.encrypted_signing_secret() == &first_secret
+    ));
+    assert_disabled_hook_retention(
+        &database.store,
+        &identity,
+        &first,
+        &first_secret,
+        disabled_at,
+    )
+    .await?;
+    assert_disabled_rotation_replays(&database.store, &identity, &first, disabled_at).await?;
+    assert_activation_noop_and_reenable(&database, &identity, &first, disable).await?;
+    Ok(())
+}
+
+async fn assert_invalid_activation_batches_are_atomic(
+    database: &TestDatabase,
+    identity: &FixtureIdentity,
+    active: &Hook,
+    deleted: &Hook,
+    disabled_at: OffsetDateTime,
+) -> Result<()> {
+    let failed = database
+        .store
+        .set_hooks_enabled(&BatchHookActivation {
+            organization_id: identity.organization_id.clone(),
+            silicon_id: identity.silicon_id.clone(),
+            hook_ids: vec![active.id(), deleted.id()],
+            enabled: false,
+            audit: audit_context(identity, "request:atomic:failed"),
+            occurred_at: disabled_at + time::Duration::minutes(2),
+        })
+        .await;
+    assert!(matches!(
+        failed,
+        Err(StoreError::StateConflict { entity: "hook" })
+    ));
+    let active_after_failure = database
+        .store
+        .get_hook(&identity.organization_id, &identity.silicon_id, active.id())
+        .await?
+        .context("active hook disappeared after rejected activation batch")?;
+    assert_eq!(active_after_failure.status(), HookStatus::Active);
+    let failed_audits = sqlx::query_scalar::<_, i64>(
+        "SELECT count(*) FROM hook_private.audit_log WHERE request_id = 'request:atomic:failed'",
+    )
+    .fetch_one(database.store.pool())
+    .await?;
+    assert_eq!(failed_audits, 0);
+
+    let missing = HookId::from_uuid(uuid::Uuid::from_u128(u128::MAX));
+    let missing_result = database
+        .store
+        .set_hooks_enabled(&BatchHookActivation {
+            organization_id: identity.organization_id.clone(),
+            silicon_id: identity.silicon_id.clone(),
+            hook_ids: vec![active.id(), missing],
+            enabled: false,
+            audit: audit_context(identity, "request:atomic:missing"),
+            occurred_at: disabled_at + time::Duration::minutes(3),
+        })
+        .await;
+    assert!(matches!(
+        missing_result,
+        Err(StoreError::NotFound { entity: "hook" })
+    ));
+    let duplicate_result = database
+        .store
+        .set_hooks_enabled(&BatchHookActivation {
+            organization_id: identity.organization_id.clone(),
+            silicon_id: identity.silicon_id.clone(),
+            hook_ids: vec![active.id(), active.id()],
+            enabled: false,
+            audit: audit_context(identity, "request:atomic:duplicate"),
+            occurred_at: disabled_at + time::Duration::minutes(4),
+        })
+        .await;
+    assert!(matches!(
+        duplicate_result,
+        Err(StoreError::InvalidArgument {
+            field: "hook_ids",
+            ..
+        })
+    ));
+    Ok(())
+}
+
+async fn assert_activation_timestamp_constraints(
+    store: &PostgresStore,
+    active: &Hook,
+    deleted: &Hook,
+) -> Result<()> {
+    let infinite_disabled_at =
+        sqlx::query("UPDATE hook.hooks SET disabled_at = 'infinity'::timestamptz WHERE id = $1")
+            .bind(active.id().as_uuid())
+            .execute(store.pool())
+            .await;
+    assert!(infinite_disabled_at.is_err());
+    let early_disabled_at = sqlx::query(
+        "UPDATE hook.hooks SET disabled_at = created_at - INTERVAL '1 microsecond' WHERE id = $1",
+    )
+    .bind(active.id().as_uuid())
+    .execute(store.pool())
+    .await;
+    assert!(early_disabled_at.is_err());
+    let overlapping_lifecycle =
+        sqlx::query("UPDATE hook.hooks SET disabled_at = deleted_at WHERE id = $1")
+            .bind(deleted.id().as_uuid())
+            .execute(store.pool())
+            .await;
+    assert!(overlapping_lifecycle.is_err());
+    Ok(())
+}
+
+#[tokio::test]
+async fn activation_batch_rejects_invalid_sets_atomically_and_enforces_schema_guards() -> Result<()>
+{
+    let database = TestDatabase::start().await?;
+    let identity = FixtureIdentity::new()?;
+    let first = persist_hook_with_key(
+        &database.store,
+        &identity,
+        "B22001",
+        encrypted_secret("activation-atomic-v1", 31)?,
+        "activation-atomic-create-0001",
+        31,
+    )
+    .await?;
+    let second = persist_hook_with_key(
+        &database.store,
+        &identity,
+        "B22002",
+        encrypted_secret("activation-atomic-v1", 32)?,
+        "activation-atomic-create-0002",
+        32,
+    )
+    .await?;
+
+    let disabled_at = datetime!(2026-08-31 12:01:00 UTC);
+    database
+        .store
+        .set_hooks_enabled(&BatchHookActivation {
+            organization_id: identity.organization_id.clone(),
+            silicon_id: identity.silicon_id.clone(),
+            hook_ids: vec![second.id()],
+            enabled: false,
+            audit: audit_context(&identity, "request:atomic:disable"),
+            occurred_at: disabled_at,
+        })
+        .await?;
+    let deleted = database
+        .store
+        .delete_hook(&HookMutation {
+            organization_id: identity.organization_id.clone(),
+            silicon_id: identity.silicon_id.clone(),
+            hook_id: second.id(),
+            audit: audit_context(&identity, "request:atomic:delete"),
+            occurred_at: disabled_at + time::Duration::minutes(1),
+        })
+        .await?;
+    assert_eq!(deleted.status(), HookStatus::Deleted);
+    assert_eq!(deleted.disabled_at(), None);
+
+    let fetched = database
+        .store
+        .get_hooks_by_ids(
+            &identity.organization_id,
+            &identity.silicon_id,
+            &[second.id(), first.id()],
+        )
+        .await?;
+    let mut expected_ids = vec![first.id(), second.id()];
+    expected_ids.sort_unstable();
+    assert_eq!(
+        fetched.iter().map(Hook::id).collect::<Vec<_>>(),
+        expected_ids
+    );
+    assert!(
+        fetched
+            .iter()
+            .any(|hook| hook.status() == HookStatus::Deleted)
+    );
+
+    assert_invalid_activation_batches_are_atomic(
+        &database,
+        &identity,
+        &first,
+        &second,
+        disabled_at,
+    )
+    .await?;
+    assert_activation_timestamp_constraints(&database.store, &first, &second).await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn concurrent_disable_wins_before_event_acceptance_commit() -> Result<()> {
+    let database = TestDatabase::start().await?;
+    let identity = FixtureIdentity::new()?;
+    let hook = persist_hook_with_key(
+        &database.store,
+        &identity,
+        "C33001",
+        encrypted_secret("activation-race-v1", 41)?,
+        "activation-race-create-0001",
+        41,
+    )
+    .await?;
+    let ingress = ingress_command(
+        &hook,
+        EventId::new(),
+        "activation-race-event",
+        RequestDigest::sha256(b"activation race"),
+        RequestDigest::sha256(b"1700000004.activation race"),
+    )?;
+
+    let mut disabling = database.store.pool().begin().await?;
+    sqlx::query("SELECT id FROM hook.hooks WHERE id = $1 FOR UPDATE")
+        .bind(hook.id().as_uuid())
+        .execute(&mut *disabling)
+        .await?;
+    let ingress_store = database.store.clone();
+    let ingress_task = tokio::spawn(async move { ingress_store.accept_event(&ingress).await });
+    wait_for_blocked_query(database.store.pool(), "FOR SHARE").await?;
+    sqlx::query("UPDATE hook.hooks SET disabled_at = $2, updated_at = $2 WHERE id = $1")
+        .bind(hook.id().as_uuid())
+        .bind(datetime!(2026-08-31 12:02:00 UTC))
+        .execute(&mut *disabling)
+        .await?;
+    disabling.commit().await?;
+
+    let ingress_result = ingress_task.await.context("ingress task panicked")?;
+    assert!(matches!(
+        ingress_result,
+        Err(StoreError::NotFound { entity: "hook" })
+    ));
+    let counts = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT (SELECT count(*) FROM hook.events), \
+                (SELECT count(*) FROM hook_private.dm_outbox)",
+    )
+    .fetch_one(database.store.pool())
+    .await?;
+    assert_eq!(counts, (0, 0));
+    Ok(())
+}
+
+async fn disable_hook_and_assert_quota_visibility(
+    store: &PostgresStore,
+    identity: &FixtureIdentity,
+    hook_id: HookId,
+    retained_at: OffsetDateTime,
+) -> Result<()> {
+    store
+        .set_hooks_enabled(&BatchHookActivation {
+            organization_id: identity.organization_id.clone(),
+            silicon_id: identity.silicon_id.clone(),
+            hook_ids: vec![hook_id],
+            enabled: false,
+            audit: audit_context(identity, "request:quota:disable"),
+            occurred_at: retained_at,
+        })
+        .await?;
+    let listed = store
+        .list_hooks(
+            &identity.organization_id,
+            &identity.silicon_id,
+            true,
+            retained_at,
+        )
+        .await?;
+    assert_eq!(listed.len(), 1_000);
+    assert!(
+        listed
+            .iter()
+            .any(|hook| hook.id() == hook_id && hook.status() == HookStatus::Disabled)
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn retained_hook_limit_bounds_creation_and_listing() -> Result<()> {
     let database = TestDatabase::start().await?;
@@ -787,16 +1404,14 @@ async fn retained_hook_limit_bounds_creation_and_listing() -> Result<()> {
     )
     .await?;
 
-    let listed = database
-        .store
-        .list_hooks(
-            &identity.organization_id,
-            &identity.silicon_id,
-            true,
-            retained_at,
-        )
-        .await?;
-    assert_eq!(listed.len(), 1_000);
+    let disabled_hook_id = HookId::from_uuid(uuid::Uuid::from_u128(2));
+    disable_hook_and_assert_quota_visibility(
+        &database.store,
+        &identity,
+        disabled_hook_id,
+        retained_at,
+    )
+    .await?;
 
     let boundary_hook = new_hook(
         &identity,
@@ -1150,6 +1765,24 @@ async fn restore_replays_identically_and_rejects_changed_or_new_active_requests(
     assert_eq!(replay_hook.deleted_at(), None);
     assert_eq!(replay_response, restore.response);
 
+    database
+        .store
+        .set_hooks_enabled(&BatchHookActivation {
+            organization_id: identity.organization_id.clone(),
+            silicon_id: identity.silicon_id.clone(),
+            hook_ids: vec![hook.id()],
+            enabled: false,
+            audit: audit_context(&identity, "request:restore:disable"),
+            occurred_at: datetime!(2026-08-31 12:04:00 UTC),
+        })
+        .await?;
+    let disabled_replay = database.store.restore_hook(&restore).await?;
+    assert!(matches!(
+        disabled_replay,
+        RestoreHookOutcome::Replayed { hook, response }
+            if hook.status() == HookStatus::Disabled && response == restore.response
+    ));
+
     let mut changed_digest = restore.clone();
     changed_digest.idempotency.request_digest = [6; 32];
     assert!(matches!(
@@ -1443,14 +2076,14 @@ async fn retention_queue_is_fair_replay_safe_and_exact_for_history() -> Result<(
 
     let first = database.store.run_maintenance_pass(2).await?;
     let second = database.store.run_maintenance_pass(2).await?;
-    assert_eq!((first.events_purged, second.events_purged), (1, 1));
+    assert_eq!((first.events_purged, second.events_purged), (1, 2));
     assert_eq!(
         retention_state(&database.store, &young_hook).await?.0,
         10_001
     );
     assert_eq!(
         retention_state(&database.store, &prunable_hook).await?,
-        (10_018, true)
+        (10_017, true)
     );
 
     let page = database

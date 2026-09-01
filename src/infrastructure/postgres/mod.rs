@@ -29,8 +29,8 @@ use crate::domain::ActorKind;
 pub use error::{Result, StoreError};
 pub use readiness::RuntimeDatabaseRole;
 pub use types::{
-    AuditAction, AuditContext, ClaimedDelivery, CreateHook, CreateHookOutcome, DeliveryAttempt,
-    DeliveryOutcome, EventPage, EventPageRequest, HookMutation, IdempotencyScope,
+    AuditAction, AuditContext, BatchHookActivation, ClaimedDelivery, CreateHook, CreateHookOutcome,
+    DeliveryAttempt, DeliveryOutcome, EventPage, EventPageRequest, HookMutation, IdempotencyScope,
     IngressAcceptance, IngressHookResolution, MaintenanceResult, NewEvent, PersistedResponse,
     ProvisionHookOutcome, RestoreHook, RestoreHookOutcome, RotateSecret, RotateSecretOutcome,
 };

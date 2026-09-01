@@ -53,6 +53,21 @@ pub struct DeleteHookCommand {
     pub request_id: Option<String>,
 }
 
+/// Input for changing the desired enabled state of one or more hooks.
+#[derive(Clone, Debug)]
+pub struct SetHooksEnabledCommand {
+    /// IAM-derived authorization facts for this request.
+    pub authorization: AuthorizationContext,
+    /// Target Silicon.
+    pub silicon_id: SiliconId,
+    /// Target hooks. The application validates uniqueness and the batch bound.
+    pub hook_ids: Vec<HookId>,
+    /// Desired ingress state: `true` enables and `false` disables.
+    pub enabled: bool,
+    /// Correlation identifier assigned at the HTTP boundary.
+    pub request_id: Option<String>,
+}
+
 /// Privileged IAM default-hook provisioning input.
 #[derive(Clone, Debug)]
 pub struct ProvisionIamHookCommand {

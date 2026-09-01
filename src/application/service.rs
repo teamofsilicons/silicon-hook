@@ -1,6 +1,6 @@
 //! Hook management, ingress, history, and provisioning workflows.
 
-use std::sync::Arc;
+use std::{collections::BTreeMap, sync::Arc};
 
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -8,6 +8,7 @@ use time::OffsetDateTime;
 use super::{
     AcceptEventCommand, ApplicationError, Clock, CreateHookCommand, DeleteHookCommand, EventPage,
     HookMutationCommand, HookWithSecret, ListEventsCommand, ProvisionIamHookCommand,
+    SetHooksEnabledCommand,
 };
 use crate::{
     dm_contract::DmRequestBodyError,
@@ -19,15 +20,16 @@ use crate::{
     infrastructure::{
         crypto::{CursorCodec, SecretCipher, WebhookSignatureVerifier},
         postgres::{
-            AuditContext, CreateHook, CreateHookOutcome, EventPageRequest, HookMutation,
-            IdempotencyScope, IngressAcceptance, NewEvent, PersistedResponse, PostgresStore,
-            RestoreHook, RestoreHookOutcome, RotateSecret, RotateSecretOutcome,
+            AuditContext, BatchHookActivation, CreateHook, CreateHookOutcome, EventPageRequest,
+            HookMutation, IdempotencyScope, IngressAcceptance, NewEvent, PersistedResponse,
+            PostgresStore, RestoreHook, RestoreHookOutcome, RotateSecret, RotateSecretOutcome,
             SECRET_REPLAY_WINDOW, StoreError,
         },
     },
 };
 
 const ENDPOINT_GENERATION_ATTEMPTS: usize = 16;
+const MAX_HOOK_ACTIVATION_BATCH_SIZE: usize = 1_000;
 const IAM_HOOK_NAME: &str = "Silicon IAM";
 const IAM_HOOK_DESCRIPTION: &str = "Default Silicon IAM event hook";
 
@@ -202,6 +204,80 @@ impl HookApplication {
             Ok(_) | Err(StoreError::StateConflict { .. }) => Ok(()),
             Err(error) => Err(map_store_error(error)),
         }
+    }
+
+    /// Sets the desired ingress state of one or more retained hooks atomically.
+    ///
+    /// Repeating a request that already matches the desired state is a no-op.
+    /// Deleted hooks must be restored rather than enabled, and any invalid
+    /// target causes the complete batch to fail.
+    ///
+    /// # Errors
+    ///
+    /// Returns a validation, authorization, not-found, lifecycle, or
+    /// persistence failure.
+    pub async fn set_hooks_enabled(
+        &self,
+        mut command: SetHooksEnabledCommand,
+    ) -> Result<Vec<Hook>, ApplicationError> {
+        let requested_order = command.hook_ids.clone();
+        validate_activation_hook_ids(&mut command.hook_ids)?;
+
+        let hooks = self
+            .store
+            .get_hooks_by_ids(
+                command.authorization.organization_id(),
+                &command.silicon_id,
+                &command.hook_ids,
+            )
+            .await
+            .map_err(map_store_error)?;
+        if hooks.len() != command.hook_ids.len() {
+            return Err(ApplicationError::NotFound);
+        }
+        for hook in &hooks {
+            if hook.status() == HookStatus::Deleted {
+                return Err(ApplicationError::StateConflict);
+            }
+            authorize_action(
+                &command.authorization,
+                Action::SetHookEnabled,
+                &command.silicon_id,
+                hook.created_via_application(),
+            )?;
+        }
+
+        let updated = self
+            .store
+            .set_hooks_enabled(&BatchHookActivation {
+                organization_id: command.authorization.organization_id().clone(),
+                silicon_id: command.silicon_id,
+                hook_ids: command.hook_ids,
+                enabled: command.enabled,
+                audit: audit_context(&command.authorization, command.request_id),
+                occurred_at: database_time(self.clock.now())?,
+            })
+            .await
+            .map_err(map_store_error)?;
+        let mut by_id = updated
+            .into_iter()
+            .map(|hook| (hook.id(), hook))
+            .collect::<BTreeMap<_, _>>();
+        if by_id.len() != requested_order.len() {
+            return Err(ApplicationError::internal(anyhow::anyhow!(
+                "activation persistence returned an incomplete hook set"
+            )));
+        }
+        requested_order
+            .into_iter()
+            .map(|hook_id| {
+                by_id.remove(&hook_id).ok_or_else(|| {
+                    ApplicationError::internal(anyhow::anyhow!(
+                        "activation persistence returned a mismatched hook set"
+                    ))
+                })
+            })
+            .collect()
     }
 
     /// Restores a soft-deleted hook while its recovery window remains open.
@@ -443,7 +519,8 @@ impl HookApplication {
             command.idempotency_key,
         )
         .map_err(|error| match error {
-            DmRequestBodyError::TooLarge { .. } => ApplicationError::PayloadTooLarge,
+            DmRequestBodyError::PayloadTooLarge { .. }
+            | DmRequestBodyError::RequestTooLarge { .. } => ApplicationError::PayloadTooLarge,
             DmRequestBodyError::Serialization(_) => ApplicationError::internal(error),
         })?;
         match self.store.accept_event(&new_event).await {
@@ -671,6 +748,17 @@ fn authenticated_ingress_digest(timestamp: &str, body: &[u8]) -> RequestDigest {
     RequestDigest::sha256_parts(&[timestamp.as_bytes(), b".", body])
 }
 
+fn validate_activation_hook_ids(hook_ids: &mut [HookId]) -> Result<(), ApplicationError> {
+    if hook_ids.is_empty() || hook_ids.len() > MAX_HOOK_ACTIVATION_BATCH_SIZE {
+        return Err(ApplicationError::Validation { field: "hook_ids" });
+    }
+    hook_ids.sort_unstable();
+    if hook_ids.windows(2).any(|pair| pair[0] == pair[1]) {
+        return Err(ApplicationError::Validation { field: "hook_ids" });
+    }
+    Ok(())
+}
+
 fn authorize_action(
     authorization: &AuthorizationContext,
     action: Action,
@@ -772,9 +860,9 @@ mod tests {
 
     use super::{
         authenticated_ingress_digest, create_hook_request_digest, database_is_unavailable,
-        database_time,
+        database_time, validate_activation_hook_ids,
     };
-    use crate::domain::{HookDescription, HookName};
+    use crate::domain::{HookDescription, HookId, HookName};
 
     #[test]
     fn authoritative_timestamps_match_postgres_precision() -> Result<(), Box<dyn std::error::Error>>
@@ -836,5 +924,20 @@ mod tests {
             )?
         );
         Ok(())
+    }
+
+    #[test]
+    fn activation_batches_are_non_empty_unique_bounded_and_sorted() {
+        let first = HookId::new();
+        let second = HookId::new();
+        let mut valid = vec![second, first];
+        let mut expected = valid.clone();
+        expected.sort_unstable();
+        assert!(validate_activation_hook_ids(&mut valid).is_ok());
+        assert_eq!(valid, expected);
+
+        assert!(validate_activation_hook_ids(&mut Vec::new()).is_err());
+        assert!(validate_activation_hook_ids(&mut [first, first]).is_err());
+        assert!(validate_activation_hook_ids(&mut vec![HookId::new(); 1_001]).is_err());
     }
 }

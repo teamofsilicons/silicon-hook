@@ -20,6 +20,21 @@ pub(super) struct CreateHookRequest {
     pub(super) description: Option<String>,
 }
 
+/// Desired enabled state for one hook.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SetHookEnabledRequest {
+    pub(super) enabled: bool,
+}
+
+/// Desired enabled state for an atomic set of hooks.
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct SetHooksEnabledRequest {
+    pub(super) hook_ids: Vec<HookId>,
+    pub(super) enabled: bool,
+}
+
 /// JSON body used by IAM to provision a Silicon's default hook.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -69,6 +84,8 @@ pub(super) struct HookResponse {
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
+    disabled_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
     deleted_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
     recoverable_until: Option<OffsetDateTime>,
@@ -100,6 +117,7 @@ impl HookResponse {
             status: hook.status(),
             created_by: hook.created_by().clone(),
             created_at: hook.created_at(),
+            disabled_at: hook.disabled_at(),
             deleted_at,
             recoverable_until,
         })

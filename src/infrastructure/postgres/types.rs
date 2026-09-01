@@ -71,6 +71,10 @@ pub struct IngressHookResolution {
 pub enum AuditAction {
     /// A non-default hook was created.
     Created,
+    /// A hook stopped accepting new ingress without entering deletion recovery.
+    Disabled,
+    /// A disabled hook resumed accepting new ingress.
+    Enabled,
     /// A hook was soft-deleted.
     Deleted,
     /// A soft-deleted hook was restored.
@@ -85,6 +89,8 @@ impl AuditAction {
     pub(crate) const fn as_db_str(self) -> &'static str {
         match self {
             Self::Created => "hook.created",
+            Self::Disabled => "hook.disabled",
+            Self::Enabled => "hook.enabled",
             Self::Deleted => "hook.deleted",
             Self::Restored => "hook.restored",
             Self::SecretRotated => "hook.secret_rotated",
@@ -137,6 +143,23 @@ pub struct HookMutation {
     /// Hook to mutate.
     pub hook_id: HookId,
     /// Audit attribution.
+    pub audit: AuditContext,
+    /// Authoritative mutation time.
+    pub occurred_at: OffsetDateTime,
+}
+
+/// Atomic desired-state activation mutation for one or more hooks.
+#[derive(Clone, Debug)]
+pub struct BatchHookActivation {
+    /// Organization owning every target hook.
+    pub organization_id: OrganizationId,
+    /// Silicon owning every target hook.
+    pub silicon_id: SiliconId,
+    /// Unique hooks to lock and mutate as one transaction.
+    pub hook_ids: Vec<HookId>,
+    /// Desired ingress state: `true` enables and `false` disables.
+    pub enabled: bool,
+    /// Audit attribution shared by every actual transition.
     pub audit: AuditContext,
     /// Authoritative mutation time.
     pub occurred_at: OffsetDateTime,
@@ -201,9 +224,9 @@ pub struct RestoreHook {
 pub enum RestoreHookOutcome {
     /// This call restored the hook.
     Restored(Hook),
-    /// A content-identical earlier call returned the same active hook.
+    /// A content-identical earlier call returned the current non-deleted hook.
     Replayed {
-        /// Current active hook metadata.
+        /// Current active or disabled hook metadata.
         hook: Hook,
         /// Original non-secret result status.
         response: PersistedResponse,

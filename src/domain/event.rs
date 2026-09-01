@@ -502,7 +502,7 @@ impl fmt::Debug for RequestDigest {
 pub enum DeliveryStatus {
     /// Accepted but not yet attempted.
     Pending,
-    /// Accepted by DM with HTTP 202.
+    /// Durably accepted by DM with HTTP 202; this is not a client WebSocket ACK.
     Delivered,
     /// A retryable attempt failed and another is scheduled.
     Retrying,
@@ -610,7 +610,7 @@ impl DeliveryState {
         self.failure_reason.as_deref()
     }
 
-    /// Records a DM `202 Accepted` response.
+    /// Records DM's durable `202 Accepted` handoff acknowledgment.
     ///
     /// # Errors
     ///

@@ -8,6 +8,13 @@ use thiserror::Error;
 
 use crate::domain::{EventId, EventRecord, EventType, OrganizationId, SiliconId, TraceId};
 
+/// Largest canonical JSON object that Silicon DM accepts as an event payload.
+///
+/// This is independent from the complete request-body limit: compact JSON
+/// numbers can expand during normalization while the raw ingress request still
+/// fits Hook's one-mebibyte boundary.
+pub const MAX_DM_PAYLOAD_BYTES: usize = 1024 * 1024;
+
 /// Largest serialized DM request that Hook may durably accept.
 ///
 /// Every supported worker configuration accepts at least this many bytes, so
@@ -71,13 +78,23 @@ impl DmRequestBody {
     ///
     /// # Errors
     ///
-    /// Returns [`DmRequestBodyError::TooLarge`] when normalization produced a
-    /// request that no valid worker configuration is required to send.
+    /// Returns [`DmRequestBodyError::PayloadTooLarge`] when DM would reject the
+    /// canonical nested payload, or [`DmRequestBodyError::RequestTooLarge`]
+    /// when the complete representation exceeds Hook's worker contract.
     pub fn from_event(event: &EventRecord) -> Result<Self, DmRequestBodyError> {
+        let payload_bytes = serde_json::to_vec(event.envelope().payload())
+            .map_err(DmRequestBodyError::Serialization)?;
+        if payload_bytes.len() > MAX_DM_PAYLOAD_BYTES {
+            return Err(DmRequestBodyError::PayloadTooLarge {
+                actual: payload_bytes.len(),
+                maximum: MAX_DM_PAYLOAD_BYTES,
+            });
+        }
+
         let bytes = serde_json::to_vec(&SystemEvent::from(event))
             .map_err(DmRequestBodyError::Serialization)?;
         if bytes.len() > MAX_DM_REQUEST_BODY_BYTES {
-            return Err(DmRequestBodyError::TooLarge {
+            return Err(DmRequestBodyError::RequestTooLarge {
                 actual: bytes.len(),
                 maximum: MAX_DM_REQUEST_BODY_BYTES,
             });
@@ -119,9 +136,17 @@ pub enum DmRequestBodyError {
     /// A validated event could not be represented as JSON.
     #[error("failed to serialize the DM request body")]
     Serialization(#[source] serde_json::Error),
-    /// The normalized representation exceeds the common API/worker bound.
+    /// The canonical nested payload exceeds DM's published one-mebibyte bound.
+    #[error("serialized DM payload is {actual} bytes; maximum is {maximum}")]
+    PayloadTooLarge {
+        /// Actual serialized payload size.
+        actual: usize,
+        /// Maximum serialized payload size accepted by DM.
+        maximum: usize,
+    },
+    /// The normalized complete request exceeds the common API/worker bound.
     #[error("serialized DM request is {actual} bytes; maximum is {maximum}")]
-    TooLarge {
+    RequestTooLarge {
         /// Actual serialized size.
         actual: usize,
         /// Maximum accepted serialized size.
@@ -139,7 +164,10 @@ mod tests {
         TraceId,
     };
 
-    use super::{DmRequestBody, DmRequestBodyError, MAX_DM_REQUEST_BODY_BYTES, SystemEvent};
+    use super::{
+        DmRequestBody, DmRequestBodyError, MAX_DM_PAYLOAD_BYTES, MAX_DM_REQUEST_BODY_BYTES,
+        SystemEvent,
+    };
 
     fn event_from_raw(raw: &[u8]) -> Result<EventRecord, Box<dyn std::error::Error>> {
         let input = serde_json::from_slice::<EventEnvelopeInput>(raw)?;
@@ -179,23 +207,28 @@ mod tests {
     }
 
     #[test]
-    fn compact_numeric_input_cannot_expand_past_delivery_bound()
+    fn compact_numeric_input_cannot_expand_past_dm_payload_bound()
     -> Result<(), Box<dyn std::error::Error>> {
-        const NUMBER_COUNT: usize = 100_000;
+        let canonical_number = serde_json::to_string(&serde_json::from_str::<Value>("1e10")?)?;
+        let empty_payload_size = serde_json::to_vec(&serde_json::json!({ "numbers": [] }))?.len();
+        let number_count =
+            (MAX_DM_PAYLOAD_BYTES - empty_payload_size) / (canonical_number.len() + 1) + 1;
 
-        let numbers = std::iter::repeat_n("1e10", NUMBER_COUNT)
+        let numbers = std::iter::repeat_n("1e10", number_count)
             .collect::<Vec<_>>()
             .join(",");
         let raw = format!(r#"{{"type":"contract.created","payload":{{"numbers":[{numbers}]}}}}"#);
         assert!(raw.len() <= 1024 * 1024);
 
         let event = event_from_raw(raw.as_bytes())?;
-        let normalized = serde_json::to_vec(&SystemEvent::from(&event))?;
-        assert!(normalized.len() > MAX_DM_REQUEST_BODY_BYTES);
+        let payload = serde_json::to_vec(event.envelope().payload())?;
+        let normalized_request = serde_json::to_vec(&SystemEvent::from(&event))?;
+        assert!(payload.len() > MAX_DM_PAYLOAD_BYTES);
+        assert!(normalized_request.len() <= MAX_DM_REQUEST_BODY_BYTES);
         assert!(matches!(
             DmRequestBody::from_event(&event),
-            Err(DmRequestBodyError::TooLarge {
-                maximum: MAX_DM_REQUEST_BODY_BYTES,
+            Err(DmRequestBodyError::PayloadTooLarge {
+                maximum: MAX_DM_PAYLOAD_BYTES,
                 ..
             })
         ));

@@ -441,7 +441,9 @@ fn reject_postgres_nul(value: &str, field: &'static str) -> Result<(), DomainErr
 pub enum HookStatus {
     /// Accepting signed events.
     Active,
-    /// Disabled and retained during the recovery window.
+    /// Retained with its endpoint and secret, but not accepting signed events.
+    Disabled,
+    /// Soft-deleted and retained during the recovery window.
     Deleted,
 }
 
@@ -493,6 +495,8 @@ pub struct HookSnapshot {
     pub created_via_application: Option<ApplicationId>,
     /// Creation time.
     pub created_at: OffsetDateTime,
+    /// Time at which ingress was disabled for a disabled hook.
+    pub disabled_at: Option<OffsetDateTime>,
     /// Deletion time for a deleted hook.
     pub deleted_at: Option<OffsetDateTime>,
     /// Encrypted signing secret.
@@ -521,6 +525,7 @@ impl Hook {
                 created_by: new.created_by,
                 created_via_application: new.created_via_application,
                 created_at: new.created_at,
+                disabled_at: None,
                 deleted_at: None,
                 encrypted_signing_secret: new.encrypted_signing_secret,
             },
@@ -535,13 +540,24 @@ impl Hook {
     /// inconsistent.
     pub fn rehydrate(snapshot: HookSnapshot) -> Result<Self, DomainError> {
         let lifecycle_is_consistent = matches!(
-            (snapshot.status, snapshot.deleted_at),
-            (HookStatus::Active, None) | (HookStatus::Deleted, Some(_))
+            (snapshot.status, snapshot.disabled_at, snapshot.deleted_at),
+            (HookStatus::Active, None, None)
+                | (HookStatus::Disabled, Some(_), None)
+                | (HookStatus::Deleted, None, Some(_))
         );
         if !lifecycle_is_consistent {
             return Err(DomainError::InvalidFormat {
                 field: "hook_status",
-                reason: "active hooks cannot have deleted_at and deleted hooks must have it",
+                reason: "lifecycle status must have exactly its corresponding timestamp",
+            });
+        }
+        if snapshot
+            .disabled_at
+            .is_some_and(|disabled_at| disabled_at < snapshot.created_at)
+        {
+            return Err(DomainError::InvalidFormat {
+                field: "disabled_at",
+                reason: "must not precede created_at",
             });
         }
         if snapshot
@@ -604,6 +620,12 @@ impl Hook {
         self.snapshot.status
     }
 
+    /// Reports whether this hook currently accepts signed ingress.
+    #[must_use]
+    pub const fn is_enabled(&self) -> bool {
+        matches!(self.snapshot.status, HookStatus::Active)
+    }
+
     /// Returns the effective creator.
     #[must_use]
     pub const fn created_by(&self) -> &ActorRef {
@@ -620,6 +642,12 @@ impl Hook {
     #[must_use]
     pub const fn created_at(&self) -> OffsetDateTime {
         self.snapshot.created_at
+    }
+
+    /// Returns the time at which ingress was disabled, if disabled.
+    #[must_use]
+    pub const fn disabled_at(&self) -> Option<OffsetDateTime> {
+        self.snapshot.disabled_at
     }
 
     /// Returns the deletion time, if deleted.
@@ -645,12 +673,70 @@ impl Hook {
         &self.snapshot.encrypted_signing_secret
     }
 
-    /// Soft-deletes an active hook at the authoritative server time.
+    /// Stops accepting new events without deleting the hook or changing its
+    /// endpoint and signing secret.
+    ///
+    /// Applying the already-satisfied state is a successful no-op so callers
+    /// can safely express a desired enablement state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransitionError`] when the hook is deleted or the disable time
+    /// predates creation.
+    pub fn disable(&mut self, disabled_at: OffsetDateTime) -> Result<(), TransitionError> {
+        match self.snapshot.status {
+            HookStatus::Deleted => return Err(TransitionError::HookAlreadyDeleted),
+            HookStatus::Disabled => return Ok(()),
+            HookStatus::Active => {}
+        }
+        if disabled_at < self.snapshot.created_at {
+            return Err(TransitionError::TimestampOutOfOrder {
+                field: "disabled_at",
+                predecessor: "created_at",
+            });
+        }
+        self.snapshot.status = HookStatus::Disabled;
+        self.snapshot.disabled_at = Some(disabled_at);
+        Ok(())
+    }
+
+    /// Resumes ingress for a disabled, non-deleted hook without changing its
+    /// endpoint and signing secret.
+    ///
+    /// Applying the already-satisfied state is a successful no-op so callers
+    /// can safely express a desired enablement state.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransitionError`] when the hook is deleted or the enable time
+    /// predates the disable transition.
+    pub fn enable(&mut self, enabled_at: OffsetDateTime) -> Result<(), TransitionError> {
+        match self.snapshot.status {
+            HookStatus::Deleted => return Err(TransitionError::HookAlreadyDeleted),
+            HookStatus::Active => return Ok(()),
+            HookStatus::Disabled => {}
+        }
+        let disabled_at = self
+            .snapshot
+            .disabled_at
+            .ok_or(TransitionError::HookNotDisabled)?;
+        if enabled_at < disabled_at {
+            return Err(TransitionError::TimestampOutOfOrder {
+                field: "enabled_at",
+                predecessor: "disabled_at",
+            });
+        }
+        self.snapshot.status = HookStatus::Active;
+        self.snapshot.disabled_at = None;
+        Ok(())
+    }
+
+    /// Soft-deletes an active or disabled hook at the authoritative server time.
     ///
     /// # Errors
     ///
     /// Returns [`TransitionError`] when the hook is already deleted or the
-    /// deletion time predates creation.
+    /// deletion time predates creation or the most recent disable transition.
     pub fn delete(&mut self, deleted_at: OffsetDateTime) -> Result<(), TransitionError> {
         if self.snapshot.status == HookStatus::Deleted {
             return Err(TransitionError::HookAlreadyDeleted);
@@ -661,7 +747,18 @@ impl Hook {
                 predecessor: "created_at",
             });
         }
+        if self
+            .snapshot
+            .disabled_at
+            .is_some_and(|disabled_at| deleted_at < disabled_at)
+        {
+            return Err(TransitionError::TimestampOutOfOrder {
+                field: "deleted_at",
+                predecessor: "disabled_at",
+            });
+        }
         self.snapshot.status = HookStatus::Deleted;
+        self.snapshot.disabled_at = None;
         self.snapshot.deleted_at = Some(deleted_at);
         Ok(())
     }
@@ -670,14 +767,14 @@ impl Hook {
     ///
     /// # Errors
     ///
-    /// Returns [`TransitionError`] when the hook is active, the recovery window
-    /// expired, or the restore time predates deletion.
+    /// Returns [`TransitionError`] when the hook is not deleted, the recovery
+    /// window expired, or the restore time predates deletion.
     pub fn restore(&mut self, now: OffsetDateTime) -> Result<(), TransitionError> {
-        if self.snapshot.status == HookStatus::Active {
-            return Err(TransitionError::HookAlreadyActive);
+        if self.snapshot.status != HookStatus::Deleted {
+            return Err(TransitionError::HookNotDeleted);
         }
         let Some(deleted_at) = self.snapshot.deleted_at else {
-            return Err(TransitionError::HookAlreadyActive);
+            return Err(TransitionError::HookNotDeleted);
         };
         let deadline = deleted_at
             .checked_add(Duration::days(HOOK_RECOVERY_DAYS))
@@ -692,11 +789,12 @@ impl Hook {
             });
         }
         self.snapshot.status = HookStatus::Active;
+        self.snapshot.disabled_at = None;
         self.snapshot.deleted_at = None;
         Ok(())
     }
 
-    /// Immediately replaces the encrypted signing secret of an active hook.
+    /// Immediately replaces the encrypted signing secret of a non-deleted hook.
     ///
     /// # Errors
     ///
@@ -815,6 +913,101 @@ mod tests {
     }
 
     #[test]
+    fn hook_disable_and_enable_preserve_identity_secret_and_retention()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut hook = hook()?;
+        let hook_id = hook.id();
+        let endpoint_key = hook.endpoint_key().clone();
+        let original_secret = hook.encrypted_signing_secret().clone();
+        let disabled_at = datetime!(2026-01-02 0:00 UTC);
+
+        hook.disable(disabled_at)?;
+        assert_eq!(hook.status(), HookStatus::Disabled);
+        assert!(!hook.is_enabled());
+        assert_eq!(hook.disabled_at(), Some(disabled_at));
+        assert_eq!(hook.deleted_at(), None);
+        assert_eq!(hook.id(), hook_id);
+        assert_eq!(hook.endpoint_key(), &endpoint_key);
+        assert_eq!(hook.encrypted_signing_secret(), &original_secret);
+        assert!(hook.is_retained_at(datetime!(2126-01-02 0:00 UTC)));
+
+        hook.disable(datetime!(2026-01-03 0:00 UTC))?;
+        assert_eq!(hook.disabled_at(), Some(disabled_at));
+
+        let replacement_secret = encrypted(2)?;
+        hook.rotate_secret(replacement_secret.clone())?;
+        assert_eq!(hook.encrypted_signing_secret(), &replacement_secret);
+
+        hook.enable(datetime!(2026-01-04 0:00 UTC))?;
+        assert_eq!(hook.status(), HookStatus::Active);
+        assert!(hook.is_enabled());
+        assert_eq!(hook.disabled_at(), None);
+        assert_eq!(hook.id(), hook_id);
+        assert_eq!(hook.endpoint_key(), &endpoint_key);
+        assert_eq!(hook.encrypted_signing_secret(), &replacement_secret);
+
+        hook.enable(datetime!(2026-01-05 0:00 UTC))?;
+        assert_eq!(hook.status(), HookStatus::Active);
+        Ok(())
+    }
+
+    #[test]
+    fn disabled_hook_enforces_transition_order_and_delete_restore_rules()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let mut hook = hook()?;
+        assert_eq!(
+            hook.disable(datetime!(2025-12-31 23:59:59 UTC)),
+            Err(TransitionError::TimestampOutOfOrder {
+                field: "disabled_at",
+                predecessor: "created_at",
+            })
+        );
+
+        let disabled_at = datetime!(2026-01-03 0:00 UTC);
+        hook.disable(disabled_at)?;
+        assert_eq!(
+            hook.restore(datetime!(2026-01-04 0:00 UTC)),
+            Err(TransitionError::HookNotDeleted)
+        );
+        assert_eq!(
+            hook.enable(datetime!(2026-01-02 0:00 UTC)),
+            Err(TransitionError::TimestampOutOfOrder {
+                field: "enabled_at",
+                predecessor: "disabled_at",
+            })
+        );
+        assert_eq!(
+            hook.delete(datetime!(2026-01-02 0:00 UTC)),
+            Err(TransitionError::TimestampOutOfOrder {
+                field: "deleted_at",
+                predecessor: "disabled_at",
+            })
+        );
+
+        let deleted_at = datetime!(2026-01-04 0:00 UTC);
+        hook.delete(deleted_at)?;
+        assert_eq!(hook.status(), HookStatus::Deleted);
+        assert!(!hook.is_enabled());
+        assert_eq!(hook.disabled_at(), None);
+        assert_eq!(hook.deleted_at(), Some(deleted_at));
+        assert_eq!(
+            hook.disable(datetime!(2026-01-05 0:00 UTC)),
+            Err(TransitionError::HookAlreadyDeleted)
+        );
+        assert_eq!(
+            hook.enable(datetime!(2026-01-05 0:00 UTC)),
+            Err(TransitionError::HookAlreadyDeleted)
+        );
+
+        hook.restore(datetime!(2026-01-05 0:00 UTC))?;
+        assert_eq!(hook.status(), HookStatus::Active);
+        assert!(hook.is_enabled());
+        assert_eq!(hook.disabled_at(), None);
+        assert_eq!(hook.deleted_at(), None);
+        Ok(())
+    }
+
+    #[test]
     fn deleted_hook_cannot_rotate_its_secret() -> Result<(), Box<dyn std::error::Error>> {
         let mut hook = hook()?;
         hook.delete(datetime!(2026-01-02 0:00 UTC))?;
@@ -829,10 +1022,48 @@ mod tests {
     #[test]
     fn rehydration_rejects_inconsistent_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
         let hook = hook()?;
-        let mut snapshot = hook.snapshot().clone();
-        snapshot.status = HookStatus::Deleted;
+        let active = hook.snapshot().clone();
+        let disabled_at = datetime!(2026-01-02 0:00 UTC);
+        let deleted_at = datetime!(2026-01-03 0:00 UTC);
 
-        assert!(Hook::rehydrate(snapshot).is_err());
+        let mut disabled = active.clone();
+        disabled.status = HookStatus::Disabled;
+        disabled.disabled_at = Some(disabled_at);
+        assert!(Hook::rehydrate(disabled).is_ok());
+
+        let mut deleted = active.clone();
+        deleted.status = HookStatus::Deleted;
+        deleted.deleted_at = Some(deleted_at);
+        assert!(Hook::rehydrate(deleted).is_ok());
+
+        let mut active_with_disabled_at = active.clone();
+        active_with_disabled_at.disabled_at = Some(disabled_at);
+        assert!(Hook::rehydrate(active_with_disabled_at).is_err());
+
+        let mut disabled_without_timestamp = active.clone();
+        disabled_without_timestamp.status = HookStatus::Disabled;
+        assert!(Hook::rehydrate(disabled_without_timestamp).is_err());
+
+        let mut disabled_and_deleted = active.clone();
+        disabled_and_deleted.status = HookStatus::Disabled;
+        disabled_and_deleted.disabled_at = Some(disabled_at);
+        disabled_and_deleted.deleted_at = Some(deleted_at);
+        assert!(Hook::rehydrate(disabled_and_deleted).is_err());
+
+        let mut deleted_with_disabled_at = active.clone();
+        deleted_with_disabled_at.status = HookStatus::Deleted;
+        deleted_with_disabled_at.disabled_at = Some(disabled_at);
+        deleted_with_disabled_at.deleted_at = Some(deleted_at);
+        assert!(Hook::rehydrate(deleted_with_disabled_at).is_err());
+
+        let mut disabled_before_creation = active;
+        disabled_before_creation.status = HookStatus::Disabled;
+        disabled_before_creation.disabled_at = Some(datetime!(2025-12-31 23:59:59 UTC));
+        assert!(Hook::rehydrate(disabled_before_creation).is_err());
+        assert_eq!(
+            serde_json::to_value(HookStatus::Disabled)?,
+            serde_json::json!("disabled")
+        );
         Ok(())
     }
 

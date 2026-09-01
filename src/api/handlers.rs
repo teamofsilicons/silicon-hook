@@ -12,8 +12,8 @@ use super::{
     dto::{
         CreateHookRequest, EventAcceptedResponse, EventPageResponse, EventRecordResponse,
         HealthResponse, HookPageResponse, HookResponse, HookWithSecretResponse, ListEventsQuery,
-        ListHooksQuery, OneTimeSecret, ProvisionIamHookRequest, SigningSecretResponse,
-        VersionResponse,
+        ListHooksQuery, OneTimeSecret, ProvisionIamHookRequest, SetHookEnabledRequest,
+        SetHooksEnabledRequest, SigningSecretResponse, VersionResponse,
     },
     extractors,
     state::ApiState,
@@ -22,6 +22,7 @@ use crate::{
     application::{
         AcceptEventCommand, ApplicationError, CreateHookCommand, DeleteHookCommand,
         HookMutationCommand, ListEventsCommand, ManagementContext, ProvisionIamHookCommand,
+        SetHooksEnabledCommand,
     },
     domain::{
         AuthorizationContext, EndpointKey, HookDescription, HookId, HookName, OrganizationId,
@@ -37,6 +38,7 @@ const ACTION_LIST_HOOKS: &str = "hook.hooks.list";
 const ACTION_READ_HOOK: &str = "hook.hooks.read";
 const ACTION_CREATE_HOOK: &str = "hook.hooks.create";
 const ACTION_DELETE_HOOK: &str = "hook.hooks.delete";
+const ACTION_SET_HOOK_ENABLED: &str = "hook.hooks.enabled.update";
 const ACTION_RESTORE_HOOK: &str = "hook.hooks.restore";
 const ACTION_ROTATE_SECRET: &str = "hook.hooks.secret.rotate";
 const ACTION_READ_EVENTS: &str = "hook.events.read";
@@ -171,6 +173,77 @@ pub(super) async fn delete_hook(
         .await
         .map_err(map_application_error)?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+pub(super) async fn set_hook_enabled(
+    State(state): State<ApiState>,
+    Path((silicon_id, hook_id)): Path<(String, String)>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<HookResponse>, AppError> {
+    extractors::require_json(&headers)?;
+    let silicon_id = parse_silicon_id(silicon_id)?;
+    let hook_id = parse_hook_id(&hook_id)?;
+    let request: SetHookEnabledRequest = parse_json(&body)?;
+    let authorization = authorize_management(
+        &state,
+        &headers,
+        ACTION_SET_HOOK_ENABLED,
+        &hook_id.to_string(),
+    )
+    .await?;
+    let mut hooks = state
+        .application
+        .set_hooks_enabled(SetHooksEnabledCommand {
+            authorization,
+            silicon_id,
+            hook_ids: vec![hook_id],
+            enabled: request.enabled,
+            request_id: request_context::current_request_id(),
+        })
+        .await
+        .map_err(map_application_error)?;
+    let hook = hooks.pop().ok_or_else(|| {
+        AppError::internal(anyhow::anyhow!("single-hook activation returned no hook"))
+    })?;
+    Ok(Json(
+        HookResponse::from_domain(&hook, &state.public_base_url).map_err(AppError::internal)?,
+    ))
+}
+
+pub(super) async fn set_hooks_enabled(
+    State(state): State<ApiState>,
+    Path(silicon_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<HookPageResponse>, AppError> {
+    extractors::require_json(&headers)?;
+    let silicon_id = parse_silicon_id(silicon_id)?;
+    let request: SetHooksEnabledRequest = parse_json(&body)?;
+    let authorization = authorize_management(
+        &state,
+        &headers,
+        ACTION_SET_HOOK_ENABLED,
+        silicon_id.as_str(),
+    )
+    .await?;
+    let hooks = state
+        .application
+        .set_hooks_enabled(SetHooksEnabledCommand {
+            authorization,
+            silicon_id,
+            hook_ids: request.hook_ids,
+            enabled: request.enabled,
+            request_id: request_context::current_request_id(),
+        })
+        .await
+        .map_err(map_application_error)?;
+    let items = hooks
+        .iter()
+        .map(|hook| HookResponse::from_domain(hook, &state.public_base_url))
+        .collect::<anyhow::Result<Vec<_>>>()
+        .map_err(AppError::internal)?;
+    Ok(Json(HookPageResponse { items }))
 }
 
 pub(super) async fn restore_hook(

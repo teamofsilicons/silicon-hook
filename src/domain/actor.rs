@@ -96,6 +96,8 @@ pub enum Capability {
     DeleteHook,
     /// May restore a hook for an organization Silicon.
     RestoreHook,
+    /// May disable or enable ingress for an organization Silicon's hooks.
+    SetHookEnabled,
     /// May rotate a signing secret for an organization Silicon.
     RotateSecret,
     /// May inspect retained event history for an organization Silicon.

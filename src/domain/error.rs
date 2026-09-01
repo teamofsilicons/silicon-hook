@@ -47,12 +47,15 @@ pub enum DomainError {
 /// A requested aggregate state transition is not permitted.
 #[derive(Clone, Debug, Error, Eq, PartialEq)]
 pub enum TransitionError {
-    /// The operation requires an active hook.
+    /// The operation requires a non-deleted hook.
     #[error("hook is already deleted")]
     HookAlreadyDeleted,
+    /// The operation requires a disabled hook.
+    #[error("hook is not disabled")]
+    HookNotDisabled,
     /// The operation requires a deleted hook.
-    #[error("hook is already active")]
-    HookAlreadyActive,
+    #[error("hook is not deleted")]
+    HookNotDeleted,
     /// The hook has passed its recovery deadline.
     #[error("hook recovery period has expired")]
     HookRecoveryExpired,

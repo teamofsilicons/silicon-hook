@@ -19,6 +19,8 @@ pub enum Action {
     DeleteHook,
     /// Restore a hook.
     RestoreHook,
+    /// Disable or enable ingress for one or more hooks.
+    SetHookEnabled,
     /// Replace a hook signing secret.
     RotateSecret,
 }
@@ -27,7 +29,7 @@ impl Action {
     const fn is_destructive(self) -> bool {
         matches!(
             self,
-            Self::DeleteHook | Self::RestoreHook | Self::RotateSecret
+            Self::DeleteHook | Self::RestoreHook | Self::SetHookEnabled | Self::RotateSecret
         )
     }
 
@@ -39,6 +41,7 @@ impl Action {
             Self::ReadEvents => Capability::ReadEvents,
             Self::DeleteHook => Capability::DeleteHook,
             Self::RestoreHook => Capability::RestoreHook,
+            Self::SetHookEnabled => Capability::SetHookEnabled,
             Self::RotateSecret => Capability::RotateSecret,
         }
     }
@@ -223,6 +226,65 @@ mod tests {
     }
 
     #[test]
+    fn enablement_is_destructive_and_requires_its_dedicated_capability()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let target = silicon("silicon:target")?;
+        let silicon_owner = context(
+            ActorKind::Silicon,
+            target.as_str(),
+            OrganizationRole::Member,
+            &[],
+            &[],
+            None,
+        )?;
+        let visible_member = context(
+            ActorKind::Carbon,
+            "carbon:member",
+            OrganizationRole::Member,
+            &[],
+            std::slice::from_ref(&target),
+            None,
+        )?;
+        let wrong_capability = context(
+            ActorKind::Carbon,
+            "carbon:admin",
+            OrganizationRole::Admin,
+            &[Capability::DeleteHook],
+            std::slice::from_ref(&target),
+            None,
+        )?;
+        let authorized_admin = context(
+            ActorKind::Carbon,
+            "carbon:admin",
+            OrganizationRole::Admin,
+            &[Capability::SetHookEnabled],
+            &[],
+            None,
+        )?;
+        let owner = context(
+            ActorKind::Carbon,
+            "carbon:owner",
+            OrganizationRole::Owner,
+            &[],
+            &[],
+            None,
+        )?;
+
+        assert!(authorize(&silicon_owner, Action::SetHookEnabled, &target, None).is_allowed());
+        assert_eq!(
+            authorize(&visible_member, Action::SetHookEnabled, &target, None),
+            AuthorizationDecision::InsufficientPrivilege
+        );
+        assert_eq!(
+            authorize(&wrong_capability, Action::SetHookEnabled, &target, None),
+            AuthorizationDecision::InsufficientPrivilege
+        );
+        assert!(authorize(&authorized_admin, Action::SetHookEnabled, &target, None).is_allowed());
+        assert!(authorize(&owner, Action::SetHookEnabled, &target, None).is_allowed());
+        Ok(())
+    }
+
+    #[test]
     fn owner_is_implicitly_authorized_without_capabilities()
     -> Result<(), Box<dyn std::error::Error>> {
         let target = silicon("silicon:target")?;
@@ -265,6 +327,15 @@ mod tests {
             authorize(&principal, Action::RotateSecret, &target, None),
             AuthorizationDecision::ApplicationOwnershipMismatch
         );
+        assert!(authorize(&principal, Action::SetHookEnabled, &target, Some(&caller)).is_allowed());
+        assert_eq!(
+            authorize(&principal, Action::SetHookEnabled, &target, Some(&other)),
+            AuthorizationDecision::ApplicationOwnershipMismatch
+        );
+        assert_eq!(
+            authorize(&principal, Action::SetHookEnabled, &target, None),
+            AuthorizationDecision::ApplicationOwnershipMismatch
+        );
         Ok(())
     }
 
@@ -293,6 +364,8 @@ mod tests {
 
         assert!(authorize(&owner, Action::DeleteHook, &target, Some(&other)).is_allowed());
         assert!(authorize(&overridden, Action::DeleteHook, &target, Some(&other)).is_allowed());
+        assert!(authorize(&owner, Action::SetHookEnabled, &target, Some(&other)).is_allowed());
+        assert!(authorize(&overridden, Action::SetHookEnabled, &target, Some(&other)).is_allowed());
         Ok(())
     }
 }

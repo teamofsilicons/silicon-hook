@@ -1,4 +1,7 @@
-//! Bounded HTTP delivery client for Silicon DM's internal Hook endpoint.
+//! Bounded durable-handoff client for Silicon DM's internal Hook endpoint.
+//!
+//! DM owns WebSocket fan-out, heartbeat, client acknowledgments, and reconnect
+//! replay after this adapter receives its exact `202 Accepted` response.
 
 use std::{fmt, time::Duration};
 
@@ -16,7 +19,7 @@ const USER_AGENT: &str = concat!("silicon-hook/", env!("CARGO_PKG_VERSION"));
 /// Classification consumed by the durable outbox worker.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum DeliveryOutcome {
-    /// DM durably accepted the event with exactly `202 Accepted`.
+    /// DM durably queued the event with exactly `202 Accepted`.
     Accepted,
     /// A transient failure should be retried under worker policy.
     Retryable {
@@ -133,9 +136,10 @@ impl DmClient {
 
     /// Attempts one delivery without performing an implicit retry.
     ///
-    /// Only `202 Accepted` is successful. Connection failures, timeouts, HTTP
-    /// `408`, `425`, `429`, and `5xx` are retryable. All other responses are
-    /// terminal for this unchanged outbox record.
+    /// Only `202 Accepted` is a successful durable handoff. It does not mean a
+    /// Silicon client has acknowledged a WebSocket frame. Connection failures,
+    /// timeouts, HTTP `408`, `425`, `429`, and `5xx` are retryable. All other
+    /// responses are terminal for this unchanged outbox record.
     pub async fn send(&self, event: &SystemEvent) -> DeliveryOutcome {
         let Ok(body) = serde_json::to_vec(event) else {
             return DeliveryOutcome::Terminal {

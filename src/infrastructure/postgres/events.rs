@@ -21,14 +21,15 @@ impl PostgresStore {
     /// Atomically persists an immutable event, ingress key, and DM delivery job.
     ///
     /// The hook row is share-locked until commit, allowing concurrent ingress
-    /// while preventing a soft delete from racing a successful acceptance. The
-    /// deferred ingress foreign key lets the idempotency reservation serialize
-    /// identical keys before the new event row exists.
+    /// while preventing a disable, soft delete, or secret rotation from racing
+    /// a successful acceptance. The deferred ingress foreign key lets the
+    /// idempotency reservation serialize identical keys before the new event
+    /// row exists.
     ///
     /// # Errors
     ///
-    /// Returns a not-found error for a deleted/unknown hook, an idempotency
-    /// conflict for changed content, or a database failure.
+    /// Returns a not-found error for a disabled, deleted, or unknown hook, an
+    /// idempotency conflict for changed content, or a database failure.
     pub async fn accept_event(&self, command: &NewEvent) -> Result<IngressAcceptance, StoreError> {
         if command.event.delivery().status() != DeliveryStatus::Pending
             || command.event.delivery().attempts() != 0
@@ -324,17 +325,16 @@ async fn lock_hook_for_acceptance(
     transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     command: &NewEvent,
 ) -> Result<(), StoreError> {
-    let hook_is_active = sqlx::query_scalar::<_, bool>(
+    let hook_state = sqlx::query_as::<_, (bool, bool)>(
         r"
-        SELECT true
+        SELECT disabled_at IS NULL AND deleted_at IS NULL AS is_active,
+               encryption_key_id = $4
+                   AND secret_nonce = $5
+                   AND encrypted_signing_secret = $6 AS secret_is_current
         FROM hook.hooks
         WHERE id = $1
           AND org_id = $2
           AND silicon_id = $3
-          AND deleted_at IS NULL
-          AND encryption_key_id = $4
-          AND secret_nonce = $5
-          AND encrypted_signing_secret = $6
         FOR SHARE
         ",
     )
@@ -345,13 +345,12 @@ async fn lock_hook_for_acceptance(
     .bind(command.expected_encrypted_secret.nonce().as_slice())
     .bind(command.expected_encrypted_secret.ciphertext())
     .fetch_optional(&mut **transaction)
-    .await?
-    .unwrap_or(false);
+    .await?;
 
-    if hook_is_active {
-        Ok(())
-    } else {
-        Err(StoreError::SecretSuperseded)
+    match hook_state {
+        Some((true, true)) => Ok(()),
+        Some((true, false)) => Err(StoreError::SecretSuperseded),
+        Some((false, _)) | None => Err(StoreError::NotFound { entity: "hook" }),
     }
 }
 

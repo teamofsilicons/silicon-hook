@@ -516,6 +516,7 @@ fn capability_from_wire(value: &str) -> Option<Capability> {
         "create_hook" | "hook.hooks.create" => Some(Capability::CreateHook),
         "delete_hook" | "hook.hooks.delete" => Some(Capability::DeleteHook),
         "restore_hook" | "hook.hooks.restore" => Some(Capability::RestoreHook),
+        "set_hook_enabled" | "hook.hooks.enabled.update" => Some(Capability::SetHookEnabled),
         "rotate_secret" | "hook.hooks.secret.rotate" => Some(Capability::RotateSecret),
         "read_events" | "hook.events.read" => Some(Capability::ReadEvents),
         "administrative_override" | "hook.administrative_override" => {
@@ -559,6 +560,7 @@ fn local_authorize(
             Capability::CreateHook,
             Capability::DeleteHook,
             Capability::RestoreHook,
+            Capability::SetHookEnabled,
             Capability::RotateSecret,
             Capability::ReadEvents,
             Capability::AdministrativeOverride,
@@ -912,8 +914,8 @@ mod tests {
     };
 
     use super::{
-        AuthorizationRequest, IamClient, IamError, PresentedCredential, context_from_introspection,
-        context_from_obo, obo_verification_idempotency_key, wire,
+        AuthorizationRequest, IamClient, IamError, PresentedCredential, capability_from_wire,
+        context_from_introspection, context_from_obo, obo_verification_idempotency_key, wire,
     };
 
     fn settings(server: &MockServer) -> Result<IamSettings, Box<dyn std::error::Error>> {
@@ -958,6 +960,7 @@ mod tests {
         assert_eq!(context.organization_id().as_str(), "acme");
         assert_eq!(context.organization_role(), OrganizationRole::Admin);
         assert!(context.has_capability(Capability::DeleteHook));
+        assert!(context.has_capability(Capability::SetHookEnabled));
         assert!(context.has_silicon_visibility(&SiliconId::new("support:acme")?));
         Ok(())
     }
@@ -987,12 +990,27 @@ mod tests {
         assert_eq!(context.actor().id().as_str(), "alice");
         assert_eq!(context.organization_role(), OrganizationRole::Admin);
         assert!(context.has_capability(Capability::DeleteHook));
+        assert!(context.has_capability(Capability::SetHookEnabled));
         assert!(context.has_silicon_visibility(&SiliconId::new("support:acme")?));
         assert_eq!(
             context.acting_application().map(ApplicationId::as_str),
             Some("silicon-console")
         );
         Ok(())
+    }
+
+    #[test]
+    fn enabled_update_capability_uses_an_explicit_fail_closed_wire_mapping() {
+        assert_eq!(
+            capability_from_wire("hook.hooks.enabled.update"),
+            Some(Capability::SetHookEnabled)
+        );
+        assert_eq!(
+            capability_from_wire("set_hook_enabled"),
+            Some(Capability::SetHookEnabled)
+        );
+        assert_eq!(capability_from_wire("hook.hooks.enabled"), None);
+        assert_eq!(capability_from_wire("hook.hooks.enable"), None);
     }
 
     #[tokio::test]
