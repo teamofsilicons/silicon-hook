@@ -10,6 +10,10 @@ Opaque credentials are always checked online. Missing, stale, contradictory,
 or malformed authorization facts deny access; Hook never derives authority
 from an internal UUID, a public ID, a job-role string, or a tag name.
 
+The authenticated Silicon namespace and WebSocket acknowledgment language in
+the product understanding is additive. It does not deprecate OBO Access or the
+default IAM Hook provisioning and signed-delivery contracts below.
+
 ## 1. Management authorization
 
 ### Bearer introspection
@@ -39,7 +43,7 @@ snapshot:
   "org_id": "acme",
   "membership_id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91c5",
   "organization_role": "admin",
-  "capabilities": ["hook.hooks.delete"],
+  "capabilities": ["hook.hooks.delete", "hook.hooks.enabled.update"],
   "visible_silicon_ids": ["support:acme"],
   "audience": "silicon-hook",
   "expires_at": 1788172800
@@ -70,6 +74,7 @@ Hook action names are:
 - `hook.hooks.list`
 - `hook.hooks.read`
 - `hook.hooks.create`
+- `hook.hooks.enabled.update`
 - `hook.hooks.delete`
 - `hook.hooks.restore`
 - `hook.hooks.secret.rotate`
@@ -95,7 +100,7 @@ X-Org-ID: <public organization handle>
 {
   "access_proof": "obo_<43 base64url characters>",
   "audience": "silicon-hook",
-  "action": "hook.hooks.delete",
+  "action": "hook.hooks.enabled.update",
   "resource": "<bound Silicon ID or Hook UUID>"
 }
 ```
@@ -117,9 +122,9 @@ authorization snapshot used for bearer introspection:
   "org_id": "acme",
   "membership_id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91c5",
   "organization_role": "admin",
-  "capabilities": ["hook.hooks.delete"],
+  "capabilities": ["hook.hooks.enabled.update"],
   "visible_silicon_ids": ["support:acme"],
-  "action": "hook.hooks.delete",
+  "action": "hook.hooks.enabled.update",
   "resource": "018eb4ce-e57a-7d2c-8f9f-a35928ef91e1",
   "expires_at": "2026-08-31T12:01:00Z",
   "consumed_at": "2026-08-31T12:00:01Z"
@@ -131,7 +136,15 @@ same `Idempotency-Key` and identical request may replay the original successful
 verification response. Hook additionally verifies issuer application, audience,
 organization, action, resource, and a near-term expiry before applying its own
 resource policy. Collection operations bind `resource` to the global Silicon
-ID; per-hook operations bind it to the Hook UUID.
+ID; per-hook operations bind it to the Hook UUID. A batch enable/disable proof
+uses action `hook.hooks.enabled.update`, binds `resource` to the target Silicon
+ID, and authorizes each selected Hook before Hook commits any transition. The
+single-hook form uses the same action with the Hook UUID as `resource`.
+
+An OBO application may enable or disable only hooks created through that same
+application unless the represented actor is an organization owner or has
+`hook.administrative_override`. This is the same creator-application ownership
+rule used for delete, restore, and secret rotation.
 
 ## 2. IAM service authentication
 

@@ -21,6 +21,12 @@ Mainly this will be used by authenticated silicons, so take a look at how silico
 
 Webhooks are just for silicons to use, and when carbons come into the system for the other silicons that they have authority to view they should be able to open that silicon and see all the active webh ook connections and the logs and the history, etc for that silicon and the specific webhooks. 
 
+
+# How it works
+
+For any silicon that authenticates onto silicon hook, see if they have a valid silicon account, and if they have a valid silicon account, assign them a silicon hook endpoint. That's gonna be [hook.teamofsilicons.com/{silicon_id}/]. This is the base id that's gonna be used by the silicon for all the webhook endpoints.
+
+
 # Url
 
 Each web hook endpoint would be at [hook.teamofsilicons.com/silicon/{silicon_id}/{6_digit_hexadecimal}/]
@@ -32,6 +38,8 @@ hook.teamofsilicons.com/silicon/cos:tos/402E2/
 # Create Webhook
 
 A silicon or carbon should be able to create an webhook, for creating an webhook it requires the Name of the service that the webhook is for, and an optional description. For this request it gets the said webhook url:  hook.teamofsilicons.com/silicon/{silicon_id}/{6_digit_hexadecimal}/ along with the 6 digit hexadecimal seperately. 
+
+Past creation it should be possible to turn off any single or a set of webhook at any time and still keep it active, and can turn it back on anytime needed.
 
 
 # Delete Webhook
@@ -58,17 +66,13 @@ All the Webhook requests would also be sent to silicon-dm webhook along with the
 The reason why we are doing this is so that the said webhook request can actually be conveyed to the said silicon via websocket.
 
 
-# How other apps would use Hook
+# Websocket
 
-For other apps configured in IAm they should also be able to use Hook, for that the app would send a request to you to perform as a specific carbon or silicon user, for the said request it would send you app_id and an proof_token. You can send an request to IAm to verify this proof_token by sending it the app_id and the proof_token if it verifies let the application perform the requested action, otherwise deny it. Until the verification is held keep the request alive.  
+We maintain a websocket connection with the client (a client can serve single or multiple silicons/carbons). While authentication they will tell these are the silicon(s) or carbon(s) it's trying to connect to.
 
-These authenticated apps should be able to perform all actions on behalf of the user. Except for the delete actions for the files they haven't created. 
+The server sends an application-level JSON `ping` every 30 seconds. The adapter must immediately reply with a minimal `pong` carrying the same `ping_id`. If no valid pong is received for two minutes, the backend closes with application code `4000` and reason `heartbeat-timeout`. Ping and pong are not stored, do not require ACK, and do not consume per-SID delivery sequences.
 
 
-# How IAm would use Hook
+# Acknowledgment
 
-IAm would issue an anautomatic hook for all the new silicons in the system. This silicon would be with the name Silicon IAM and would be the first default connection for any silicon. 
-
-You must create an internal endpoint for this initiation, only Silicon IAM's authenticated service identity may call this endpoint. Take a read at [[../silicon-iam/UNDERSTANDING.md]]. 
-
-When this request is recieved is when the silicon in the system is registered for that organisation, and the initial webhook is created. 
+For each hook event that was recieved and sent via websocket or even normal api request must recieve an acknowledged from the server for that particular webhook request that was sent via silicon hook onto the server. For all the unacknowledged webhook events it must automatically be attached in the next websocket connection.

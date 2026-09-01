@@ -12,7 +12,17 @@ Management and internal operations use:
 https://hook.teamofsilicons.com/api/v1
 ```
 
-Public webhook delivery uses the endpoint URL returned by Hook:
+After IAM authenticates a Silicon, Hook recognizes its deterministic identity
+namespace:
+
+```text
+https://hook.teamofsilicons.com/{silicon_id}/
+```
+
+This namespace identifies the authenticated Silicon; it is not a persisted
+hook, an addressable management route, or an ingress credential. Authentication
+does not create resources as a side effect. Public webhook delivery uses a
+signed endpoint returned by explicit hook creation:
 
 ```text
 https://hook.teamofsilicons.com/silicon/{silicon_id}/{endpoint_key}
@@ -28,7 +38,9 @@ Hook gives each Silicon multiple inbound webhook endpoints. It authenticates and
 
 OBO proofs bind to the action and a stable resource identifier. Hook uses the
 target Silicon ID for collection create/list and event-history actions, and the
-hook UUID for per-hook read, delete, restore, and secret-rotation actions.
+hook UUID for per-hook read, enable/disable, delete, restore, and
+secret-rotation actions. Batch enable/disable binds the target Silicon ID and
+authorizes every selected hook before any state changes.
 - **Public ingress:** Individual webhook URLs are publicly reachable but require request signatures.
 - **Organization context:** Management requests require `X-Org-ID`.
 
@@ -80,6 +92,8 @@ Lists webhook connections belonging to a Silicon.
 - **Returns:** Visible hooks.
 
 The Silicon can list its hooks. Carbons may list hooks only for Silicons IAM says they can view. Owners and authorized administrators can manage organization Silicons.
+Disabled hooks remain visible regardless of `include_deleted`; that flag controls
+only recoverable soft-deleted hooks.
 
 A Silicon can retain at most 1,000 hooks, including soft-deleted hooks still
 inside their 45-day recovery period. This keeps the complete, non-paginated
@@ -97,6 +111,21 @@ Creates a webhook connection.
 
 The endpoint URL contains the Silicon ID and an uppercase six-character hexadecimal routing key. The signing secret has the form `whsec_<base64url>` and must be displayed only once and stored securely by the sender.
 
+### `PATCH /silicons/{silicon_id}/hooks`
+
+Enables or disables a set of webhook connections atomically.
+
+- **Authentication:** Bearer or OBO Access with action `hook.hooks.enabled.update`.
+- **Input:** `enabled` and 1–1,000 unique Hook UUIDs in `hook_ids`.
+- **Returns:** The selected hooks in request order and their current states.
+
+The operation validates visibility and mutation authority for every selected
+hook before changing any of them. An unknown, deleted, cross-Silicon, or
+unauthorized member makes the complete request fail with no partial state or
+audit changes. The body expresses a desired state, so retries are intrinsically
+idempotent and do not require `Idempotency-Key`. Only actual state
+transitions write `hook.enabled` or `hook.disabled` audit records.
+
 ### `GET /silicons/{silicon_id}/hooks/{hook_id}`
 
 Returns one hook and its status.
@@ -108,14 +137,32 @@ The signing secret is never returned after creation.
 An expired soft-deleted hook returns `404` even if asynchronous physical purge
 has not processed its row yet.
 
+### `PATCH /silicons/{silicon_id}/hooks/{hook_id}`
+
+Enables or disables one retained webhook connection.
+
+- **Authentication:** Bearer or OBO Access with action `hook.hooks.enabled.update`.
+- **Input:** `{"enabled": true}` or `{"enabled": false}`.
+- **Returns:** Hook metadata with status `active` or `disabled`.
+
+Disabling immediately makes the signed endpoint return the same `404` used for
+an unknown or deleted endpoint, while retaining its endpoint, signing secret,
+metadata, event history, and quota position. Enabling restores ingress with the
+same endpoint and secret. Repeating the current desired state succeeds without
+another audit record and does not require `Idempotency-Key`. A deleted hook must
+use the separate restore operation.
+
 ### `DELETE /silicons/{silicon_id}/hooks/{hook_id}`
 
-Disables a webhook connection.
+Soft-deletes a webhook connection.
 
 - **Authentication:** Bearer or OBO Access.
 - **Returns:** `204 No Content`.
 
-The URL immediately stops accepting events. The deleted hook remains recoverable for 45 days, along with its retained event history.
+The URL immediately stops accepting events. An active or disabled hook may be
+deleted. The deleted hook remains recoverable for 45 days, along with its
+retained event history. Deletion is distinct from reversible disabling: restore
+is required after deletion.
 
 ### `POST /silicons/{silicon_id}/hooks/{hook_id}/restore`
 
@@ -149,6 +196,7 @@ Lists retained events across one or all of a Silicon's hooks.
 - **Returns:** Event envelopes and delivery state.
 
 Hook exposes the latest 10,000 events per endpoint. Account-wide results are drawn from those per-hook retained windows and have no second storage cap; one response still contains at most 10,000 items. A response also has a conservative 16 MiB serialized-size budget, so a page can contain fewer items than requested and return a continuation cursor. A single event is always returned even when it alone reaches the budget. Payload visibility follows the same Silicon-access rules as hook management, and a hook whose 45-day recovery window has expired contributes no history even if physical cleanup is delayed.
+Disabling a hook does not hide or delete its retained history.
 
 Physical eviction is driven by a transactional per-hook counter and fair due queue rather than a scan or rank of the complete event table. The worker drains independently bounded history, terminal-delivery, idempotency, and deleted-hook batches. Rows outside the visible 10,000 are held for a strict ten-minute minimum before eviction so an accepted request with the maximum allowed future timestamp skew cannot become replayable after its guards cascade.
 
@@ -165,11 +213,15 @@ Receives an event from an external or internal service.
 - **Input:** Event type, payload, and optional source, subject, occurrence time, version, and trace ID.
 - **Returns:** `202 Accepted`, stable `event_id`, and accepted status.
 
-Hook accepts raw JSON bodies up to 1 MiB. It resolves the endpoint, rejects deleted hooks, checks that the timestamp is within the replay window, verifies the signature over the timestamp and exact raw request body, and deduplicates the idempotency key. It also replay-deduplicates an identical authenticated timestamp and exact body for the same hook even when the sender changes `Idempotency-Key`, returning the original stable `event_id`. The `/api/v1/silicon/{silicon_id}/{endpoint_key}` route and optional trailing slashes are compatibility aliases; generated endpoint URLs always use the canonical root route.
+Hook accepts raw JSON bodies up to 1 MiB. It resolves the endpoint, rejects disabled and deleted hooks, checks that the timestamp is within the replay window, verifies the signature over the timestamp and exact raw request body, and deduplicates the idempotency key. It also replay-deduplicates an identical authenticated timestamp and exact body for the same hook even when the sender changes `Idempotency-Key`, returning the original stable `event_id`. The `/api/v1/silicon/{silicon_id}/{endpoint_key}` route and optional trailing slashes are compatibility aliases; generated endpoint URLs always use the canonical root route.
 
-Before persistence, Hook normalizes the event, constructs the exact minimal DM request once, and requires that representation to be at most 1,052,672 bytes. This second bound matters because compact JSON numbers can occupy more bytes after parsing and canonical serialization. An oversized raw or normalized representation returns `413 payload_too_large`; no event, idempotency binding, replay guard, or outbox work is committed.
+Before persistence, Hook normalizes the event and constructs the exact minimal DM request once. The canonical JSON bytes of the nested DM `payload` have an exact 1 MiB maximum (1,048,576 bytes), matching DM's payload contract, and the complete request must be at most 1,052,672 bytes. These normalized bounds matter because compact JSON numbers can occupy more bytes after parsing and canonical serialization. An oversized raw body, nested payload, or complete request returns `413 payload_too_large`; no event, idempotency binding, replay guard, or outbox work is committed.
 
-After validation, Hook persists the event before responding. It then delivers the event to DM asynchronously. A DM outage must not cause the accepted webhook event to disappear.
+After validation, Hook persists the event and durable DM work before returning
+`202 Accepted` with a stable `event_id`. This is the sender-facing acknowledgment
+of local durable acceptance; it does not mean that DM or a connected client has
+received the event. Hook then delivers the event to DM asynchronously. A DM
+outage must not cause the accepted webhook event to disappear.
 
 ### Signature version 1
 
@@ -208,9 +260,25 @@ Silicon identity rather than only during the 45-day recovery window.
 
 ## Delivery to Silicon DM
 
-The worker submits the published minimal system-event body to `POST /api/v1/internal/hook-events` with Hook's dedicated IAM service token and `Idempotency-Key` set to the stable event ID. Event acceptance and durable delivery work commit atomically; only DM `202 Accepted` marks delivery as delivered. The immutable outbox stores the already-bounded bytes constructed during ingress, and every worker configuration must accept at least that common bound.
+**Compatibility gate:** This section is Hook's required product contract. The
+reviewed Silicon DM `0.2.0` candidate retires its internal Hook-event route and
+system-event WebSocket frame, so it is not compatible with this Hook build. A
+combined release is blocked until the cross-service product decision either
+restores DM's durable Hook-event contract or assigns Hook a different delivery
+destination. Hook keeps accepted events durable in its outbox, but DM `404`
+responses are terminal and cannot provide client acknowledgment or replay. See
+`DM_INTEGRATION.md` for the audited boundary.
+
+The worker submits the published minimal system-event body to `POST /api/v1/internal/hook-events` with Hook's dedicated IAM service token and `Idempotency-Key` set to the stable event ID. Event acceptance and durable delivery work commit atomically; only DM `202 Accepted` marks Hook's delivery as delivered. That response acknowledges durable handoff to DM, not receipt by a WebSocket client. The immutable outbox stores the already-bounded bytes constructed during ingress, and every worker configuration must accept at least that common bound.
 
 Retries reuse the stable event ID and exact body. Retryable failures use capped exponential backoff with full jitter and honor bounded `Retry-After`; the default maximum is 20 attempts and 15 minutes. Terminal or exhausted deliveries remain visible as `failed` for diagnosis while their event is retained. Pending and retrying work survives history eviction; delivered and failed receipts are removed only after their event leaves retained history. Hook provides at-least-once delivery. DM deduplicates the stable event ID so a timeout-after-commit retry does not fan out the same accepted event twice.
+
+DM owns client-session semantics after that handoff: WebSocket representation
+authorization, 30-second JSON heartbeat ping/pong, the two-minute
+`4000 heartbeat-timeout` close, client acknowledgments, sequencing, and replay
+of unacknowledged events. Heartbeats are transient and have no event sequence or
+acknowledgment. Hook does not expose or implement a WebSocket endpoint and does
+not interpret DM's client acknowledgment as Hook delivery state.
 
 ## Complete flows
 
@@ -221,9 +289,10 @@ Sender constructs event envelope
   -> signs timestamp + raw body
   -> POSTs to the Silicon endpoint
   -> Hook verifies and persists
-  -> Hook returns stable event ID
+  -> Hook returns 202 and stable event ID (durable local acceptance)
   -> Hook queues delivery to DM
-  -> Silicon receives a system event over WebSocket
+  -> DM returns 202 (durable handoff)
+  -> DM delivers over WebSocket and owns client acknowledgment/replay
 ```
 
 ### New Silicon

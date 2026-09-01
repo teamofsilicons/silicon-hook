@@ -821,3 +821,109 @@ workspace crates while continuing to require an allowlisted SPDX expression for
 every third-party dependency. `CDLA-Permissive-2.0` is allowed for the WebPKI
 root-certificate data used by the Rustls HTTPS stack; advisories, yanked crates,
 wildcard requirements, and unknown dependency sources remain enforced.
+
+## D-071 — A Silicon base endpoint is an identity namespace
+
+**Status:** Accepted interpretation of the authenticated-base-endpoint requirement
+
+Successful IAM authentication establishes the deterministic namespace
+`https://hook.teamofsilicons.com/{silicon_id}/` for the Silicon identity. The
+namespace is not a persisted hook, an ingress credential, or an addressable
+management operation, and authentication remains free of resource-creation side
+effects. Usable webhook endpoints continue to be created explicitly and use
+the signed canonical route `/silicon/{silicon_id}/{endpoint_key}`. This preserves
+multiple independently managed endpoints per Silicon without inventing an
+unsigned catch-all ingress route.
+
+## D-072 — Reversible activation is independent of deletion
+
+**Status:** Accepted lifecycle extension
+
+A retained hook has one of three exclusive states: `active`, `disabled`, or
+`deleted`. Disabling preserves its endpoint, encrypted secret, metadata,
+history, and quota position but makes ingress resolve as not found. Enabling a
+disabled hook restores the same endpoint and secret. Secret rotation remains
+available while disabled. Deletion and its 45-day recovery window remain a
+separate lifecycle; a deleted hook must be restored rather than enabled, and
+restore always produces an active hook.
+
+Single-hook and collection PATCH operations express the desired `enabled`
+state, so they need no `Idempotency-Key` and repeated requests are successful
+no-ops. The collection accepts 1–1,000 unique Hook IDs, locks and validates the
+complete set, and commits all transitions atomically. Missing, deleted,
+cross-Silicon, or unauthorized members cannot produce partial changes. Only
+actual transitions write `hook.enabled` or `hook.disabled` audit records, and
+batch results preserve request order.
+
+## D-073 — Hook activation has a dedicated IAM action
+
+**Status:** Accepted least-privilege authorization extension
+
+Enable and disable operations use action and administrator capability
+`hook.hooks.enabled.update`; they do not reuse delete authority. Single-hook OBO
+proofs bind the Hook UUID, while batch proofs bind the target Silicon ID and
+Hook authorizes every selected aggregate. The represented actor's normal
+visibility and role constraints still apply. An OBO application can mutate only
+hooks created through that application unless the represented actor is an
+organization owner or has `hook.administrative_override`.
+
+## D-074 — Acknowledgment has durable Hook and DM stages
+
+**Status:** Accepted cross-service ownership clarification; extends D-019
+
+Hook's ingress `202 Accepted` with a stable `event_id` acknowledges that the
+event and its delivery work committed durably in Hook. DM's later `202 Accepted`
+acknowledges durable handoff from Hook to DM and is the point recorded as
+`delivered` by Hook. Neither response claims that a connected client received
+the event.
+
+DM owns WebSocket representation authorization, the 30-second JSON ping/pong
+heartbeat, the two-minute `4000 heartbeat-timeout` close, per-actor sequencing,
+client acknowledgments, reconnect resumption, and replay of unacknowledged
+events. Heartbeats are transient and have no acknowledgment or event sequence.
+Hook neither exposes a WebSocket route nor stores client acknowledgment state.
+
+## D-075 — The normalized DM payload has its own exact limit
+
+**Status:** Accepted compatibility correction; amends D-064
+
+DM independently limits the canonical JSON representation of the nested event
+`payload` to exactly 1 MiB (1,048,576 bytes). Hook therefore serializes and
+checks that value before constructing and checking the complete minimal DM
+request against the existing 1,052,672-byte bound. Either normalized overflow
+returns `413 payload_too_large` before event, idempotency, replay-guard, or
+outbox persistence. This closes the compact-number expansion gap in which Hook
+could previously acknowledge an event whose complete request fit locally but
+whose nested payload DM would reject terminally.
+
+## D-076 — Revised product prose does not silently retire integration contracts
+
+**Status:** Accepted compatibility interpretation
+
+The revised understanding replaces explanatory OBO and IAM paragraphs with
+WebSocket and acknowledgment requirements but does not explicitly deprecate
+their published API contracts. Hook therefore retains OBO Access authorization,
+the service-authenticated default IAM Hook provisioning operation, and signed
+IAM event delivery. Removing any of them would be an explicit versioned
+cross-service breaking change rather than an inference from omitted prose.
+
+## D-077 — The DM 0.2 candidate conflicts with Hook's delivery contract
+
+**Status:** Release blocked pending an explicit cross-service product decision
+
+Hook's current product understanding still requires every accepted webhook
+event to be delivered to Silicon DM and then conveyed to the target Silicon.
+The reviewed Silicon DM `0.2.0` candidate explicitly retires
+`POST /api/v1/internal/hook-events`, its `SystemEvent` type, and the corresponding
+WebSocket frame. Deploying the two contracts together would make every Hook
+delivery terminate at DM with `404`; client acknowledgment and replay could
+never occur.
+
+Hook does not silently discard its own explicit requirement or reinterpret a
+DM `404` as successful delivery. Its durable outbox and existing DM contract
+remain implemented so accepted events are not lost locally. A combined release
+is blocked until product ownership chooses and versions one of two compatible
+directions: restore durable Hook-event ingestion and replay in DM, or revise
+Hook's understanding and assign a different durable delivery destination.
+This decision records the incompatibility; it does not authorize changes in the
+separately dirty DM worktree.

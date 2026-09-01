@@ -7,7 +7,10 @@ info:
     Silicon Hook creates signed webhook endpoints, retains the latest 10,000
     events per endpoint, and durably forwards accepted events to Silicon DM.
     Timestamps are UTC RFC 3339 values. Endpoint keys route requests but do not
-    authenticate them.
+    authenticate them. An authenticated Silicon owns the deterministic identity
+    namespace `https://hook.teamofsilicons.com/{silicon_id}/`; usable ingress
+    endpoints remain the signed `/silicon/{silicon_id}/{endpoint_key}` URLs
+    returned by hook creation.
   contact: { email: engineering@teamofsilicons.com }
   license: { name: Proprietary, identifier: LicenseRef-Proprietary }
 servers:
@@ -76,7 +79,9 @@ paths:
           schema: { type: boolean, default: false }
       responses:
         '200':
-          description: Hooks visible to the actor.
+          description: >-
+            Active and disabled hooks visible to the actor, plus recoverable
+            deleted hooks when include_deleted is true.
           content:
             application/json:
               schema: { $ref: '#/components/schemas/HookPage' }
@@ -119,6 +124,40 @@ paths:
         '422': { $ref: '#/components/responses/UnprocessableEntity' }
         '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    patch:
+      tags: [Hooks]
+      operationId: setHooksEnabled
+      summary: Enable or disable a set of webhook connections atomically
+      description: >-
+        Applies the desired enabled state to 1–1000 unique retained hooks. The
+        operation is atomic and intrinsically idempotent: no Idempotency-Key is
+        required, unchanged hooks do not receive duplicate audit
+        records, and returned items follow the request hook_ids order.
+      parameters:
+        - $ref: '#/components/parameters/OrgId'
+        - $ref: '#/components/parameters/SiliconId'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HooksEnabledUpdate' }
+      responses:
+        '200':
+          description: All requested hooks now have the requested enabled state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/HookPage' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
   /api/v1/silicons/{silicon_id}/hooks/{hook_id}:
     parameters:
@@ -143,12 +182,42 @@ paths:
         '422': { $ref: '#/components/responses/UnprocessableEntity' }
         '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
+    patch:
+      tags: [Hooks]
+      operationId: setHookEnabled
+      summary: Enable or disable one webhook connection
+      description: >-
+        Sets the desired ingress state without deleting the hook. The operation
+        is intrinsically idempotent and does not require an Idempotency-Key;
+        requesting the current state succeeds without another audit record.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/HookEnabledUpdate' }
+      responses:
+        '200':
+          description: Hook in its requested enabled state.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Hook' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '409': { $ref: '#/components/responses/Conflict' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
     delete:
       tags: [Hooks]
       operationId: deleteHook
       summary: Soft-delete a webhook connection
       responses:
-        '204': { description: Hook disabled and retained for 45 days. }
+        '204': { description: Hook soft-deleted and retained for 45 days. }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
@@ -458,8 +527,9 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
     PayloadTooLarge:
       description: >-
-        The raw body exceeds its route limit, or the normalized DM request
-        exceeds the 1,052,672-byte durable-acceptance limit.
+        The raw body exceeds its route limit, the normalized nested DM payload
+        exceeds 1 MiB, or the complete normalized DM request exceeds the
+        1,052,672-byte durable-acceptance limit.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -522,7 +592,10 @@ components:
         id: { $ref: '#/components/schemas/ExternalId' }
     HookStatus:
       type: string
-      enum: [active, deleted]
+      description: >-
+        Disabled is reversible and retained; deleted is the separate 45-day
+        recovery lifecycle.
+      enum: [active, disabled, deleted]
     HookBase:
       type: object
       required: [id, org_id, silicon_id, name, endpoint_url, endpoint_key, status, created_by, created_at]
@@ -537,6 +610,10 @@ components:
         status: { $ref: '#/components/schemas/HookStatus' }
         created_by: { $ref: '#/components/schemas/ActorRef' }
         created_at: { type: string, format: date-time }
+        disabled_at:
+          type: [string, 'null']
+          format: date-time
+          description: Present only while reversibly disabled.
         deleted_at: { type: [string, 'null'], format: date-time }
         recoverable_until: { type: [string, 'null'], format: date-time }
     Hook:
@@ -559,6 +636,24 @@ components:
       properties:
         name: { type: string, minLength: 1, maxLength: 200, pattern: '^[^\u0000]*$' }
         description: { type: [string, 'null'], maxLength: 2000, pattern: '^[^\u0000]*$' }
+    HookEnabledUpdate:
+      type: object
+      additionalProperties: false
+      required: [enabled]
+      properties:
+        enabled: { type: boolean }
+    HooksEnabledUpdate:
+      type: object
+      additionalProperties: false
+      required: [hook_ids, enabled]
+      properties:
+        hook_ids:
+          type: array
+          minItems: 1
+          maxItems: 1000
+          uniqueItems: true
+          items: { type: string, format: uuid }
+        enabled: { type: boolean }
     HookPage:
       type: object
       additionalProperties: false
@@ -604,8 +699,9 @@ components:
     EventEnvelopeInput:
       type: object
       description: >-
-        Raw JSON is limited to 1 MiB. Its normalized minimal DM representation
-        must also fit the 1,052,672-byte durable-acceptance limit.
+        Raw JSON is limited to 1 MiB. The canonical JSON bytes for its nested
+        DM payload must be at most 1 MiB, and the complete normalized minimal DM
+        request must fit the 1,052,672-byte durable-acceptance limit.
       allOf:
         - $ref: '#/components/schemas/EventEnvelopeCore'
       properties:

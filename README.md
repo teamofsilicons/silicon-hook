@@ -5,12 +5,21 @@ It gives each Silicon independently signed endpoints, retains the latest 10,000
 events per endpoint, and forwards accepted events to Silicon DM through a
 transactional outbox.
 
+An authenticated Silicon owns the deterministic identity namespace
+`https://hook.teamofsilicons.com/{silicon_id}/`. That namespace does not accept
+events and authentication does not create a hook; usable ingress URLs are the
+individually signed `/silicon/{silicon_id}/{endpoint_key}` endpoints returned by
+explicit hook creation. Hooks can be disabled and re-enabled individually or in
+atomic batches without losing metadata, secrets, or history. Soft deletion
+remains the separate 45-day recovery lifecycle.
+
 The product behavior is defined in [UNDERSTANDING.md](./UNDERSTANDING.md), the
 human API guide is [API_DOCS.md](./API_DOCS.md), the machine contract is
 [openapi.yaml](./openapi.yaml), and implementation choices are recorded in
 [decisions.md](./decisions.md). The versioned cross-service requirements and
 current sibling compatibility status are in
-[IAM_INTEGRATION.md](./IAM_INTEGRATION.md).
+[IAM_INTEGRATION.md](./IAM_INTEGRATION.md) and
+[DM_INTEGRATION.md](./DM_INTEGRATION.md).
 
 ## Architecture
 
@@ -25,6 +34,12 @@ processes:
 
 PostgreSQL is authoritative. API replicas do not migrate at startup, delivery
 does not depend on in-memory queues, and IAM authorization is checked online.
+
+> **Cross-service release gate:** Hook's current product contract requires DM's
+> service-authenticated system-event ingress. The reviewed Silicon DM `0.2.0`
+> candidate removes that route and its WebSocket event frame. Do not deploy
+> these versions together until the product contract is reconciled and either
+> DM restores Hook-event delivery or Hook is given a different destination.
 
 ## Local development
 
@@ -76,6 +91,16 @@ Send the lowercase hexadecimal digest as
 `X-Hook-Signature: v1=<digest>`, with the same timestamp in
 `X-Hook-Timestamp` and a stable `Idempotency-Key`. See
 [API_DOCS.md](./API_DOCS.md) for the normative test vector.
+
+Hook's ingress `202 Accepted` acknowledges that the event and its DM delivery
+work are durable locally. A later DM `202` acknowledges durable handoff to DM.
+DM, not Hook, owns WebSocket heartbeats, connected-client acknowledgments,
+sequence state, and replay of unacknowledged events.
+
+The current local DM `0.2.0` alignment worktree removes that Hook-event
+boundary. It is therefore a release blocker, not a compatible deployment; see
+[DM_INTEGRATION.md](./DM_INTEGRATION.md) for the exact contract and resolution
+choices.
 
 ## Quality gates
 
