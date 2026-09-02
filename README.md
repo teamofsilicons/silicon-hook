@@ -17,7 +17,7 @@ lives as comments next to the code it explains.
 ## What a hook is
 
 An authenticated Silicon owns the namespace `https://hook.teamofsilicons.com/{silicon_id}/`.
-Every hook created for it gets a six-character alphanumeric endpoint key and a
+Every hook created for it gets an eight-character uppercase alphanumeric endpoint key and a
 public URL:
 
 ```text
@@ -72,17 +72,16 @@ JSON `ping` every 30 seconds; a client that fails to answer with the matching
 ## Safety
 
 A client address that sends twenty unverified requests to one endpoint is
-blocked from that endpoint for one day. After ten such blocks it is blocked
-permanently. Blocked addresses receive `403 ip_blocked`; nothing they send is
-stored.
+blocked from that endpoint for one day. Counting restarts after each block.
+Blocked addresses receive `403 ip_blocked`; nothing they send is stored.
 
 ## Architecture
 
 The repository is one Rust modular monolith with independently scalable
 processes:
 
-- `hook-api` serves management, ingress, history, IAM provisioning, and the
-  WebSocket delivery stream. Every replica listens for PostgreSQL
+- `hook-api` serves sign-in, management, ingress, history, the Silicon IAM
+  connection, IAM event receipt, and the WebSocket delivery stream. Every replica listens for PostgreSQL
   notifications so an event accepted on one replica reaches sessions on any.
 - `hook-worker` purges 14-day logs, expired 45-day deletions, stale address
   blocks, and expired idempotency records in bounded, fair batches.
@@ -91,6 +90,35 @@ processes:
 PostgreSQL is authoritative: hooks, encrypted secrets, request logs, delivery
 sequences, acknowledgment cursors, and address blocks all live there, and IAM
 authorization is checked online for every management call.
+
+## Silicon IAM
+
+Hook is a registered Silicon IAM Application and talks to IAM through the
+official `silicon-iam` crate. At startup the crate performs IAM's fail-closed
+compatibility handshake, so `hook-api` does not start against an IAM it
+cannot talk to.
+
+- **Who calls Hook.** Silicons present the access token IAM issued them.
+  Carbons sign in through `POST /api/v1/auth/login` and
+  `POST /api/v1/auth/callback`, which run IAM's PKCE flow and return Hook
+  Application tokens; `refresh` and `logout` complete the set.
+- **How Hook decides.** Every management call resolves the bearer online: a
+  Hook-issued token is introspected through the crate, and every token is
+  read back from IAM's organization directory to learn the public Carbon or
+  Silicon ID and the organization role. A Carbon's view of a Silicon is
+  confirmed with IAM per request. Hook caches nothing and exposes no OBO
+  endpoints.
+- **IAM events for a Silicon.** `POST /api/v1/silicons/{silicon_id}/hooks/iam`
+  creates the Silicon's `Silicon IAM` hook, registers its endpoint as the
+  Silicon's IAM webhook with the caller's own bearer, and stores the `swhs_`
+  secret IAM issues. Logouts, removals, and directory changes then reach the
+  Silicon over its ordinary delivery stream.
+- **IAM events for Hook.** IAM posts Hook's own Application webhook to
+  `POST /api/v1/iam/events`, verified with the crate's exact-byte verifier
+  and the configured `whs_` keyring.
+
+The full boundary, including the development-only local adapter, is in
+[IAM_INTEGRATION.md](./IAM_INTEGRATION.md).
 
 ## Local development
 

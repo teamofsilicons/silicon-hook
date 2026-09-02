@@ -23,7 +23,6 @@ requirements:
 | `hook.events` | `SELECT, INSERT` | `SELECT, DELETE` for 14-day retention |
 | `hook.blocked_requests` | `SELECT, INSERT` | `SELECT, DELETE` for 14-day retention |
 | retired endpoint keys | `SELECT, INSERT` | none |
-| IAM default-hook lifetime ledger | `INSERT` | none |
 | delivery sequences | `SELECT, INSERT, UPDATE` | none |
 | delivery cursors | `SELECT, INSERT, UPDATE` | none |
 | address blocks | `SELECT, INSERT, UPDATE` | `SELECT, DELETE` for stale-block cleanup |

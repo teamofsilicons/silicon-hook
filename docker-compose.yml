@@ -37,11 +37,12 @@ services:
       HOOK_ENCRYPTION_KEYS: 1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
       HOOK_ENCRYPTION_CURRENT_VERSION: "1"
       HOOK_CURSOR_SIGNING_KEY: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE
-      HOOK_IAM_BASE_URL: http://host.docker.internal:8081
-      HOOK_IAM_APP_ID: silicon-hook
-      HOOK_IAM_APP_SECRET: development-only-change-me
+      # Local mode: deterministic local:* bearers, no IAM deployment needed.
+      # Set HOOK_IAM_APP_ID/HOOK_IAM_APP_SECRET (and an HTTPS HOOK_IAM_BASE_URL)
+      # to talk to a real Silicon IAM.
+      HOOK_IAM_BASE_URL: http://127.0.0.1:8081
+      HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP: "true"
       HOOK_ALLOW_LOCAL_AUTH: "true"
-      HOOK_LOCAL_IAM_SERVICE_TOKEN: development-iam-service-token
     depends_on:
       runtime-grants:
         condition: service_completed_successfully

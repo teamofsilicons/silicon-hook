@@ -18,23 +18,22 @@ An authenticated Silicon owns the namespace `https://hook.teamofsilicons.com/{si
 https://hook.teamofsilicons.com/silicon/{silicon_id}/{endpoint_key}
 ```
 
-The endpoint key is six uppercase alphanumeric characters. It routes a request to a hook and is never a credential; authenticity comes from the hook's signature policy.
+The endpoint key is eight uppercase alphanumeric characters. It routes a request to a hook and is never a credential; authenticity comes from the hook's signature policy.
 
 ### Authentication
 
-- **Bearer authentication:** IAM access token for Silicon, Carbon, or administrator operations.
-- **OBO Access:** An application supplies both `X-App-ID` and a short-lived `X-IAM-OBO-Access-Proof` to act for an authorized actor.
-- **Service authentication:** IAM service token for internal IAM provisioning.
+- **Bearer authentication:** the only credential. A Silicon presents the access token Silicon IAM issued it; a Carbon presents the Hook Application token obtained through [sign-in](#sign-in) or an IAM access token of their own. Hook exposes no OBO endpoints.
 - **Provider ingress:** Endpoint URLs are publicly reachable; each hook's signature policy decides what is delivered.
+- **IAM ingress:** `POST /iam/events` is authenticated by IAM's webhook signature, not a bearer.
 - **Organization context:** Management requests require `X-Org-ID`.
 
-OBO proofs bind to the action and a stable resource identifier. Collection, history, and delivery actions bind the target Silicon ID; per-hook actions bind the hook UUID. Hook verifies opaque credentials online with IAM and fails closed if IAM cannot make a current decision. Every management response, including errors, carries `Cache-Control: private, no-store`.
+Hook verifies every bearer online with Silicon IAM through the official `silicon-iam` crate and IAM's organization directory, and fails closed if IAM cannot make a current decision. Every management response, including errors, carries `Cache-Control: private, no-store`.
 
-Hooks are for Silicons. A Silicon manages only its own hooks. A Carbon sees the hooks, logs, and streams of every Silicon IAM says they can view; organization owners, and administrators with the action-specific capability, may also mutate them. Deleting requires the Silicon itself, an owner, or an administrator with `hook.hooks.delete`.
+Hooks are for Silicons. A Silicon manages only its own hooks. A Carbon sees the hooks, logs, and streams of every Silicon IAM confirms they can view; organization owners and administrators see and may mutate every Silicon's hooks. Deleting, restoring, enabling, updating, rotating, and connecting the IAM hook require the Silicon itself, an owner, or an administrator.
 
 ### Idempotency
 
-Create, restore, secret rotation, and endpoint rotation require an `Idempotency-Key` of 8–255 visible ASCII characters. Repeating a key in the same operation scope with the same request returns the original result; reusing it with different content returns `409 idempotency_conflict`. Secret-bearing responses can be replayed for ten minutes; afterwards, rotate instead. Update and activation express a desired state and need no key.
+Create, restore, secret rotation, endpoint rotation, and the IAM hook connection require an `Idempotency-Key` of 8–255 visible ASCII characters. Repeating a key in the same operation scope with the same request returns the original result; reusing it with different content returns `409 idempotency_conflict`. Secret-bearing responses can be replayed for ten minutes; afterwards, rotate instead. Update and activation express a desired state and need no key.
 
 ### Errors
 
@@ -97,7 +96,7 @@ Issues a new generated secret and returns it once. The previous secret stops ver
 
 ### `POST /silicons/{silicon_id}/hooks/{hook_id}/endpoint/rotate`
 
-Replaces the endpoint key with a fresh six-character key that has never been used for this Silicon, and permanently retires the previous key: it is never reissued for the Silicon, and requests to it receive `410 endpoint_retired` for as long as the Silicon exists. Returns the hook with its new `endpoint_url`. Requires `Idempotency-Key`.
+Replaces the endpoint key with a fresh eight-character key that has never been used for this Silicon, and permanently retires the previous key: it is never reissued for the Silicon, and requests to it receive `410 endpoint_retired` for as long as the Silicon exists. Returns the hook with its new `endpoint_url`. Requires `Idempotency-Key`.
 
 ## Signature policy
 
@@ -164,7 +163,7 @@ Behind a load balancer the deployment sets `HOOK_TRUSTED_PROXY_HOPS` so the bloc
 
 ### Safety
 
-Twenty unverified requests from one address to one endpoint block that address from the endpoint for one day. Counting restarts after each block; the tenth block is permanent. Blocks are per endpoint, so a misconfigured provider cannot lock a Silicon out of its other hooks.
+Twenty unverified requests from one address to one endpoint block that address from the endpoint for one day. Counting restarts after each block. Blocks are per endpoint, so a misconfigured provider cannot lock a Silicon out of its other hooks.
 
 ## History
 
@@ -184,7 +183,7 @@ Every verified request is one position in its Silicon's ordered delivery stream.
 
 ### `GET /api/v1/ws?silicon_id=...`
 
-WebSocket delivery. Authenticate the upgrade request like a management call (`Authorization` or OBO headers plus `X-Org-ID`) and repeat `silicon_id` for every stream; an OBO proof binds one Silicon. Frames are JSON text.
+WebSocket delivery. Authenticate the upgrade request like a management call (`Authorization` plus `X-Org-ID`) and repeat `silicon_id` for every stream. Frames are JSON text.
 
 Server frames:
 
@@ -219,11 +218,35 @@ Acknowledges everything through `through_sequence`. Cursors never move backwards
 
 Reads the consumer's acknowledged position.
 
-## IAM provisioning
+## Sign-in
 
-### `POST /internal/iam/hooks`
+Carbons sign in through Silicon IAM's authorization-code flow with PKCE, which Hook runs with the official `silicon-iam` crate. These routes need no bearer.
 
-Creates the default `Silicon IAM` hook for a new Silicon. Only the introspected `silicon-iam` service token with the Hook audience and `hook.iam.provision` scope may call it, and it is unique per organization and Silicon for the lifetime of that identity. The default hook verifies IAM's own convention (HMAC-SHA-256 over `X-Silicon-IAM-Timestamp.body`, lowercase hex in `X-Silicon-IAM-Signature`), so IAM signs deliveries with the returned secret and Hook forwards membership, logout, and organization changes to the Silicon like any other provider event. See [`IAM_INTEGRATION.md`](./IAM_INTEGRATION.md).
+### `POST /auth/login`
+
+Optional body `{"org_id": "..."}`. Returns `authorization_url`, where the browser must be sent, and `continuation`, an encrypted, Hook-bound value that expires in ten minutes. Persist the continuation before redirecting.
+
+### `POST /auth/callback`
+
+Body `{"continuation": "...", "callback_url": "..."}` where `callback_url` is the exact URL the browser returned to, query string included. Returns `access_token`, `refresh_token`, `token_type`, `expires_in`, `scopes`, `actor`, and `org_id`. A denial returns `403 login_denied` with the OAuth error code in `details`.
+
+### `POST /auth/refresh`
+
+Body `{"refresh_token": "..."}`. Returns a new token pair; the old refresh token is consumed. Never refresh the same token family concurrently.
+
+### `POST /auth/logout`
+
+Bearer Hook Application token. Ends the IAM session behind it and returns `204`.
+
+## Silicon IAM
+
+### `POST /silicons/{silicon_id}/hooks/iam`
+
+Connects IAM events to the Silicon. Hook finds or creates the Silicon's `Silicon IAM` hook (restoring a deleted one; there is exactly one per Silicon), registers the hook's endpoint URL as the Silicon's IAM webhook using the caller's own bearer, and stores the `swhs_` secret IAM issues. The hook's policy is IAM's own convention: HMAC-SHA-256 over `X-Silicon-IAM-Timestamp.body`, keyed with the secret's UTF-8 bytes and presented as `v1=<hex>` in `X-Silicon-IAM-Signature`. Returns the hook plus `iam_webhook.secret_version`. Requires `Idempotency-Key`; a retry with the same key reconciles a partial failure. IAM's own refusals surface as `403`, `404`, or `409 iam_rejected`.
+
+### `POST /iam/events`
+
+Receives Hook's own Application webhook from IAM. Deliveries are verified with the crate's exact-byte verifier over the configured `whs_` keyring before anything is read; unverifiable deliveries receive `403`, verified ones `204`. See [`IAM_INTEGRATION.md`](./IAM_INTEGRATION.md).
 
 ## Complete flows
 
@@ -243,10 +266,11 @@ Provider POSTs to the endpoint URL
 ### New Silicon
 
 ```text
-IAM creates the Silicon identity
-  -> IAM calls internal Hook provisioning
+Silicon authenticates with IAM and calls POST /silicons/{silicon_id}/hooks/iam
   -> Hook creates the Silicon IAM hook with IAM's signing convention
-  -> IAM stores the endpoint and secret and signs its deliveries
+  -> Hook registers the endpoint as the Silicon's IAM webhook with the Silicon's bearer
+  -> IAM issues the swhs_ secret; Hook stores it as the hook's signing secret
+  -> IAM signs every Silicon event to that endpoint; verified events flow to the stream
 ```
 
 ## Deliberately deferred operations

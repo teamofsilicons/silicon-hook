@@ -19,15 +19,14 @@ servers:
   - { url: 'https://hook.teamofsilicons.com', description: Production }
 security:
   - bearerAuth: []
-  - oboProof: []
-    appId: []
 tags:
   - { name: System, description: Process health and build information. }
   - { name: Hooks, description: Webhook endpoint lifecycle and signature policy. }
   - { name: Ingress, description: Public provider endpoints. }
   - { name: History, description: Retained verified and blocked request logs. }
   - { name: Deliveries, description: "Ordered, acknowledged delivery streams." }
-  - { name: Internal, description: Service-authenticated platform integration. }
+  - { name: Auth, description: Carbon sign-in through Silicon IAM. }
+  - { name: IAM, description: Silicon IAM connection and event receipt. }
 
 paths:
   /healthz:
@@ -296,7 +295,7 @@ paths:
       operationId: rotateHookEndpoint
       summary: Replace the endpoint key and retire the old one forever
       description: >-
-        Allocates a new six-character alphanumeric key that has never been used
+        Allocates a new eight-character alphanumeric key that has never been used
         for this Silicon. The previous key is retired permanently: it is never
         reissued for the Silicon and requests to it receive 410 endpoint_retired.
       parameters:
@@ -507,8 +506,7 @@ paths:
       summary: Open the WebSocket delivery stream
       description: |
         Authenticate the upgrade request exactly like a management call and name
-        the Silicon streams with repeated `silicon_id` query parameters. An OBO
-        proof binds one Silicon, so OBO connections carry exactly one. After
+        the Silicon streams with repeated `silicon_id` query parameters. After
         the `ready` frame the server replays every event after the consumer's
         acknowledged cursor, then streams live events. Frames are JSON text:
 
@@ -606,38 +604,164 @@ paths:
         '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
-  /api/v1/internal/iam/hooks:
+  /api/v1/auth/login:
     post:
-      tags: [Internal]
-      operationId: createIamHook
-      summary: Provision a Silicon's default IAM hook
+      tags: [Auth]
+      operationId: beginLogin
+      summary: Start a Carbon sign-in through Silicon IAM
       description: >-
-        The default hook verifies Silicon IAM's own convention: HMAC-SHA-256
-        over `X-Silicon-IAM-Timestamp.body`, presented in lowercase hex in
-        `X-Silicon-IAM-Signature`.
-      security: [{ serviceAuth: [] }]
-      parameters:
-        - $ref: '#/components/parameters/IdempotencyKey'
+        Builds IAM's PKCE authorization URL and returns it with an encrypted,
+        Hook-bound continuation that expires in ten minutes. Persist the
+        continuation before redirecting the browser.
+      security: []
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/LoginRequest' }
+      responses:
+        '200':
+          description: Authorization URL and sealed continuation.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/LoginStart' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/auth/callback:
+    post:
+      tags: [Auth]
+      operationId: completeLogin
+      summary: Complete a sign-in from the exact callback URL
+      security: []
       requestBody:
         required: true
         content:
           application/json:
-            schema: { $ref: '#/components/schemas/IamHookCreate' }
+            schema: { $ref: '#/components/schemas/LoginCallback' }
       responses:
-        '201':
-          description: Default Silicon IAM hook and one-time signing secret.
+        '200':
+          description: Hook Application tokens for the signed-in actor.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
           content:
             application/json:
-              schema: { $ref: '#/components/schemas/HookWithSecret' }
+              schema: { $ref: '#/components/schemas/Tokens' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '403':
+          description: IAM or the actor declined the sign-in (code login_denied).
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/auth/refresh:
+    post:
+      tags: [Auth]
+      operationId: refreshTokens
+      summary: Rotate a refresh token into a new token pair
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RefreshRequest' }
+      responses:
+        '200':
+          description: New token pair; the presented refresh token is consumed.
+          headers:
+            Cache-Control: { schema: { const: no-store } }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Tokens' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
+        '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/auth/logout:
+    post:
+      tags: [Auth]
+      operationId: logout
+      summary: End the IAM session behind a Hook Application token
+      responses:
+        '204': { description: Session ended. }
+        '401': { $ref: '#/components/responses/Unauthorized' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/silicons/{silicon_id}/hooks/iam:
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - $ref: '#/components/parameters/SiliconId'
+    post:
+      tags: [IAM]
+      operationId: connectIamHook
+      summary: Connect Silicon IAM events to the Silicon
+      description: >-
+        Finds or creates the Silicon's `Silicon IAM` hook, registers its
+        endpoint as the Silicon's IAM webhook with the caller's own bearer, and
+        stores the `swhs_` secret IAM issues. The hook verifies IAM's own
+        convention: HMAC-SHA-256 over `X-Silicon-IAM-Timestamp.body`,
+        presented as `v1=<hex>` in `X-Silicon-IAM-Signature`.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      responses:
+        '200':
+          description: The connected IAM hook.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/IamHook' }
         '400': { $ref: '#/components/responses/BadRequest' }
         '401': { $ref: '#/components/responses/Unauthorized' }
         '403': { $ref: '#/components/responses/Forbidden' }
+        '404': { $ref: '#/components/responses/NotFound' }
         '408': { $ref: '#/components/responses/RequestTimeout' }
         '409': { $ref: '#/components/responses/Conflict' }
         '410': { $ref: '#/components/responses/Gone' }
         '413': { $ref: '#/components/responses/PayloadTooLarge' }
-        '415': { $ref: '#/components/responses/UnsupportedMediaType' }
         '422': { $ref: '#/components/responses/UnprocessableEntity' }
+        '500': { $ref: '#/components/responses/InternalError' }
+        '503': { $ref: '#/components/responses/ServiceUnavailable' }
+
+  /api/v1/iam/events:
+    post:
+      tags: [IAM]
+      operationId: receiveIamEvent
+      summary: Receive Hook's own Application webhook from Silicon IAM
+      description: >-
+        Authenticated by IAM's delivery signature over the exact body, not by
+        a bearer. Requires `X-Silicon-IAM-Event-ID`, `X-Silicon-IAM-Timestamp`,
+        `X-Silicon-IAM-Key-Version`, and `X-Silicon-IAM-Signature`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { type: object, additionalProperties: true }
+      responses:
+        '204': { description: Delivery authenticated and recorded. }
+        '403': { $ref: '#/components/responses/Forbidden' }
+        '408': { $ref: '#/components/responses/RequestTimeout' }
+        '413': { $ref: '#/components/responses/PayloadTooLarge' }
         '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
 
@@ -647,22 +771,6 @@ components:
       type: http
       scheme: bearer
       bearerFormat: IAM opaque access token
-    oboProof:
-      type: apiKey
-      in: header
-      name: X-IAM-OBO-Access-Proof
-      description: |
-        Short-lived audience/action/resource-bound IAM OBO proof. Collection,
-        history, and delivery actions bind the target Silicon ID; per-hook
-        actions bind the hook UUID.
-    appId:
-      type: apiKey
-      in: header
-      name: X-App-ID
-    serviceAuth:
-      type: http
-      scheme: bearer
-      bearerFormat: IAM service access token
 
   parameters:
     OrgId:
@@ -684,7 +792,7 @@ components:
       name: endpoint_key
       in: path
       required: true
-      schema: { type: string, pattern: '^[A-Za-z0-9]{6}$' }
+      schema: { type: string, pattern: '^[A-Za-z0-9]{8}$' }
     IdempotencyKey:
       name: Idempotency-Key
       in: header
@@ -736,8 +844,8 @@ components:
           schema: { $ref: '#/components/schemas/Error' }
     Blocked:
       description: >-
-        The client address is blocked for this endpoint (code ip_blocked). A
-        temporary block carries Retry-After; a permanent block does not.
+        The client address is blocked for this endpoint (code ip_blocked). The
+        block carries Retry-After.
       content:
         application/json:
           schema: { $ref: '#/components/schemas/Error' }
@@ -913,7 +1021,7 @@ components:
         name: { type: string, minLength: 1, maxLength: 200 }
         description: { type: [string, 'null'], maxLength: 2000 }
         endpoint_url: { type: string, format: uri }
-        endpoint_key: { type: string, pattern: '^[A-Z0-9]{6}$' }
+        endpoint_key: { type: string, pattern: '^[A-Z0-9]{8}$' }
         status: { $ref: '#/components/schemas/HookStatus' }
         signature: { $ref: '#/components/schemas/SignaturePolicy' }
         time_zone: { type: string, maxLength: 64, description: IANA zone used in delivery summaries. }
@@ -1107,13 +1215,65 @@ components:
       properties:
         status: { const: webhook.ok }
         receipt_id: { type: string, format: uuid }
-    IamHookCreate:
+    LoginRequest:
       type: object
       additionalProperties: false
-      required: [org_id, silicon_id]
       properties:
         org_id: { $ref: '#/components/schemas/OrganizationId' }
-        silicon_id: { $ref: '#/components/schemas/SiliconId' }
+    LoginStart:
+      type: object
+      required: [authorization_url, continuation]
+      properties:
+        authorization_url: { type: string, format: uri }
+        continuation:
+          type: string
+          description: Encrypted, Hook-bound sign-in continuation; expires in ten minutes.
+    LoginCallback:
+      type: object
+      additionalProperties: false
+      required: [continuation, callback_url]
+      properties:
+        continuation: { type: string, maxLength: 16384 }
+        callback_url:
+          type: string
+          format: uri
+          maxLength: 8192
+          description: The exact URL the browser returned to, query string included.
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [refresh_token]
+      properties:
+        refresh_token: { type: string }
+    Tokens:
+      type: object
+      required: [access_token, refresh_token, token_type, expires_in, scopes, actor]
+      properties:
+        access_token: { type: string }
+        refresh_token: { type: string, description: Rotates on every use. }
+        token_type: { const: Bearer }
+        expires_in: { type: integer, minimum: 1 }
+        scopes: { type: array, items: { type: string } }
+        actor: { $ref: '#/components/schemas/ActorRef' }
+        org_id:
+          oneOf:
+            - $ref: '#/components/schemas/OrganizationId'
+            - type: 'null'
+    IamHook:
+      type: object
+      allOf:
+        - $ref: '#/components/schemas/HookBase'
+      required: [iam_webhook]
+      properties:
+        iam_webhook:
+          type: object
+          required: [secret_version]
+          properties:
+            secret_version:
+              type: integer
+              minimum: 1
+              description: Version IAM presents in X-Silicon-IAM-Key-Version.
+      unevaluatedProperties: false
     Error:
       type: object
       additionalProperties: false
