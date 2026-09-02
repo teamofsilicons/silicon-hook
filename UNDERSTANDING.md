@@ -15,6 +15,8 @@ So silicon hooks are webhooks on the system that silicons could utilize as webho
 
 Logging in and signing up are handled entirely by Silicon IAm (this is our access and authorization management layer). You would have an app_id and app_secret stored in your env that you can use to request the login and signup from Silicon IAm (read [https://backend.iam.teamofsilicons.com/docs/client/]) you would realise how you would need to login and singup using silicon IAm. For both signing in and signing up into the system would need Silicon IAm authorization, once you have the access token from SIlicon IAm for the user logged in, render the application accordingly. 
 
+Install the silicon IAm's package via crate, and use it's client side docs. 
+
 The webhook endpoint you have would give you information whenever someone logs out, kicked from org, anything changes you would know.
 
 Mainly this will be used by authenticated silicons, so take a look at how silicon's are authenticated and let the silicons do the action accordingly. 
@@ -24,23 +26,24 @@ Webhooks are just for silicons to use, and when carbons come into the system for
 
 # How it works
 
-For any silicon that authenticates onto silicon hook, see if they have a valid silicon account, and if they have a valid silicon account, assign them a silicon hook endpoint. That's gonna be [hook.teamofsilicons.com/{silicon_id}/]. This is the base id that's gonna be used by the silicon for all the webhook endpoints.
+For any silicon that authenticates onto silicon hook, see if they have a valid silicon account, and if they have a valid silicon account. This is the base id that's gonna be used by the silicon for all the webhook endpoints.
 
 There should be an endpoint to get all the hooks, it should return the name of the hook, the hook url, and when it last reached out.
 
 
 # Rotate
 
-There should be an endpoint to rotate, which kills the earlier hook url for that particular service instead replaces it with a new endpoint (a new 6 digit alphanumerical that's not already registered for that silicon id) and return it in the same endpoint. The killed endpoint should never be used for the same silicon again 
+There should be an endpoint to rotate, which kills the earlier hook url for that particular service instead replaces it with a new endpoint (a new 8 digit alphanumerical that's not already registered for that silicon id) and return it in the same endpoint. The killed endpoint should never be used for the same silicon again 
 
 
 # Url
 
-Each web hook endpoint would be at [hook.teamofsilicons.com/silicon/{silicon_id}/{6_digit_alphanumerical}/]
+Each web hook endpoint would be at [hook.teamofsilicons.com/silicon/{silicon_id}/{8_digit_alphanumerical}]
 
 For eg:
-hook.teamofsilicons.com/silicon/cos:tos/402E2/
+hook.teamofsilicons.com/silicon/cos:tos/402E2J2U
 
+The entire 8_digit_alphanumerical must be in all caps. 
 
 # Create Webhook
 
@@ -85,7 +88,6 @@ hook
 
 secret
 key
-	private
 	public
 
 ```
@@ -116,12 +118,16 @@ signature_encoding:
 ```
 
 
-For this request it gets the said webhook url:  hook.teamofsilicons.com/silicon/{silicon_id}/{6_digit_alphanumerical}/ along with the 6 digit alphanumerical seperately, if signature is enabled it also gives the signing_secret (`v1`.32 digit alphanumerical) and store it.  
+For this request it gets the said webhook url:  hook.teamofsilicons.com/silicon/{silicon_id}/{6_digit_alphanumerical}/ along with the 8 digit alphanumerical seperately, if signature is enabled it also gives the signing_secret (`v1`.32 digit alphanumerical) and store it.  
 
 Past creation it should be possible to turn off any single or a set of webhook at any time and still keep it active, and can turn it back on anytime needed.
 
-These configurations can only be updated at any given time. 
+These configurations can be updated at any given time. The configurations of the signature and signature verification algorithm is also configurable. 
 
+
+### Rotate Secret
+
+It should also be possible to rotate the signing secret for any webhook. 
 
 # Delete Webhook
 
@@ -149,7 +155,7 @@ For any new request if the signing for the webhook is enabled, use it to verify 
 
 # Safety
 
-If an ip sends 20 requests that were unverified for an signature required webhook endpoint, the said ip would be blocked for 1 day, and if this repeats 10 times the ip would be permanently blocked for that webhook endpoint. 
+If an ip sends 20 requests that were unverified for an signature required webhook endpoint, the said ip would be blocked for 1 day. 
 
 
 # Accepted
@@ -164,7 +170,7 @@ Maintain a seperate blocked_logs list, this would include all the unverified log
 
 # Websocket
 
-We maintain a websocket connection with the client (a client can serve single or multiple silicons/carbons). While authentication they will tell these are the silicon(s) or carbon(s) it's trying to connect to.
+We maintain a websocket connection with the client (a client can serve single or multiple silicons/carbons). While authentication they will tell these are the silicon(s) it's trying to connect to.
 
 The server sends an application-level JSON `ping` every 30 seconds. The adapter must immediately reply with a minimal `pong` carrying the same `ping_id`. If no valid pong is received for two minutes, the backend closes with application code `4000` and reason `heartbeat-timeout`. Ping and pong are not stored, do not require ACK, and do not consume per-SID delivery sequences.
 
@@ -172,3 +178,8 @@ The server sends an application-level JSON `ping` every 30 seconds. The adapte
 # Acknowledgment
 
 For each hook event that was recieved and sent via websocket or even normal api request must recieve an acknowledged from the server for that particular webhook request that was sent via silicon hook onto the server. For all the unacknowledged webhook events it must automatically be attached in the next websocket connection.
+
+
+# OBO
+
+Hook exposes no OBO endpoints. 
