@@ -1,6 +1,13 @@
 [advisories]
 unmaintained = "workspace"
 yanked = "deny"
+ignore = [
+  # RUSTSEC-2023-0071 (Marvin): timing side channel in RSA private-key
+  # operations. Hook only verifies provider signatures with public keys and
+  # never loads, stores, or uses an RSA private key, so the affected code path
+  # is unreachable. No fixed release of `rsa` exists; revisit when one ships.
+  { id = "RUSTSEC-2023-0071", reason = "public-key verification only; no RSA private-key operations" },
+]
 
 [bans]
 multiple-versions = "warn"
