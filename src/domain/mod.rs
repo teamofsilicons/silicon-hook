@@ -10,6 +10,9 @@ mod event;
 mod hook;
 mod id;
 mod policy;
+pub mod request;
+pub mod safety;
+pub mod signature;
 
 pub use actor::{ActorKind, ActorRef, AuthorizationContext, Capability, OrganizationRole};
 pub use cursor::{EventCursor, EventCursorScope, EventFilter};
