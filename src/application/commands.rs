@@ -5,9 +5,8 @@ use std::net::IpAddr;
 use bytes::Bytes;
 
 use crate::domain::{
-    ActorRef, AuthorizationContext, BlockedRequest, BlockedRequestId, DeliveryCursor, EndpointKey,
-    EventId, EventRecord, Hook, HookDescription, HookId, HookName, HookTimeZone, OrganizationId,
-    SigningSecret, SiliconId,
+    AuthorizationContext, BlockedRequest, BlockedRequestId, DeliveryCursor, EndpointKey, EventId,
+    EventRecord, Hook, HookDescription, HookId, HookName, HookTimeZone, SigningSecret, SiliconId,
     signature::{
         Expression, SecretEncoding, SignatureAlgorithm, SignatureConfig, SignatureEncoding,
     },
@@ -175,19 +174,39 @@ pub struct SetHooksEnabledCommand {
     pub request_id: Option<String>,
 }
 
-/// Privileged IAM default-hook provisioning input.
+/// Input for finding or creating the Silicon's IAM hook before it is
+/// registered with IAM.
 #[derive(Clone, Debug)]
-pub struct ProvisionIamHookCommand {
-    /// IAM service identity authenticated at the integration boundary.
-    pub actor: ActorRef,
-    /// Organization supplied by the authenticated IAM service.
-    pub organization_id: OrganizationId,
-    /// Silicon whose default hook is being provisioned.
+pub struct ConnectIamHookCommand {
+    /// Authorized mutation context.
+    pub context: ManagementContext,
+    /// Silicon whose IAM hook is being connected.
     pub silicon_id: SiliconId,
-    /// Caller-supplied idempotency key.
-    pub idempotency_key: String,
-    /// Correlation identifier assigned at the HTTP boundary.
-    pub request_id: Option<String>,
+}
+
+/// Input for storing the signing secret IAM issued for the Silicon's webhook.
+#[derive(Clone)]
+pub struct BindIamHookSecretCommand {
+    /// Authorized mutation context.
+    pub context: ManagementContext,
+    /// Silicon whose IAM hook is being connected.
+    pub silicon_id: SiliconId,
+    /// The IAM hook prepared for this Silicon.
+    pub hook_id: HookId,
+    /// Secret IAM signs deliveries with.
+    pub signing_secret: SigningSecret,
+}
+
+impl std::fmt::Debug for BindIamHookSecretCommand {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("BindIamHookSecretCommand")
+            .field("context", &self.context)
+            .field("silicon_id", &self.silicon_id)
+            .field("hook_id", &self.hook_id)
+            .field("signing_secret", &"[REDACTED]")
+            .finish()
+    }
 }
 
 /// Raw public-ingress input preserved exactly as the provider sent it.

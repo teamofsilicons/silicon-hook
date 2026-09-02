@@ -43,8 +43,6 @@ pub struct ApiDependencies {
     pub application: HookApplication,
     /// Online IAM adapter.
     pub iam: IamClient,
-    /// Whether deterministic `local:` credentials are accepted.
-    pub allow_local_credentials: bool,
     /// Trusted reverse-proxy hops for client address resolution.
     pub trusted_proxy_hops: u8,
     /// WebSocket delivery policy.
@@ -59,7 +57,6 @@ pub fn router(dependencies: ApiDependencies, server: &ServerSettings) -> axum::R
         ApiState {
             application: dependencies.application,
             iam: dependencies.iam,
-            allow_local_credentials: dependencies.allow_local_credentials,
             trusted_proxy_hops: dependencies.trusted_proxy_hops,
             realtime: dependencies.realtime,
             wakeups: dependencies.wakeups,
@@ -89,8 +86,9 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
             Arc::new(SystemClock),
             settings.server.public_base_url.clone(),
         ),
-        iam: IamClient::new(&settings.iam).context("failed to construct IAM client")?,
-        allow_local_credentials: settings.iam.local_auth_enabled(),
+        iam: IamClient::connect(&settings.iam)
+            .await
+            .context("failed to connect to Silicon IAM")?,
         trusted_proxy_hops: settings.server.trusted_proxy_hops,
         realtime: settings.realtime,
         wakeups: wakeups.clone(),

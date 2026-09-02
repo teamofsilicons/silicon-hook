@@ -20,10 +20,10 @@ pub use protocol::{
 };
 
 use super::{
-    handlers::{ACTION_READ_EVENTS, authorize_management, map_application_error},
+    handlers::{authorize_management, map_application_error},
     state::ApiState,
 };
-use crate::{domain::SiliconId, error::AppError, infrastructure::iam::PresentedCredential};
+use crate::{domain::SiliconId, error::AppError};
 
 pub(super) async fn upgrade(
     State(state): State<ApiState>,
@@ -35,19 +35,7 @@ pub(super) async fn upgrade(
         query.as_deref().unwrap_or_default(),
         state.realtime.max_silicons_per_connection.get(),
     )?;
-    let credential =
-        super::extractors::management_credential(&headers, state.allow_local_credentials)?;
-    if matches!(credential, PresentedCredential::Obo { .. }) && silicon_ids.len() > 1 {
-        return Err(AppError::validation_with_details(
-            "invalid_silicon_id",
-            "an OBO proof binds one Silicon; open one connection per Silicon",
-        ));
-    }
-    let Some(first) = silicon_ids.first() else {
-        return Err(AppError::validation("invalid_silicon_id"));
-    };
-    let authorization =
-        authorize_management(&state, &headers, ACTION_READ_EVENTS, first.as_str()).await?;
+    let authorization = authorize_management(&state, &headers, &silicon_ids).await?;
     let streams = silicon_ids
         .iter()
         .map(|silicon_id| {

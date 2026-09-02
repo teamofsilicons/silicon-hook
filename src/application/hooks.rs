@@ -1,5 +1,5 @@
 //! Hook lifecycle use cases: create, read, update, activate, delete, restore,
-//! rotate secret, rotate endpoint, and IAM default provisioning.
+//! rotate secret, rotate endpoint, and connecting the Silicon's IAM hook.
 
 use std::collections::BTreeMap;
 
@@ -7,9 +7,9 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
 use super::{
-    ApplicationError, CreateHookCommand, DeleteHookCommand, HookApplication, HookMutationCommand,
-    HookWithSecret, ProvisionIamHookCommand, SetHooksEnabledCommand, SigningInput,
-    UpdateHookCommand,
+    ApplicationError, BindIamHookSecretCommand, ConnectIamHookCommand, CreateHookCommand,
+    DeleteHookCommand, HookApplication, HookMutationCommand, HookWithSecret,
+    SetHooksEnabledCommand, SigningInput, UpdateHookCommand,
     service::{
         audit_context, authorize_action, database_time, idempotency_scope, map_store_error,
         secret_replay_until,
@@ -17,9 +17,9 @@ use super::{
 };
 use crate::{
     domain::{
-        Action, ActorRef, ApplicationId, AuthorizationContext, EndpointKey, Hook, HookDescription,
-        HookId, HookName, HookStatus, HookTimeZone, HookUpdate, NewHook, OrganizationId,
-        SigningPolicy, SigningSecret, SiliconId,
+        Action, ActorRef, AuthorizationContext, EndpointKey, Hook, HookDescription, HookId,
+        HookName, HookStatus, HookTimeZone, HookUpdate, NewHook, OrganizationId, SigningPolicy,
+        SigningSecret, SiliconId,
         signature::{Expression, SignatureAlgorithm, SignatureConfig, SignatureEncoding},
     },
     infrastructure::postgres::{
@@ -32,10 +32,11 @@ use crate::{
 const ENDPOINT_GENERATION_ATTEMPTS: usize = 16;
 const MAX_HOOK_ACTIVATION_BATCH_SIZE: usize = 1_000;
 const IAM_HOOK_NAME: &str = "Silicon IAM";
-const IAM_HOOK_DESCRIPTION: &str = "Default Silicon IAM event hook";
-/// IAM signs `{timestamp}.{body}` with HMAC-SHA-256 and presents lowercase hex
-/// in `X-Silicon-IAM-Signature`; the timestamp travels in
-/// `X-Silicon-IAM-Timestamp`.
+const IAM_HOOK_DESCRIPTION: &str = "Silicon IAM events for this Silicon";
+/// IAM signs `{timestamp}.{body}` with HMAC-SHA-256 over the UTF-8 bytes of the
+/// `swhs_` secret and presents `v1=<lowercase hex>` in
+/// `X-Silicon-IAM-Signature`; the timestamp travels in
+/// `X-Silicon-IAM-Timestamp`. The verifier strips the `v1=` label itself.
 const IAM_PAYLOAD_EXPRESSION: &str =
     r#"concat(request.headers["x-silicon-iam-timestamp"], ".", request.raw_body)"#;
 const IAM_SIGNATURE_EXPRESSION: &str = r#"request.headers["x-silicon-iam-signature"]"#;
@@ -52,7 +53,7 @@ impl HookApplication {
         silicon_id: &SiliconId,
         include_deleted: bool,
     ) -> Result<Vec<Hook>, ApplicationError> {
-        authorize_action(authorization, Action::ListHooks, silicon_id, None)?;
+        authorize_action(authorization, Action::ListHooks, silicon_id)?;
         let retained_at = database_time(self.clock.now())?;
         self.store
             .list_hooks(
@@ -76,7 +77,7 @@ impl HookApplication {
         silicon_id: &SiliconId,
         hook_id: HookId,
     ) -> Result<Hook, ApplicationError> {
-        authorize_action(authorization, Action::ReadHook, silicon_id, None)?;
+        authorize_action(authorization, Action::ReadHook, silicon_id)?;
         let hook = self
             .store
             .get_hook(authorization.organization_id(), silicon_id, hook_id)
@@ -104,7 +105,6 @@ impl HookApplication {
             &command.context.authorization,
             Action::CreateHook,
             &command.silicon_id,
-            None,
         )?;
         let signing = command.signing.resolve(&SignatureConfig::default(), true);
         validate_signing_input(&signing)?;
@@ -122,7 +122,6 @@ impl HookApplication {
             time_zone: command.time_zone,
             signing,
             actor: command.context.authorization.actor().clone(),
-            acting_application: command.context.authorization.acting_application().cloned(),
             idempotency_key: command.context.idempotency_key,
             request_digest,
             request_id: command.context.request_id,
@@ -142,7 +141,7 @@ impl HookApplication {
     /// persistence failure.
     pub async fn update_hook(&self, command: UpdateHookCommand) -> Result<Hook, ApplicationError> {
         let authorization = &command.authorization;
-        authorize_action(authorization, Action::ReadHook, &command.silicon_id, None)?;
+        authorize_action(authorization, Action::ReadHook, &command.silicon_id)?;
         let existing = self
             .store
             .get_hook(
@@ -164,20 +163,10 @@ impl HookApplication {
             validate_signing_input(signing)?;
         }
         if command.patch.enabled.is_some() {
-            authorize_action(
-                authorization,
-                Action::SetHookEnabled,
-                &command.silicon_id,
-                existing.created_via_application(),
-            )?;
+            authorize_action(authorization, Action::SetHookEnabled, &command.silicon_id)?;
         }
         if command.patch.changes_metadata() {
-            authorize_action(
-                authorization,
-                Action::UpdateHook,
-                &command.silicon_id,
-                existing.created_via_application(),
-            )?;
+            authorize_action(authorization, Action::UpdateHook, &command.silicon_id)?;
         }
 
         let mut current = existing;
@@ -234,7 +223,6 @@ impl HookApplication {
             &command.authorization,
             Action::ReadHook,
             &command.silicon_id,
-            None,
         )?;
         let hook = self
             .store
@@ -250,7 +238,6 @@ impl HookApplication {
             &command.authorization,
             Action::DeleteHook,
             &command.silicon_id,
-            hook.created_via_application(),
         )?;
         if hook.status() == HookStatus::Deleted {
             return Ok(());
@@ -302,7 +289,6 @@ impl HookApplication {
                 &command.authorization,
                 Action::SetHookEnabled,
                 &command.silicon_id,
-                hook.created_via_application(),
             )?;
         }
 
@@ -418,8 +404,125 @@ impl HookApplication {
             });
         }
 
-        let now = database_time(self.clock.now())?;
         let secret = SigningSecret::generate().map_err(ApplicationError::internal)?;
+        self.store_rotated_secret(
+            command,
+            secret,
+            "hook.secret.rotate",
+            empty_request_digest(),
+        )
+        .await
+    }
+
+    /// Finds the Silicon's IAM hook or creates it, restoring a soft-deleted
+    /// one, so the caller can register its endpoint with IAM.
+    ///
+    /// The hook verifies IAM's own signing convention. Until
+    /// [`Self::bind_iam_hook_secret`] stores the secret IAM issued, a freshly
+    /// created hook carries a placeholder secret that verifies nothing.
+    ///
+    /// # Errors
+    ///
+    /// Returns an authorization, recovery, idempotency, or persistence failure.
+    pub async fn prepare_iam_hook(
+        &self,
+        command: ConnectIamHookCommand,
+    ) -> Result<Hook, ApplicationError> {
+        let authorization = &command.context.authorization;
+        authorize_action(authorization, Action::ConnectIamHook, &command.silicon_id)?;
+        let existing = self
+            .store
+            .find_iam_hook(authorization.organization_id(), &command.silicon_id)
+            .await
+            .map_err(map_store_error)?;
+        match existing {
+            Some(hook) if hook.status() == HookStatus::Deleted => {
+                self.restore_hook(HookMutationCommand {
+                    context: command.context,
+                    silicon_id: command.silicon_id,
+                    hook_id: hook.id(),
+                })
+                .await
+            }
+            Some(hook) => Ok(hook),
+            None => {
+                let request_digest = connect_iam_request_digest(&command.silicon_id)?;
+                let created = self
+                    .create_hook_inner(CreateHookParts {
+                        organization_id: authorization.organization_id().clone(),
+                        silicon_id: command.silicon_id,
+                        name: HookName::new(IAM_HOOK_NAME).map_err(|_| {
+                            ApplicationError::Validation {
+                                field: "iam_hook_name",
+                            }
+                        })?,
+                        description: HookDescription::optional(Some(
+                            IAM_HOOK_DESCRIPTION.to_owned(),
+                        ))
+                        .map_err(|_| ApplicationError::Validation {
+                            field: "iam_hook_description",
+                        })?,
+                        time_zone: HookTimeZone::default(),
+                        signing: iam_signing_input()?,
+                        actor: authorization.actor().clone(),
+                        idempotency_key: command.context.idempotency_key,
+                        request_digest,
+                        request_id: command.context.request_id,
+                        is_iam_default: true,
+                    })
+                    .await?;
+                Ok(created.hook)
+            }
+        }
+    }
+
+    /// Stores the `swhs_` secret IAM issued when the Hook endpoint was
+    /// registered as the Silicon's webhook.
+    ///
+    /// # Errors
+    ///
+    /// Returns an authorization, lifecycle, idempotency, or persistence failure.
+    pub async fn bind_iam_hook_secret(
+        &self,
+        command: BindIamHookSecretCommand,
+    ) -> Result<Hook, ApplicationError> {
+        let mutation = HookMutationCommand {
+            context: command.context,
+            silicon_id: command.silicon_id,
+            hook_id: command.hook_id,
+        };
+        let hook = self
+            .load_for_mutation(
+                &mutation.context.authorization,
+                &mutation.silicon_id,
+                mutation.hook_id,
+                Action::ConnectIamHook,
+            )
+            .await?;
+        if hook.status() == HookStatus::Deleted {
+            return Err(ApplicationError::StateConflict);
+        }
+        let request_digest = secret_digest(&command.signing_secret);
+        let stored = self
+            .store_rotated_secret(
+                mutation,
+                command.signing_secret,
+                "hook.iam.bind",
+                request_digest,
+            )
+            .await?;
+        Ok(stored.hook)
+    }
+
+    async fn store_rotated_secret(
+        &self,
+        command: HookMutationCommand,
+        secret: SigningSecret,
+        operation: &str,
+        request_digest: [u8; 32],
+    ) -> Result<HookWithSecret, ApplicationError> {
+        let authorization = &command.context.authorization;
+        let now = database_time(self.clock.now())?;
         let encrypted = self
             .secret_cipher
             .encrypt(command.hook_id, &secret)
@@ -431,11 +534,11 @@ impl HookApplication {
             hook_id: command.hook_id,
             encrypted_secret: encrypted.clone(),
             idempotency: idempotency_scope(
-                "hook.secret.rotate",
+                operation,
                 authorization,
                 command.hook_id.to_string(),
                 command.context.idempotency_key,
-                empty_request_digest(),
+                request_digest,
             ),
             response: PersistedResponse {
                 status: 200,
@@ -514,47 +617,6 @@ impl HookApplication {
         )))
     }
 
-    /// Provisions IAM's unique default hook after service authentication.
-    ///
-    /// The default hook verifies IAM's own signing convention so IAM can sign
-    /// deliveries with the returned secret without extra configuration.
-    ///
-    /// # Errors
-    ///
-    /// Returns a service-authorization, uniqueness, idempotency, persistence, or crypto failure.
-    pub async fn provision_iam_hook(
-        &self,
-        command: ProvisionIamHookCommand,
-    ) -> Result<HookWithSecret, ApplicationError> {
-        if !command.actor.is_service_named("silicon-iam") {
-            return Err(ApplicationError::Forbidden);
-        }
-        let signing = iam_signing_input()?;
-        let request_digest =
-            provision_iam_request_digest(&command.organization_id, &command.silicon_id)?;
-        self.create_hook_inner(CreateHookParts {
-            organization_id: command.organization_id,
-            silicon_id: command.silicon_id,
-            name: HookName::new(IAM_HOOK_NAME).map_err(|_| ApplicationError::Validation {
-                field: "iam_hook_name",
-            })?,
-            description: HookDescription::optional(Some(IAM_HOOK_DESCRIPTION.to_owned())).map_err(
-                |_| ApplicationError::Validation {
-                    field: "iam_hook_description",
-                },
-            )?,
-            time_zone: HookTimeZone::default(),
-            signing,
-            actor: command.actor,
-            acting_application: None,
-            idempotency_key: command.idempotency_key,
-            request_digest,
-            request_id: command.request_id,
-            is_iam_default: true,
-        })
-        .await
-    }
-
     async fn load_for_mutation(
         &self,
         authorization: &AuthorizationContext,
@@ -562,19 +624,14 @@ impl HookApplication {
         hook_id: HookId,
         action: Action,
     ) -> Result<Hook, ApplicationError> {
-        authorize_action(authorization, Action::ReadHook, silicon_id, None)?;
+        authorize_action(authorization, Action::ReadHook, silicon_id)?;
         let hook = self
             .store
             .get_hook(authorization.organization_id(), silicon_id, hook_id)
             .await
             .map_err(map_store_error)?
             .ok_or(ApplicationError::NotFound)?;
-        authorize_action(
-            authorization,
-            action,
-            silicon_id,
-            hook.created_via_application(),
-        )?;
+        authorize_action(authorization, action, silicon_id)?;
         Ok(hook)
     }
 
@@ -646,18 +703,16 @@ impl HookApplication {
                 },
                 time_zone: parts.time_zone.clone(),
                 created_by: parts.actor.clone(),
-                created_via_application: parts.acting_application.clone(),
                 created_at: now,
             });
             let idempotency = IdempotencyScope {
                 operation: if parts.is_iam_default {
-                    "hook.iam.provision"
+                    "hook.iam.connect"
                 } else {
                     "hook.create"
                 }
                 .to_owned(),
                 actor: parts.actor.clone(),
-                calling_application_id: parts.acting_application.clone(),
                 organization_id: parts.organization_id.clone(),
                 target_id: parts.silicon_id.as_str().to_owned(),
                 key: parts.idempotency_key.clone(),
@@ -678,7 +733,6 @@ impl HookApplication {
                 },
                 audit: AuditContext {
                     actor: parts.actor.clone(),
-                    calling_application_id: parts.acting_application.clone(),
                     request_id: parts.request_id.clone(),
                 },
                 recorded_at: now,
@@ -774,7 +828,6 @@ struct CreateHookParts {
     time_zone: HookTimeZone,
     signing: SigningInput,
     actor: ActorRef,
-    acting_application: Option<ApplicationId>,
     idempotency_key: String,
     request_digest: [u8; 32],
     request_id: Option<String>,
@@ -793,8 +846,7 @@ struct CanonicalCreateHookRequest<'a> {
 }
 
 #[derive(Serialize)]
-struct CanonicalIamProvisionRequest<'a> {
-    org_id: &'a str,
+struct CanonicalConnectIamRequest<'a> {
     silicon_id: &'a str,
 }
 
@@ -817,14 +869,20 @@ fn create_hook_request_digest(
     })
 }
 
-fn provision_iam_request_digest(
-    organization_id: &OrganizationId,
-    silicon_id: &SiliconId,
-) -> Result<[u8; 32], ApplicationError> {
-    canonical_request_digest(&CanonicalIamProvisionRequest {
-        org_id: organization_id.as_str(),
+fn connect_iam_request_digest(silicon_id: &SiliconId) -> Result<[u8; 32], ApplicationError> {
+    let canonical = serde_json::to_vec(&CanonicalConnectIamRequest {
         silicon_id: silicon_id.as_str(),
     })
+    .map_err(ApplicationError::internal)?;
+    Ok(Sha256::digest(canonical).into())
+}
+
+/// Binds a replay to the exact secret it stored without persisting the secret.
+fn secret_digest(secret: &SigningSecret) -> [u8; 32] {
+    let mut digest = Sha256::new();
+    digest.update(b"silicon-hook/iam-bind/v1\0");
+    digest.update(secret.as_str().as_bytes());
+    digest.finalize().into()
 }
 
 fn canonical_request_digest<T: Serialize>(value: &T) -> Result<[u8; 32], ApplicationError> {

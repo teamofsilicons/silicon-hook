@@ -113,12 +113,6 @@ external_id!(
     "actor_id",
     MAX_EXTERNAL_ID_BYTES
 );
-external_id!(
-    /// Opaque identifier for an IAM application acting on behalf of an actor.
-    ApplicationId,
-    "application_id",
-    MAX_EXTERNAL_ID_BYTES
-);
 
 macro_rules! uuid_id {
     ($(#[$meta:meta])* $name:ident) => {
@@ -244,7 +238,7 @@ mod tests {
 
         #[test]
         fn overlong_external_ids_are_rejected(value in "[A-Za-z0-9]{256,400}") {
-            prop_assert!(ApplicationId::new(value).is_err());
+            prop_assert!(ActorId::new(value).is_err());
         }
     }
 }

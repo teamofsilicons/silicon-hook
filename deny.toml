@@ -22,6 +22,7 @@ allow = [
   "BSD-3-Clause",
   "CDLA-Permissive-2.0",
   "ISC",
+  "LicenseRef-Silicon-IAM",
   "MIT",
   "MPL-2.0",
   "Unicode-3.0",
@@ -30,6 +31,14 @@ allow = [
 
 [licenses.private]
 ignore = true
+
+# The official Silicon IAM SDK is published by Team of Silicons under its own
+# license file rather than an SPDX expression. It is first-party to this
+# platform, so it is named explicitly instead of being allowed by classifier.
+[[licenses.clarify]]
+crate = "silicon-iam"
+expression = "LicenseRef-Silicon-IAM"
+license-files = [{ path = "LICENSE", hash = 0xa12835ec }]
 
 [sources]
 unknown-git = "deny"

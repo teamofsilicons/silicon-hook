@@ -147,8 +147,7 @@ const PURGE_STALE_IP_BLOCKS_SQL: &str = "
     WITH maintenance_clock AS MATERIALIZED (SELECT clock_timestamp() AS now),
     victims AS (
         SELECT hook_id, remote_ip FROM hook_private.ip_blocks, maintenance_clock
-        WHERE NOT permanent
-          AND (blocked_until IS NULL OR blocked_until <= maintenance_clock.now)
+        WHERE (blocked_until IS NULL OR blocked_until <= maintenance_clock.now)
           AND updated_at < maintenance_clock.now - ($2 * INTERVAL '1 day')
         ORDER BY updated_at
         FOR UPDATE SKIP LOCKED

@@ -625,7 +625,7 @@ mod tests {
         let context = EvalContext {
             request,
             hook_id: "018eb4ce-e57a-7d2c-8f9f-a35928ef91e1",
-            hook_url: "https://hook.example.test/silicon/cos:tos/A1B2C3",
+            hook_url: "https://hook.example.test/silicon/cos:tos/A1B2C3D4",
             secret: Some(b"shh"),
             public_key: None,
         };
@@ -702,10 +702,7 @@ mod tests {
             Value::Text("018eb4ce-e57a-7d2c-8f9f-a35928ef91e1".to_owned())
         );
         assert_eq!(eval("secret", &json)?, Value::Bytes(b"shh".to_vec()));
-        assert!(matches!(
-            eval("key.private", &json),
-            Err(error) if error.to_string() == "key.private is not available"
-        ));
+        assert_eq!(eval("key.public", &json)?, Value::Null);
         assert!(matches!(
             eval("request.body.data.id.more", &json),
             Err(error) if error.to_string() == "request.body.data.id.more cannot be indexed"

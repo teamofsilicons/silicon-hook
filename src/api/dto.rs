@@ -8,6 +8,7 @@ use time::{Duration, OffsetDateTime};
 use url::Url;
 use zeroize::Zeroizing;
 
+use crate::infrastructure::iam::IssuedTokens;
 use crate::{
     application::{HookWithSecret, SigningPatch},
     domain::{
@@ -123,14 +124,6 @@ pub(super) struct UpdateHookRequest {
 pub(super) struct SetHooksEnabledRequest {
     pub(super) hook_ids: Vec<HookId>,
     pub(super) enabled: bool,
-}
-
-/// JSON body used by IAM to provision a Silicon's default hook.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ProvisionIamHookRequest {
-    pub(super) org_id: String,
-    pub(super) silicon_id: String,
 }
 
 /// Acknowledgment of ordered deliveries.
@@ -538,4 +531,92 @@ mod tests {
         };
         assert!(valid.into_patch().is_ok());
     }
+}
+
+/// Optional sign-in parameters.
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LoginRequest {
+    /// Organization the sign-in should be bound to.
+    pub(super) org_id: Option<String>,
+}
+
+/// Redirect and continuation that start a sign-in.
+#[derive(Debug, Serialize)]
+pub(super) struct LoginResponse {
+    pub(super) authorization_url: String,
+    pub(super) continuation: OneTimeSecret,
+}
+
+/// Callback completion input.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct LoginCallbackRequest {
+    pub(super) continuation: String,
+    pub(super) callback_url: String,
+}
+
+impl fmt::Debug for LoginCallbackRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("LoginCallbackRequest")
+            .field("continuation", &"[REDACTED]")
+            .field("callback_url", &"[REDACTED]")
+            .finish()
+    }
+}
+
+/// Refresh-token rotation input.
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct RefreshRequest {
+    pub(super) refresh_token: String,
+}
+
+impl fmt::Debug for RefreshRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str("RefreshRequest([REDACTED])")
+    }
+}
+
+/// Tokens IAM issued to Hook for an actor.
+#[derive(Debug, Serialize)]
+pub(super) struct TokensResponse {
+    pub(super) access_token: OneTimeSecret,
+    pub(super) refresh_token: OneTimeSecret,
+    pub(super) token_type: &'static str,
+    pub(super) expires_in: u64,
+    pub(super) scopes: Vec<String>,
+    pub(super) actor: ActorRef,
+    pub(super) org_id: Option<String>,
+}
+
+impl TokensResponse {
+    pub(super) fn from_issued(tokens: IssuedTokens) -> Self {
+        Self {
+            access_token: OneTimeSecret::new(tokens.access_token),
+            refresh_token: OneTimeSecret::new(tokens.refresh_token),
+            token_type: "Bearer",
+            expires_in: tokens.expires_in.as_secs(),
+            scopes: tokens.scopes,
+            actor: tokens.actor,
+            org_id: tokens
+                .organization_id
+                .map(|organization_id| organization_id.as_str().to_owned()),
+        }
+    }
+}
+
+/// The Silicon's IAM hook after registration with IAM.
+#[derive(Debug, Serialize)]
+pub(super) struct IamHookResponse {
+    #[serde(flatten)]
+    pub(super) hook: HookResponse,
+    pub(super) iam_webhook: IamWebhookResponse,
+}
+
+/// IAM-side facts about the registered webhook.
+#[derive(Debug, Serialize)]
+pub(super) struct IamWebhookResponse {
+    pub(super) secret_version: u64,
 }

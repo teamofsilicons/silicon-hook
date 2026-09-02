@@ -1,8 +1,6 @@
 //! Resource-specific authorization policy over IAM-supplied facts.
 
-use super::{
-    ActorKind, ApplicationId, AuthorizationContext, Capability, OrganizationRole, SiliconId,
-};
+use super::{ActorKind, AuthorizationContext, OrganizationRole, SiliconId};
 
 /// Hook action being authorized.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -27,11 +25,16 @@ pub enum Action {
     RotateEndpoint,
     /// Change hook metadata or signing policy.
     UpdateHook,
+    /// Register a Hook endpoint as the Silicon's IAM webhook.
+    ConnectIamHook,
     /// Acknowledge or pull ordered deliveries.
     ConsumeDeliveries,
 }
 
 impl Action {
+    /// Destructive actions change a Silicon's hooks or credentials and are
+    /// reserved for the Silicon itself, organization owners, and organization
+    /// administrators, as UNDERSTANDING.md prescribes for deletion.
     const fn is_destructive(self) -> bool {
         matches!(
             self,
@@ -41,22 +44,8 @@ impl Action {
                 | Self::RotateSecret
                 | Self::RotateEndpoint
                 | Self::UpdateHook
+                | Self::ConnectIamHook
         )
-    }
-
-    const fn required_capability(self) -> Capability {
-        match self {
-            Self::ListHooks => Capability::ListHooks,
-            Self::ReadHook => Capability::ReadHook,
-            Self::CreateHook => Capability::CreateHook,
-            Self::ReadEvents | Self::ConsumeDeliveries => Capability::ReadEvents,
-            Self::DeleteHook => Capability::DeleteHook,
-            Self::RestoreHook => Capability::RestoreHook,
-            Self::SetHookEnabled => Capability::SetHookEnabled,
-            Self::RotateSecret => Capability::RotateSecret,
-            Self::RotateEndpoint => Capability::RotateEndpoint,
-            Self::UpdateHook => Capability::UpdateHook,
-        }
     }
 }
 
@@ -65,12 +54,10 @@ impl Action {
 pub enum AuthorizationDecision {
     /// The requested action is allowed.
     Allowed,
-    /// The effective actor cannot act on the target Silicon.
+    /// The actor cannot act on the target Silicon.
     TargetNotVisible,
-    /// The action requires a Silicon owner or authorized organization admin.
+    /// The action requires the Silicon itself or an organization owner or admin.
     InsufficientPrivilege,
-    /// An OBO application tried to mutate a hook created outside that app.
-    ApplicationOwnershipMismatch,
 }
 
 impl AuthorizationDecision {
@@ -81,55 +68,36 @@ impl AuthorizationDecision {
     }
 }
 
-/// Evaluates actor-, resource-, and OBO-specific hook authorization.
+/// Evaluates actor- and resource-specific hook authorization.
 ///
-/// `creator_application` is required for destructive actions on a persisted
-/// hook. `None` means the hook was created without OBO delegation.
+/// A Silicon acts only on itself. A Carbon sees the Silicons IAM confirmed
+/// visible for the request; organization owners and administrators see and
+/// may mutate every Silicon in the organization.
 #[must_use]
 pub fn authorize(
     context: &AuthorizationContext,
     action: Action,
     target_silicon: &SiliconId,
-    creator_application: Option<&ApplicationId>,
 ) -> AuthorizationDecision {
+    let is_carbon = context.actor().kind() == ActorKind::Carbon;
     let owns_target = context.actor().kind() == ActorKind::Silicon
         && context.actor().id().as_str() == target_silicon.as_str();
-    let is_owner = context.actor().kind() == ActorKind::Carbon
-        && context.organization_role() == OrganizationRole::Owner;
-    let is_authorized_admin = context.actor().kind() == ActorKind::Carbon
-        && context.organization_role() == OrganizationRole::Admin
-        && context.has_capability(action.required_capability());
+    let is_organization_manager = is_carbon
+        && matches!(
+            context.organization_role(),
+            OrganizationRole::Owner | OrganizationRole::Admin
+        );
     let can_see_target = owns_target
-        || (context.actor().kind() == ActorKind::Carbon
-            && (context.has_silicon_visibility(target_silicon) || is_owner || is_authorized_admin));
+        || (is_carbon
+            && (context.has_silicon_visibility(target_silicon) || is_organization_manager));
 
     if !can_see_target {
         return AuthorizationDecision::TargetNotVisible;
     }
-
-    if !action.is_destructive() {
-        return match context.actor().kind() {
-            ActorKind::Carbon | ActorKind::Silicon => AuthorizationDecision::Allowed,
-            ActorKind::Application | ActorKind::Service => {
-                AuthorizationDecision::InsufficientPrivilege
-            }
-        };
-    }
-
-    if !owns_target && !is_owner && !is_authorized_admin {
-        return AuthorizationDecision::InsufficientPrivilege;
-    }
-
-    let Some(acting_application) = context.acting_application() else {
-        return AuthorizationDecision::Allowed;
-    };
-
-    let bypasses_application_ownership =
-        is_owner || context.has_capability(Capability::AdministrativeOverride);
-    if bypasses_application_ownership || creator_application == Some(acting_application) {
+    if !action.is_destructive() || owns_target || is_organization_manager {
         AuthorizationDecision::Allowed
     } else {
-        AuthorizationDecision::ApplicationOwnershipMismatch
+        AuthorizationDecision::InsufficientPrivilege
     }
 }
 
@@ -146,17 +114,13 @@ mod tests {
         kind: ActorKind,
         actor_id: &str,
         role: OrganizationRole,
-        capabilities: &[Capability],
         visible: &[SiliconId],
-        application: Option<ApplicationId>,
     ) -> Result<AuthorizationContext, crate::domain::DomainError> {
         Ok(AuthorizationContext::new(
             OrganizationId::new("org:test")?,
             ActorRef::try_new(kind, actor_id)?,
             role,
-            capabilities.iter().copied(),
             visible.iter().cloned(),
-            application,
         ))
     }
 
@@ -168,217 +132,75 @@ mod tests {
             ActorKind::Silicon,
             own.as_str(),
             OrganizationRole::Member,
-            &[],
             std::slice::from_ref(&other),
-            None,
         )?;
 
         assert_eq!(
-            authorize(&principal, Action::DeleteHook, &own, None),
+            authorize(&principal, Action::DeleteHook, &own),
             AuthorizationDecision::Allowed
         );
         assert_eq!(
-            authorize(&principal, Action::DeleteHook, &other, None),
+            authorize(&principal, Action::ConnectIamHook, &own),
+            AuthorizationDecision::Allowed
+        );
+        assert_eq!(
+            authorize(&principal, Action::DeleteHook, &other),
+            AuthorizationDecision::TargetNotVisible
+        );
+        assert_eq!(
+            authorize(&principal, Action::ReadEvents, &other),
             AuthorizationDecision::TargetNotVisible
         );
         Ok(())
     }
 
     #[test]
-    fn visible_carbon_can_read_and_create_but_not_delete() -> Result<(), Box<dyn std::error::Error>>
+    fn visible_carbon_can_read_and_create_but_not_mutate() -> Result<(), Box<dyn std::error::Error>>
     {
         let target = silicon("silicon:target")?;
+        let hidden = silicon("silicon:hidden")?;
         let principal = context(
             ActorKind::Carbon,
-            "carbon:member",
+            "carbon-member",
             OrganizationRole::Member,
-            &[],
             std::slice::from_ref(&target),
-            None,
         )?;
 
-        assert!(authorize(&principal, Action::ReadEvents, &target, None).is_allowed());
-        assert!(authorize(&principal, Action::CreateHook, &target, None).is_allowed());
+        assert!(authorize(&principal, Action::ReadEvents, &target).is_allowed());
+        assert!(authorize(&principal, Action::CreateHook, &target).is_allowed());
+        assert!(authorize(&principal, Action::ConsumeDeliveries, &target).is_allowed());
+        for action in [
+            Action::DeleteHook,
+            Action::SetHookEnabled,
+            Action::RotateSecret,
+            Action::RotateEndpoint,
+            Action::UpdateHook,
+            Action::RestoreHook,
+            Action::ConnectIamHook,
+        ] {
+            assert_eq!(
+                authorize(&principal, action, &target),
+                AuthorizationDecision::InsufficientPrivilege
+            );
+        }
         assert_eq!(
-            authorize(&principal, Action::DeleteHook, &target, None),
-            AuthorizationDecision::InsufficientPrivilege
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn admin_needs_action_specific_capability() -> Result<(), Box<dyn std::error::Error>> {
-        let target = silicon("silicon:target")?;
-        let without = context(
-            ActorKind::Carbon,
-            "carbon:admin",
-            OrganizationRole::Admin,
-            &[],
-            &[],
-            None,
-        )?;
-        let with = context(
-            ActorKind::Carbon,
-            "carbon:admin",
-            OrganizationRole::Admin,
-            &[Capability::DeleteHook],
-            &[],
-            None,
-        )?;
-
-        assert_eq!(
-            authorize(&without, Action::DeleteHook, &target, None),
-            AuthorizationDecision::TargetNotVisible
-        );
-        assert!(authorize(&with, Action::DeleteHook, &target, None).is_allowed());
-        assert_eq!(
-            authorize(&with, Action::RotateSecret, &target, None),
+            authorize(&principal, Action::ListHooks, &hidden),
             AuthorizationDecision::TargetNotVisible
         );
         Ok(())
     }
 
     #[test]
-    fn enablement_is_destructive_and_requires_its_dedicated_capability()
+    fn owners_and_admins_manage_every_silicon_without_a_visibility_fact()
     -> Result<(), Box<dyn std::error::Error>> {
         let target = silicon("silicon:target")?;
-        let silicon_owner = context(
-            ActorKind::Silicon,
-            target.as_str(),
-            OrganizationRole::Member,
-            &[],
-            &[],
-            None,
-        )?;
-        let visible_member = context(
-            ActorKind::Carbon,
-            "carbon:member",
-            OrganizationRole::Member,
-            &[],
-            std::slice::from_ref(&target),
-            None,
-        )?;
-        let wrong_capability = context(
-            ActorKind::Carbon,
-            "carbon:admin",
-            OrganizationRole::Admin,
-            &[Capability::DeleteHook],
-            std::slice::from_ref(&target),
-            None,
-        )?;
-        let authorized_admin = context(
-            ActorKind::Carbon,
-            "carbon:admin",
-            OrganizationRole::Admin,
-            &[Capability::SetHookEnabled],
-            &[],
-            None,
-        )?;
-        let owner = context(
-            ActorKind::Carbon,
-            "carbon:owner",
-            OrganizationRole::Owner,
-            &[],
-            &[],
-            None,
-        )?;
-
-        assert!(authorize(&silicon_owner, Action::SetHookEnabled, &target, None).is_allowed());
-        assert_eq!(
-            authorize(&visible_member, Action::SetHookEnabled, &target, None),
-            AuthorizationDecision::InsufficientPrivilege
-        );
-        assert_eq!(
-            authorize(&wrong_capability, Action::SetHookEnabled, &target, None),
-            AuthorizationDecision::InsufficientPrivilege
-        );
-        assert!(authorize(&authorized_admin, Action::SetHookEnabled, &target, None).is_allowed());
-        assert!(authorize(&owner, Action::SetHookEnabled, &target, None).is_allowed());
-        Ok(())
-    }
-
-    #[test]
-    fn owner_is_implicitly_authorized_without_capabilities()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let target = silicon("silicon:target")?;
-        let owner = context(
-            ActorKind::Carbon,
-            "carbon:owner",
-            OrganizationRole::Owner,
-            &[],
-            &[],
-            None,
-        )?;
-
-        assert!(authorize(&owner, Action::DeleteHook, &target, None).is_allowed());
-        assert!(authorize(&owner, Action::RotateSecret, &target, None).is_allowed());
-        assert!(authorize(&owner, Action::ReadEvents, &target, None).is_allowed());
-        Ok(())
-    }
-
-    #[test]
-    fn obo_mutation_is_limited_to_the_creating_application()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let target = silicon("silicon:target")?;
-        let caller = ApplicationId::new("app:caller")?;
-        let other = ApplicationId::new("app:other")?;
-        let principal = context(
-            ActorKind::Silicon,
-            target.as_str(),
-            OrganizationRole::Member,
-            &[],
-            &[],
-            Some(caller.clone()),
-        )?;
-
-        assert!(authorize(&principal, Action::RotateSecret, &target, Some(&caller)).is_allowed());
-        assert_eq!(
-            authorize(&principal, Action::RotateSecret, &target, Some(&other)),
-            AuthorizationDecision::ApplicationOwnershipMismatch
-        );
-        assert_eq!(
-            authorize(&principal, Action::RotateSecret, &target, None),
-            AuthorizationDecision::ApplicationOwnershipMismatch
-        );
-        assert!(authorize(&principal, Action::SetHookEnabled, &target, Some(&caller)).is_allowed());
-        assert_eq!(
-            authorize(&principal, Action::SetHookEnabled, &target, Some(&other)),
-            AuthorizationDecision::ApplicationOwnershipMismatch
-        );
-        assert_eq!(
-            authorize(&principal, Action::SetHookEnabled, &target, None),
-            AuthorizationDecision::ApplicationOwnershipMismatch
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn owner_and_explicit_override_bypass_obo_ownership() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let target = silicon("silicon:target")?;
-        let caller = ApplicationId::new("app:caller")?;
-        let other = ApplicationId::new("app:other")?;
-        let owner = context(
-            ActorKind::Carbon,
-            "carbon:owner",
-            OrganizationRole::Owner,
-            &[],
-            &[],
-            Some(caller.clone()),
-        )?;
-        let overridden = context(
-            ActorKind::Silicon,
-            target.as_str(),
-            OrganizationRole::Member,
-            &[Capability::AdministrativeOverride],
-            &[],
-            Some(caller),
-        )?;
-
-        assert!(authorize(&owner, Action::DeleteHook, &target, Some(&other)).is_allowed());
-        assert!(authorize(&overridden, Action::DeleteHook, &target, Some(&other)).is_allowed());
-        assert!(authorize(&owner, Action::SetHookEnabled, &target, Some(&other)).is_allowed());
-        assert!(authorize(&overridden, Action::SetHookEnabled, &target, Some(&other)).is_allowed());
+        for role in [OrganizationRole::Owner, OrganizationRole::Admin] {
+            let manager = context(ActorKind::Carbon, "carbon-manager", role, &[])?;
+            assert!(authorize(&manager, Action::DeleteHook, &target).is_allowed());
+            assert!(authorize(&manager, Action::RotateSecret, &target).is_allowed());
+            assert!(authorize(&manager, Action::ReadEvents, &target).is_allowed());
+            assert!(authorize(&manager, Action::ConnectIamHook, &target).is_allowed());
+        }
         Ok(())
     }
 }

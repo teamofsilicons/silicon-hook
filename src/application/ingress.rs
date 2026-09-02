@@ -57,10 +57,7 @@ impl HookApplication {
         {
             BlockCheck::Allowed => {}
             BlockCheck::BlockedUntil(until) => {
-                return Err(ApplicationError::IpBlocked { until: Some(until) });
-            }
-            BlockCheck::BlockedPermanently => {
-                return Err(ApplicationError::IpBlocked { until: None });
+                return Err(ApplicationError::IpBlocked { until });
             }
         }
 

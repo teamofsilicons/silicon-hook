@@ -31,11 +31,17 @@ pub enum AppError {
     /// Authenticated actor lacks authority for this action.
     #[error("the actor is not authorized for this action")]
     Forbidden,
+    /// IAM or the actor declined a sign-in at the authorization endpoint.
+    #[error("the sign-in was not granted")]
+    LoginDenied {
+        /// OAuth protocol error code such as `access_denied`.
+        code: String,
+    },
     /// The client address is blocked for the endpoint.
     #[error("the client address is blocked for this endpoint")]
     Blocked {
-        /// Remaining block duration, or `None` when permanent.
-        retry_after: Option<std::time::Duration>,
+        /// Remaining block duration.
+        retry_after: std::time::Duration,
     },
     /// Resource does not exist in the caller-visible organization scope.
     #[error("resource was not found")]
@@ -147,7 +153,9 @@ impl AppError {
             Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
             Self::Validation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
-            Self::Forbidden | Self::Blocked { .. } => StatusCode::FORBIDDEN,
+            Self::Forbidden | Self::LoginDenied { .. } | Self::Blocked { .. } => {
+                StatusCode::FORBIDDEN
+            }
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Gone { .. } => StatusCode::GONE,
             Self::Conflict { .. } => StatusCode::CONFLICT,
@@ -178,6 +186,11 @@ impl AppError {
                 Cow::Borrowed("forbidden"),
                 Cow::Borrowed("The actor is not authorized for this action."),
                 None,
+            ),
+            Self::LoginDenied { code } => (
+                Cow::Borrowed("login_denied"),
+                Cow::Borrowed("Silicon IAM did not grant the sign-in."),
+                Some(code),
             ),
             Self::Blocked { .. } => (
                 Cow::Borrowed("ip_blocked"),
@@ -245,8 +258,7 @@ impl IntoResponse for AppError {
     fn into_response(self) -> axum::response::Response {
         let status = self.status();
         let retry_after = match &self {
-            Self::RateLimited { retry_after } => Some(*retry_after),
-            Self::Blocked { retry_after } => *retry_after,
+            Self::RateLimited { retry_after } | Self::Blocked { retry_after } => Some(*retry_after),
             _ => None,
         };
         let (code, message, details) = self.public_parts();
@@ -329,7 +341,7 @@ mod tests {
     async fn blocked_addresses_receive_retry_after_and_validation_details()
     -> Result<(), Box<dyn std::error::Error>> {
         let blocked = AppError::Blocked {
-            retry_after: Some(std::time::Duration::from_secs(90)),
+            retry_after: std::time::Duration::from_secs(90),
         }
         .into_response();
         assert_eq!(blocked.status(), StatusCode::FORBIDDEN);

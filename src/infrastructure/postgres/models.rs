@@ -11,10 +11,10 @@ use uuid::Uuid;
 
 use super::{StoreError, parse_actor_kind};
 use crate::domain::{
-    ActorId, ActorRef, ApplicationId, BlockReason, BlockedRequest, BlockedRequestId,
-    BlockedRequestSnapshot, DeliverySequence, EncryptedSecret, EncryptionKeyId, EndpointKey,
-    EventRecord, EventRecordSnapshot, Hook, HookDescription, HookId, HookName, HookSnapshot,
-    HookStatus, HookTimeZone, OrganizationId, SigningPolicy, SiliconId,
+    ActorId, ActorRef, BlockReason, BlockedRequest, BlockedRequestId, BlockedRequestSnapshot,
+    DeliverySequence, EncryptedSecret, EncryptionKeyId, EndpointKey, EventRecord,
+    EventRecordSnapshot, Hook, HookDescription, HookId, HookName, HookSnapshot, HookStatus,
+    HookTimeZone, OrganizationId, SigningPolicy, SiliconId,
     request::{CapturedRequest, CapturedRequestParts},
     signature::SignatureConfig,
 };
@@ -25,8 +25,8 @@ macro_rules! hook_columns {
         "id, org_id, silicon_id, endpoint_key, name, description, \
          signature_required, signature_config, encryption_key_id, secret_nonce, \
          encrypted_signing_secret, time_zone, created_by_kind, created_by_id, \
-         created_via_app_id, created_at, disabled_at, deleted_at, last_received_at, \
-         last_blocked_at, endpoint_rotated_at"
+         created_at, disabled_at, deleted_at, last_received_at, last_blocked_at, \
+         endpoint_rotated_at"
     };
 }
 pub(super) use hook_columns;
@@ -47,7 +47,6 @@ pub(super) struct HookRow {
     pub(super) time_zone: String,
     pub(super) created_by_kind: String,
     pub(super) created_by_id: String,
-    pub(super) created_via_app_id: Option<String>,
     pub(super) created_at: OffsetDateTime,
     pub(super) disabled_at: Option<OffsetDateTime>,
     pub(super) deleted_at: Option<OffsetDateTime>,
@@ -120,11 +119,6 @@ impl TryFrom<HookRow> for Hook {
             time_zone: HookTimeZone::new(row.time_zone).map_err(|error| corrupt(&error))?,
             status,
             created_by,
-            created_via_application: row
-                .created_via_app_id
-                .map(ApplicationId::new)
-                .transpose()
-                .map_err(|error| corrupt(&error))?,
             created_at: row.created_at,
             disabled_at: row.disabled_at,
             deleted_at: row.deleted_at,
@@ -306,9 +300,7 @@ pub(super) struct ManagementIdempotencyRow {
 #[derive(Debug, FromRow)]
 pub(super) struct IpBlockRow {
     pub(super) strikes: i32,
-    pub(super) blocks: i32,
     pub(super) blocked_until: Option<OffsetDateTime>,
-    pub(super) permanent: bool,
 }
 
 #[cfg(test)]

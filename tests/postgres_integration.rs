@@ -13,14 +13,15 @@ use hmac::{Hmac, Mac as _};
 use sha2::Sha256;
 use silicon_hook::{
     application::{
-        AcknowledgeDeliveriesCommand, ApplicationError, Clock, CreateHookCommand, HookApplication,
+        AcknowledgeDeliveriesCommand, ApplicationError, BindIamHookSecretCommand, Clock,
+        ConnectIamHookCommand, CreateHookCommand, DeleteHookCommand, HookApplication,
         HookMutationCommand, HookWithSecret, ListHistoryCommand, ManagementContext,
         PullDeliveriesCommand, ReceiveOutcome, ReceiveRequestCommand, SigningPatch,
     },
     domain::{
-        ActorKind, ActorRef, AuthorizationContext, Capability, EncryptionKeyId, EndpointKey,
-        EventRecord, HookName, HookStatus, HookTimeZone, OrganizationId, OrganizationRole,
-        SigningSecret, SiliconId,
+        ActorKind, ActorRef, AuthorizationContext, EncryptionKeyId, EndpointKey, EventRecord,
+        HookName, HookStatus, HookTimeZone, OrganizationId, OrganizationRole, SigningSecret,
+        SiliconId,
         safety::UNVERIFIED_REQUESTS_PER_BLOCK,
         signature::{Expression, SignatureEncoding},
     },
@@ -109,9 +110,7 @@ impl FixtureIdentity {
             self.organization_id.clone(),
             self.actor.clone(),
             OrganizationRole::Member,
-            std::iter::empty::<Capability>(),
             std::iter::empty::<SiliconId>(),
-            None,
         )
     }
 
@@ -336,7 +335,7 @@ async fn verified_requests_join_the_delivery_stream_and_history() -> Result<()> 
     assert!(secret.as_str().starts_with("v1."));
     assert_eq!(secret.as_str().len(), 35);
     assert!(created.hook.signing().is_required());
-    assert_eq!(created.hook.endpoint_key().as_str().len(), 6);
+    assert_eq!(created.hook.endpoint_key().as_str().len(), 8);
 
     let mut sequences = Vec::new();
     for (index, body) in [
@@ -570,10 +569,7 @@ async fn unverified_requests_are_logged_and_block_the_address_after_twenty() -> 
     )
     .await;
     assert!(
-        matches!(
-            blocked_now,
-            Err(ApplicationError::IpBlocked { until: Some(_) })
-        ),
+        matches!(blocked_now, Err(ApplicationError::IpBlocked { .. })),
         "the twenty-first request from the address is refused"
     );
     let rejected = sqlx::query_scalar::<_, i64>(
@@ -841,13 +837,13 @@ async fn retention_purges_logs_after_fourteen_days_and_forgets_stale_blocks() ->
         .await?;
     }
     sqlx::query(
-        "INSERT INTO hook_private.ip_blocks (hook_id, remote_ip, strikes, blocks, blocked_until, \
-         permanent, first_seen_at, updated_at) VALUES \
-         ($1, '203.0.113.1'::inet, 3, 1, NULL, false, clock_timestamp() - INTERVAL '40 days', \
+        "INSERT INTO hook_private.ip_blocks (hook_id, remote_ip, strikes, blocked_until, \
+         first_seen_at, updated_at) VALUES \
+         ($1, '203.0.113.1'::inet, 3, NULL, clock_timestamp() - INTERVAL '40 days', \
           clock_timestamp() - INTERVAL '40 days'), \
-         ($1, '203.0.113.2'::inet, 0, 10, NULL, true, clock_timestamp() - INTERVAL '40 days', \
-          clock_timestamp() - INTERVAL '40 days'), \
-         ($1, '203.0.113.3'::inet, 5, 0, NULL, false, clock_timestamp(), clock_timestamp())",
+         ($1, '203.0.113.2'::inet, 0, clock_timestamp() - INTERVAL '39 days', \
+          clock_timestamp() - INTERVAL '40 days', clock_timestamp() - INTERVAL '40 days'), \
+         ($1, '203.0.113.3'::inet, 5, NULL, clock_timestamp(), clock_timestamp())",
     )
     .bind(created.hook.id().as_uuid())
     .execute(pool)
@@ -857,14 +853,14 @@ async fn retention_purges_logs_after_fourteen_days_and_forgets_stale_blocks() ->
     assert_eq!(result.events_purged, 2);
     assert_eq!(result.blocked_requests_purged, 2);
     assert_eq!(
-        result.ip_blocks_purged, 1,
-        "only the stale temporary block is forgotten"
+        result.ip_blocks_purged, 2,
+        "stale counters and expired blocks are forgotten"
     );
     let remaining_blocks =
         sqlx::query_scalar::<_, i64>("SELECT count(*) FROM hook_private.ip_blocks")
             .fetch_one(pool)
             .await?;
-    assert_eq!(remaining_blocks, 2);
+    assert_eq!(remaining_blocks, 1, "a recent counter is kept");
     let history = application
         .list_events(ListHistoryCommand {
             authorization: identity.authorization(),
@@ -1063,37 +1059,61 @@ async fn ingress_uses_database_time_even_when_the_process_clock_is_wrong() -> Re
 }
 
 #[tokio::test]
-async fn iam_default_registration_survives_permanent_hook_purge() -> Result<()> {
+async fn connecting_the_iam_hook_is_idempotent_and_verifies_iam_signing() -> Result<()> {
     let database = TestDatabase::start().await?;
     let identity = FixtureIdentity::new()?;
     let application = application(database.store.clone(), datetime!(2026-09-02 10:00 UTC))?;
-    let iam_actor = ActorRef::try_new(ActorKind::Service, "silicon-iam")?;
-    let provisioned = application
-        .provision_iam_hook(silicon_hook::application::ProvisionIamHookCommand {
-            actor: iam_actor.clone(),
-            organization_id: identity.organization_id.clone(),
+    let context = |key: &str| ManagementContext {
+        authorization: identity.authorization(),
+        idempotency_key: key.to_owned(),
+        request_id: None,
+    };
+
+    let prepared = application
+        .prepare_iam_hook(ConnectIamHookCommand {
+            context: context("iam-connect-0001"),
             silicon_id: identity.silicon_id.clone(),
-            idempotency_key: "iam-provision-0001".to_owned(),
-            request_id: None,
         })
         .await?;
-    assert_eq!(provisioned.hook.name().as_str(), "Silicon IAM");
-    let secret = secret_of(&provisioned)?;
+    assert_eq!(prepared.name().as_str(), "Silicon IAM");
+    let again = application
+        .prepare_iam_hook(ConnectIamHookCommand {
+            context: context("iam-connect-0002"),
+            silicon_id: identity.silicon_id.clone(),
+        })
+        .await?;
+    assert_eq!(
+        again.id(),
+        prepared.id(),
+        "a Silicon has exactly one IAM hook"
+    );
 
-    let body = br#"{"event_type":"organization.member.removed.v1"}"#;
+    let iam_secret = format!("swhs_{}", "F".repeat(43));
+    let bound = application
+        .bind_iam_hook_secret(BindIamHookSecretCommand {
+            context: context("iam-bind-0001"),
+            silicon_id: identity.silicon_id.clone(),
+            hook_id: prepared.id(),
+            signing_secret: SigningSecret::from_text(iam_secret.clone())?,
+        })
+        .await?;
+    assert_eq!(bound.id(), prepared.id());
+
+    let body = br#"{"spec_version":"1.0","event_type":"organization.silicon.updated.v1"}"#;
     let timestamp = "1700000000";
-    let mut mac = <Hmac<Sha256> as hmac::Mac>::new_from_slice(secret.as_str().as_bytes())
+    let mut mac = <Hmac<Sha256> as hmac::Mac>::new_from_slice(iam_secret.as_bytes())
         .context("HMAC accepts any key length")?;
     mac.update(format!("{timestamp}.").as_bytes());
     mac.update(body);
-    let signature = hex::encode(mac.finalize().into_bytes());
+    let signature = format!("v1={}", hex::encode(mac.finalize().into_bytes()));
     let outcome = receive(
         &application,
         &identity,
-        provisioned.hook.endpoint_key(),
+        bound.endpoint_key(),
         vec![
             ("content-type".to_owned(), "application/json".to_owned()),
             ("X-Silicon-IAM-Timestamp".to_owned(), timestamp.to_owned()),
+            ("X-Silicon-IAM-Key-Version".to_owned(), "1".to_owned()),
             ("X-Silicon-IAM-Signature".to_owned(), signature),
         ],
         body,
@@ -1102,30 +1122,29 @@ async fn iam_default_registration_survives_permanent_hook_purge() -> Result<()> 
     .await?;
     assert!(
         matches!(outcome, ReceiveOutcome::Accepted(_)),
-        "the default hook verifies IAM's own signing convention"
+        "the IAM hook verifies IAM's own signing convention with the IAM-issued secret"
     );
 
-    sqlx::query(
-        "UPDATE hook.hooks SET created_at = clock_timestamp() - INTERVAL '50 days', \
-         deleted_at = clock_timestamp() - INTERVAL '46 days', \
-         updated_at = clock_timestamp() WHERE id = $1",
-    )
-    .bind(provisioned.hook.id().as_uuid())
-    .execute(database.store.pool())
-    .await?;
-    let maintenance = database.store.run_maintenance_pass(100).await?;
-    assert_eq!(maintenance.hooks_purged, 1);
-
-    let again = application
-        .provision_iam_hook(silicon_hook::application::ProvisionIamHookCommand {
-            actor: iam_actor,
-            organization_id: identity.organization_id.clone(),
+    application
+        .delete_hook(DeleteHookCommand {
+            authorization: identity.authorization(),
             silicon_id: identity.silicon_id.clone(),
-            idempotency_key: "iam-provision-0002".to_owned(),
+            hook_id: prepared.id(),
             request_id: None,
         })
-        .await;
-    assert!(matches!(again, Err(ApplicationError::IamHookAlreadyExists)));
+        .await?;
+    let restored = application
+        .prepare_iam_hook(ConnectIamHookCommand {
+            context: context("iam-connect-0003"),
+            silicon_id: identity.silicon_id.clone(),
+        })
+        .await?;
+    assert_eq!(
+        restored.id(),
+        prepared.id(),
+        "connecting again restores the deleted IAM hook"
+    );
+    assert_eq!(restored.status(), HookStatus::Active);
     Ok(())
 }
 

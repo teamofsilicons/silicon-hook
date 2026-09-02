@@ -58,7 +58,6 @@ impl HookApplication {
             &command.authorization,
             Action::ReadEvents,
             &command.silicon_id,
-            None,
         )?;
         if command.limit == 0 || command.limit > MAX_HISTORY_LIMIT {
             return Err(ApplicationError::Validation { field: "limit" });

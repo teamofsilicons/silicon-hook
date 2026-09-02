@@ -21,7 +21,7 @@ impl HookApplication {
         authorization: &AuthorizationContext,
         silicon_id: &SiliconId,
     ) -> Result<StreamAccess, ApplicationError> {
-        authorize_action(authorization, Action::ConsumeDeliveries, silicon_id, None)?;
+        authorize_action(authorization, Action::ConsumeDeliveries, silicon_id)?;
         Ok(StreamAccess {
             organization_id: authorization.organization_id().clone(),
             silicon_id: silicon_id.clone(),

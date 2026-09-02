@@ -25,7 +25,7 @@ impl PostgresStore {
         now: OffsetDateTime,
     ) -> Result<BlockCheck, StoreError> {
         let row = sqlx::query_as::<_, IpBlockRow>(
-            "SELECT strikes, blocks, blocked_until, permanent
+            "SELECT strikes, blocked_until
              FROM hook_private.ip_blocks
              WHERE hook_id = $1 AND remote_ip = $2",
         )
@@ -76,7 +76,7 @@ impl PostgresStore {
         .execute(&mut *transaction)
         .await?;
         let row = sqlx::query_as::<_, IpBlockRow>(
-            "SELECT strikes, blocks, blocked_until, permanent
+            "SELECT strikes, blocked_until
              FROM hook_private.ip_blocks
              WHERE hook_id = $1 AND remote_ip = $2
              FOR UPDATE",
@@ -89,15 +89,13 @@ impl PostgresStore {
         let outcome = state.record_unverified(now);
         sqlx::query(
             "UPDATE hook_private.ip_blocks
-             SET strikes = $3, blocks = $4, blocked_until = $5, permanent = $6, updated_at = $7
+             SET strikes = $3, blocked_until = $4, updated_at = $5
              WHERE hook_id = $1 AND remote_ip = $2",
         )
         .bind(hook_id.as_uuid())
         .bind(remote_ip)
         .bind(i32::try_from(state.strikes).unwrap_or(i32::MAX))
-        .bind(i32::try_from(state.blocks).unwrap_or(i32::MAX))
         .bind(state.blocked_until)
-        .bind(state.permanent)
         .bind(now)
         .execute(&mut *transaction)
         .await?;
@@ -113,10 +111,7 @@ impl TryFrom<IpBlockRow> for IpBlockState {
         Ok(Self {
             strikes: u32::try_from(row.strikes)
                 .map_err(|error| StoreError::corrupt("ip block", error))?,
-            blocks: u32::try_from(row.blocks)
-                .map_err(|error| StoreError::corrupt("ip block", error))?,
             blocked_until: row.blocked_until,
-            permanent: row.permanent,
         })
     }
 }

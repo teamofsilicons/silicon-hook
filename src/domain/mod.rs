@@ -14,7 +14,7 @@ pub mod request;
 pub mod safety;
 pub mod signature;
 
-pub use actor::{ActorKind, ActorRef, AuthorizationContext, Capability, OrganizationRole};
+pub use actor::{ActorKind, ActorRef, AuthorizationContext, OrganizationRole};
 pub use cursor::{HistoryCollection, HistoryCursor, HistoryCursorScope, HistoryFilter};
 pub use error::{DomainError, EntropyError, TransitionError};
 pub use event::{
@@ -27,7 +27,5 @@ pub use hook::{
     HookSnapshot, HookStatus, HookTimeZone, HookUpdate, NewHook, SIGNING_SECRET_GENERATED_LENGTH,
     SIGNING_SECRET_PREFIX, SigningPolicy, SigningSecret,
 };
-pub use id::{
-    ActorId, ApplicationId, BlockedRequestId, EventId, HookId, OrganizationId, SiliconId,
-};
+pub use id::{ActorId, BlockedRequestId, EventId, HookId, OrganizationId, SiliconId};
 pub use policy::{Action, AuthorizationDecision, authorize};

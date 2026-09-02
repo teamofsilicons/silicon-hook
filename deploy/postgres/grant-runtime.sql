@@ -63,7 +63,6 @@ GRANT SELECT, INSERT, UPDATE ON TABLE hook.hooks TO :"api_role";
 GRANT SELECT, INSERT ON TABLE hook.events TO :"api_role";
 GRANT SELECT, INSERT ON TABLE hook.blocked_requests TO :"api_role";
 GRANT SELECT, INSERT ON TABLE hook_private.retired_endpoint_keys TO :"api_role";
-GRANT INSERT ON TABLE hook_private.iam_hook_registrations TO :"api_role";
 GRANT SELECT, INSERT, UPDATE ON TABLE hook_private.delivery_sequences TO :"api_role";
 GRANT SELECT, INSERT, UPDATE ON TABLE hook_private.delivery_cursors TO :"api_role";
 GRANT SELECT, INSERT, UPDATE ON TABLE hook_private.ip_blocks TO :"api_role";

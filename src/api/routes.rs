@@ -6,7 +6,7 @@ use axum::{
     middleware as axum_middleware,
     routing::{any, get, post},
 };
-use http::{HeaderName, header};
+use http::header;
 use tower::limit::ConcurrencyLimitLayer;
 use tower_http::{
     catch_panic::CatchPanicLayer, sensitive_headers::SetSensitiveRequestHeadersLayer,
@@ -15,7 +15,7 @@ use tower_http::{
 use super::{handlers, middleware, state::ApiState, ws};
 use crate::config::ServerSettings;
 
-const OBO_PROOF_HEADER: HeaderName = HeaderName::from_static("x-iam-obo-access-proof");
+const IAM_EVENT_BODY_LIMIT: usize = 1024 * 1024;
 
 pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
     let system = Router::new()
@@ -23,7 +23,62 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
         .route("/readyz", get(handlers::readiness))
         .route("/api/v1/version", get(handlers::version));
 
-    let management = Router::new()
+    // Sign-in runs before any bearer exists, so it lives outside management.
+    let auth = Router::new()
+        .route("/api/v1/auth/login", post(handlers::login_begin))
+        .route("/api/v1/auth/callback", post(handlers::login_callback))
+        .route("/api/v1/auth/refresh", post(handlers::refresh_tokens))
+        .route("/api/v1/auth/logout", post(handlers::logout))
+        .layer(DefaultBodyLimit::max(settings.max_management_body_bytes));
+
+    // IAM signs deliveries over the exact body, which may carry complete
+    // directory state; the verifier's own bound is the same one megabyte.
+    let iam_events = Router::new()
+        .route("/api/v1/iam/events", post(handlers::receive_iam_event))
+        .layer(DefaultBodyLimit::max(IAM_EVENT_BODY_LIMIT));
+
+    let ingress = Router::new()
+        .route(
+            "/silicon/{silicon_id}/{endpoint_key}",
+            any(handlers::receive),
+        )
+        .route(
+            "/silicon/{silicon_id}/{endpoint_key}/",
+            any(handlers::receive),
+        )
+        .route(
+            "/api/v1/silicon/{silicon_id}/{endpoint_key}",
+            any(handlers::receive),
+        )
+        .route(
+            "/api/v1/silicon/{silicon_id}/{endpoint_key}/",
+            any(handlers::receive),
+        )
+        .layer(DefaultBodyLimit::max(settings.max_ingress_body_bytes));
+
+    system
+        .merge(management_router(settings))
+        .merge(auth)
+        .merge(iam_events)
+        .merge(ingress)
+        .fallback(handlers::not_found)
+        .method_not_allowed_fallback(handlers::method_not_allowed)
+        .with_state(state)
+        .layer(SetSensitiveRequestHeadersLayer::new([
+            header::AUTHORIZATION,
+            header::COOKIE,
+        ]))
+        .layer(ConcurrencyLimitLayer::new(settings.concurrency_limit))
+        .layer(axum_middleware::from_fn_with_state(
+            settings.request_timeout,
+            middleware::enforce_timeout,
+        ))
+        .layer(CatchPanicLayer::custom(middleware::handle_panic))
+        .layer(axum_middleware::from_fn(middleware::request_scope))
+}
+
+fn management_router(settings: &ServerSettings) -> Router<ApiState> {
+    Router::new()
         .route(
             "/api/v1/silicons/{silicon_id}/hooks",
             get(handlers::list_hooks)
@@ -76,50 +131,12 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
             "/api/v1/silicons/{silicon_id}/deliveries/cursor",
             get(handlers::delivery_cursor),
         )
+        .route(
+            "/api/v1/silicons/{silicon_id}/hooks/iam",
+            post(handlers::connect_iam_hook),
+        )
         .route("/api/v1/ws", get(ws::upgrade))
-        .route(
-            "/api/v1/internal/iam/hooks",
-            post(handlers::provision_iam_hook),
-        )
-        .layer(DefaultBodyLimit::max(settings.max_management_body_bytes));
-
-    let ingress = Router::new()
-        .route(
-            "/silicon/{silicon_id}/{endpoint_key}",
-            any(handlers::receive),
-        )
-        .route(
-            "/silicon/{silicon_id}/{endpoint_key}/",
-            any(handlers::receive),
-        )
-        .route(
-            "/api/v1/silicon/{silicon_id}/{endpoint_key}",
-            any(handlers::receive),
-        )
-        .route(
-            "/api/v1/silicon/{silicon_id}/{endpoint_key}/",
-            any(handlers::receive),
-        )
-        .layer(DefaultBodyLimit::max(settings.max_ingress_body_bytes));
-
-    system
-        .merge(management)
-        .merge(ingress)
-        .fallback(handlers::not_found)
-        .method_not_allowed_fallback(handlers::method_not_allowed)
-        .with_state(state)
-        .layer(SetSensitiveRequestHeadersLayer::new([
-            header::AUTHORIZATION,
-            header::COOKIE,
-            OBO_PROOF_HEADER,
-        ]))
-        .layer(ConcurrencyLimitLayer::new(settings.concurrency_limit))
-        .layer(axum_middleware::from_fn_with_state(
-            settings.request_timeout,
-            middleware::enforce_timeout,
-        ))
-        .layer(CatchPanicLayer::custom(middleware::handle_panic))
-        .layer(axum_middleware::from_fn(middleware::request_scope))
+        .layer(DefaultBodyLimit::max(settings.max_management_body_bytes))
 }
 
 #[cfg(test)]
@@ -136,7 +153,6 @@ mod tests {
         extract::ConnectInfo,
     };
     use http::{Request, StatusCode};
-    use secrecy::SecretString;
     use serde_json::Value;
     use sqlx::postgres::PgPoolOptions;
     use tower::ServiceExt as _;
@@ -146,7 +162,7 @@ mod tests {
     use crate::{
         api::state::ApiState,
         application::{HookApplication, SystemClock},
-        config::{IamSettings, LocalAuthSettings, RealtimeSettings, ServerSettings},
+        config::{IamSettings, RealtimeSettings, ServerSettings},
         domain::EncryptionKeyId,
         infrastructure::{
             crypto::{CursorCodec, SecretCipher, SecretKey, SecretKeyring},
@@ -155,7 +171,7 @@ mod tests {
         },
     };
 
-    fn test_router() -> Result<axum::Router, Box<dyn std::error::Error>> {
+    async fn test_router() -> Result<axum::Router, Box<dyn std::error::Error>> {
         let database_url = "postgres://hook:hook@127.0.0.1:9/hook";
         let pool = PgPoolOptions::new().connect_lazy(database_url)?;
         let key_id = EncryptionKeyId::new("1")?;
@@ -171,18 +187,19 @@ mod tests {
             Arc::new(SystemClock),
             public_base_url.clone(),
         );
-        let iam = IamClient::new(&IamSettings {
+        let iam = IamClient::connect(&IamSettings {
             base_url: Url::parse("http://127.0.0.1:9")?,
             app_id: None,
             app_secret: None,
-            audience: "silicon-hook".to_owned(),
             connect_timeout: Duration::from_millis(10),
             request_timeout: Duration::from_millis(10),
             max_response_bytes: 1_024,
-            local_auth: Some(LocalAuthSettings {
-                iam_service_token: SecretString::from("local-service-token".to_owned()),
-            }),
-        })?;
+            allow_insecure_local_http: true,
+            local_auth: true,
+            login: None,
+            webhook: None,
+        })
+        .await?;
         let settings = ServerSettings {
             bind_addr: "127.0.0.1:0".parse()?,
             public_base_url: public_base_url.clone(),
@@ -196,7 +213,6 @@ mod tests {
             ApiState {
                 application,
                 iam,
-                allow_local_credentials: true,
                 trusted_proxy_hops: 0,
                 realtime: RealtimeSettings {
                     heartbeat_interval: Duration::from_secs(30),
@@ -214,7 +230,8 @@ mod tests {
     #[tokio::test]
     async fn system_routes_return_json_and_a_correlation_id()
     -> Result<(), Box<dyn std::error::Error>> {
-        let response = test_router()?
+        let response = test_router()
+            .await?
             .oneshot(Request::get("/healthz").body(Body::empty())?)
             .await?;
 
@@ -232,7 +249,7 @@ mod tests {
             Request::get("/does-not-exist").body(Body::empty())?,
             Request::post("/healthz").body(Body::empty())?,
         ] {
-            let response = test_router()?.oneshot(request).await?;
+            let response = test_router().await?.oneshot(request).await?;
             assert!(matches!(
                 response.status(),
                 StatusCode::NOT_FOUND | StatusCode::METHOD_NOT_ALLOWED
@@ -254,7 +271,7 @@ mod tests {
             IpAddr::V4(Ipv4Addr::LOCALHOST),
             5000,
         )));
-        let response = test_router()?.oneshot(request).await?;
+        let response = test_router().await?.oneshot(request).await?;
         assert_eq!(response.status(), StatusCode::PAYLOAD_TOO_LARGE);
         let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
         assert_eq!(body["error"]["code"], "payload_too_large");
@@ -266,7 +283,8 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         // Without a real connection the upgrade extractor refuses first; the
         // credential and Silicon checks are covered end to end over a listener.
-        let plain = test_router()?
+        let plain = test_router()
+            .await?
             .oneshot(Request::get("/api/v1/ws?silicon_id=cos:tos").body(Body::empty())?)
             .await?;
         assert!(plain.status().is_client_error());

@@ -38,7 +38,6 @@ CREATE TABLE hook.hooks (
     is_iam_default boolean NOT NULL DEFAULT false,
     created_by_kind text NOT NULL,
     created_by_id text NOT NULL,
-    created_via_app_id text,
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
     disabled_at timestamptz,
@@ -53,7 +52,7 @@ CREATE TABLE hook.hooks (
     CONSTRAINT hooks_silicon_id_length CHECK (
         char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
     ),
-    CONSTRAINT hooks_endpoint_key_format CHECK (endpoint_key ~ '^[0-9A-Z]{6}$'),
+    CONSTRAINT hooks_endpoint_key_format CHECK (endpoint_key ~ '^[0-9A-Z]{8}$'),
     CONSTRAINT hooks_name_length CHECK (char_length(name) BETWEEN 1 AND 200),
     CONSTRAINT hooks_description_length CHECK (
         description IS NULL OR char_length(description) <= 2000
@@ -88,16 +87,10 @@ CREATE TABLE hook.hooks (
         char_length(time_zone) BETWEEN 1 AND 64 AND time_zone ~ '^[A-Za-z0-9/_+-]+$'
     ),
     CONSTRAINT hooks_created_by_kind CHECK (
-        created_by_kind IN ('carbon', 'silicon', 'application', 'service')
+        created_by_kind IN ('carbon', 'silicon')
     ),
     CONSTRAINT hooks_created_by_id_length CHECK (
         char_length(created_by_id) BETWEEN 1 AND 255 AND created_by_id ~ '^[!-~]+$'
-    ),
-    CONSTRAINT hooks_created_via_app_id_length CHECK (
-        created_via_app_id IS NULL OR (
-            char_length(created_via_app_id) BETWEEN 1 AND 255
-            AND created_via_app_id ~ '^[!-~]+$'
-        )
     ),
     CONSTRAINT hooks_created_at_finite CHECK (isfinite(created_at)),
     CONSTRAINT hooks_updated_at_valid CHECK (
@@ -123,6 +116,9 @@ CREATE TABLE hook.hooks (
     CONSTRAINT hooks_endpoint_key_unique UNIQUE (silicon_id, endpoint_key)
 );
 
+-- IAM keeps exactly one webhook per Silicon, so Hook keeps exactly one IAM
+-- hook per Silicon in any lifecycle state; connecting again restores or
+-- re-binds it rather than creating a second one.
 CREATE UNIQUE INDEX hooks_one_iam_default_per_silicon
     ON hook.hooks (org_id, silicon_id)
     WHERE is_iam_default;
@@ -152,27 +148,8 @@ CREATE TABLE hook_private.retired_endpoint_keys (
     CONSTRAINT retired_endpoint_keys_silicon_id_length CHECK (
         char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
     ),
-    CONSTRAINT retired_endpoint_keys_format CHECK (endpoint_key ~ '^[0-9A-Z]{6}$'),
+    CONSTRAINT retired_endpoint_keys_format CHECK (endpoint_key ~ '^[0-9A-Z]{8}$'),
     CONSTRAINT retired_endpoint_keys_retired_at_finite CHECK (isfinite(retired_at))
-);
-
--- This lifetime ledger deliberately has no foreign key to the recoverable
--- hook row. It remains after permanent purge and prevents silent recreation
--- of IAM's one-time default connection.
-CREATE TABLE hook_private.iam_hook_registrations (
-    org_id text NOT NULL,
-    silicon_id text NOT NULL,
-    original_hook_id uuid NOT NULL,
-    created_at timestamptz NOT NULL,
-
-    CONSTRAINT iam_hook_registrations_pk PRIMARY KEY (org_id, silicon_id),
-    CONSTRAINT iam_hook_registrations_org_id_length CHECK (
-        char_length(org_id) BETWEEN 1 AND 100 AND org_id ~ '^[!-~]+$'
-    ),
-    CONSTRAINT iam_hook_registrations_silicon_id_length CHECK (
-        char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
-    ),
-    CONSTRAINT iam_hook_registrations_created_at_finite CHECK (isfinite(created_at))
 );
 
 -- ---------------------------------------------------------------------------
@@ -336,7 +313,7 @@ CREATE TABLE hook_private.delivery_cursors (
         char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
     ),
     CONSTRAINT delivery_cursors_consumer_kind CHECK (
-        consumer_kind IN ('carbon', 'silicon', 'application', 'service')
+        consumer_kind IN ('carbon', 'silicon')
     ),
     CONSTRAINT delivery_cursors_consumer_id_length CHECK (
         char_length(consumer_id) BETWEEN 1 AND 255 AND consumer_id ~ '^[!-~]+$'
@@ -355,19 +332,14 @@ CREATE TABLE hook_private.ip_blocks (
         ON DELETE CASCADE,
     remote_ip inet NOT NULL,
     strikes integer NOT NULL DEFAULT 0,
-    blocks integer NOT NULL DEFAULT 0,
     blocked_until timestamptz,
-    permanent boolean NOT NULL DEFAULT false,
     rejected_requests bigint NOT NULL DEFAULT 0,
     first_seen_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
 
     CONSTRAINT ip_blocks_pk PRIMARY KEY (hook_id, remote_ip),
     CONSTRAINT ip_blocks_counters_nonnegative CHECK (
-        strikes >= 0 AND blocks >= 0 AND rejected_requests >= 0
-    ),
-    CONSTRAINT ip_blocks_permanent_has_no_deadline CHECK (
-        NOT permanent OR blocked_until IS NULL
+        strikes >= 0 AND rejected_requests >= 0
     ),
     CONSTRAINT ip_blocks_timestamps_finite CHECK (
         isfinite(first_seen_at)
@@ -377,8 +349,7 @@ CREATE TABLE hook_private.ip_blocks (
 );
 
 CREATE INDEX ip_blocks_stale
-    ON hook_private.ip_blocks (updated_at)
-    WHERE NOT permanent;
+    ON hook_private.ip_blocks (updated_at);
 
 -- ---------------------------------------------------------------------------
 -- Management idempotency and audit
@@ -388,7 +359,6 @@ CREATE TABLE hook_private.management_idempotency (
     operation text NOT NULL,
     actor_kind text NOT NULL,
     actor_id text NOT NULL,
-    calling_app_id text NOT NULL DEFAULT '',
     org_id text NOT NULL,
     target_id text NOT NULL,
     idempotency_key text NOT NULL,
@@ -406,7 +376,6 @@ CREATE TABLE hook_private.management_idempotency (
         operation,
         actor_kind,
         actor_id,
-        calling_app_id,
         org_id,
         target_id,
         idempotency_key
@@ -416,16 +385,10 @@ CREATE TABLE hook_private.management_idempotency (
         AND operation ~ '^[a-z0-9_.-]+$'
     ),
     CONSTRAINT management_idempotency_actor_kind CHECK (
-        actor_kind IN ('carbon', 'silicon', 'application', 'service')
+        actor_kind IN ('carbon', 'silicon')
     ),
     CONSTRAINT management_idempotency_actor_id_length CHECK (
         char_length(actor_id) BETWEEN 1 AND 255 AND actor_id ~ '^[!-~]+$'
-    ),
-    CONSTRAINT management_idempotency_calling_app_id CHECK (
-        calling_app_id = '' OR (
-            char_length(calling_app_id) BETWEEN 1 AND 255
-            AND calling_app_id ~ '^[!-~]+$'
-        )
     ),
     CONSTRAINT management_idempotency_org_id_length CHECK (
         char_length(org_id) BETWEEN 1 AND 100 AND org_id ~ '^[!-~]+$'
@@ -504,7 +467,6 @@ CREATE TABLE hook_private.audit_log (
     hook_id uuid,
     actor_kind text NOT NULL,
     actor_id text NOT NULL,
-    calling_app_id text,
     request_id text,
 
     CONSTRAINT audit_log_action CHECK (
@@ -517,7 +479,7 @@ CREATE TABLE hook_private.audit_log (
             'hook.restored',
             'hook.secret_rotated',
             'hook.endpoint_rotated',
-            'hook.iam_provisioned'
+            'hook.iam_connected'
         )
     ),
     CONSTRAINT audit_log_org_id_length CHECK (
@@ -527,16 +489,10 @@ CREATE TABLE hook_private.audit_log (
         char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
     ),
     CONSTRAINT audit_log_actor_kind CHECK (
-        actor_kind IN ('carbon', 'silicon', 'application', 'service')
+        actor_kind IN ('carbon', 'silicon')
     ),
     CONSTRAINT audit_log_actor_id_length CHECK (
         char_length(actor_id) BETWEEN 1 AND 255 AND actor_id ~ '^[!-~]+$'
-    ),
-    CONSTRAINT audit_log_calling_app_id_length CHECK (
-        calling_app_id IS NULL OR (
-            char_length(calling_app_id) BETWEEN 1 AND 255
-            AND calling_app_id ~ '^[!-~]+$'
-        )
     ),
     CONSTRAINT audit_log_request_id_length CHECK (
         request_id IS NULL OR (
@@ -579,11 +535,6 @@ CREATE TRIGGER blocked_requests_are_immutable
 
 CREATE TRIGGER retired_endpoint_keys_are_immutable
     BEFORE UPDATE OR DELETE ON hook_private.retired_endpoint_keys
-    FOR EACH ROW
-    EXECUTE FUNCTION hook_private.reject_row_mutation();
-
-CREATE TRIGGER iam_hook_registrations_are_immutable
-    BEFORE UPDATE OR DELETE ON hook_private.iam_hook_registrations
     FOR EACH ROW
     EXECUTE FUNCTION hook_private.reject_row_mutation();
 

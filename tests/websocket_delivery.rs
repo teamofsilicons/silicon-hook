@@ -18,7 +18,7 @@ use sha2::Sha256;
 use silicon_hook::{
     api::{ApiDependencies, HEARTBEAT_CLOSE_CODE, router},
     application::{HookApplication, SystemClock},
-    config::{DatabaseSettings, IamSettings, LocalAuthSettings, RealtimeSettings, ServerSettings},
+    config::{DatabaseSettings, IamSettings, RealtimeSettings, ServerSettings},
     domain::EncryptionKeyId,
     infrastructure::{
         crypto::{CursorCodec, SecretCipher, SecretKey, SecretKeyring},
@@ -79,18 +79,19 @@ impl Harness {
             Arc::new(SystemClock),
             public_base_url.clone(),
         );
-        let iam = IamClient::new(&IamSettings {
+        let iam = IamClient::connect(&IamSettings {
             base_url: Url::parse("http://127.0.0.1:9")?,
             app_id: None,
             app_secret: None,
-            audience: "silicon-hook".to_owned(),
             connect_timeout: Duration::from_millis(50),
             request_timeout: Duration::from_millis(50),
             max_response_bytes: 1_024,
-            local_auth: Some(LocalAuthSettings {
-                iam_service_token: SecretString::from("local-service-token".to_owned()),
-            }),
-        })?;
+            allow_insecure_local_http: true,
+            local_auth: true,
+            login: None,
+            webhook: None,
+        })
+        .await?;
         let wakeups = DeliveryWakeups::new();
         let (shutdown, shutdown_receiver) = tokio::sync::watch::channel(false);
         let database_settings = DatabaseSettings {
@@ -118,7 +119,6 @@ impl Harness {
             ApiDependencies {
                 application,
                 iam,
-                allow_local_credentials: true,
                 trusted_proxy_hops: 0,
                 realtime,
                 wakeups,

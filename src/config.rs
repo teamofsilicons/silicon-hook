@@ -2,7 +2,7 @@
 
 use std::{
     collections::BTreeMap,
-    env,
+    env, fmt,
     net::SocketAddr,
     num::{NonZeroU16, NonZeroU32, NonZeroUsize},
     str::FromStr,
@@ -17,6 +17,8 @@ use zeroize::Zeroizing;
 
 const MAX_INGRESS_BODY_BYTES: usize = 1024 * 1024;
 const MAX_MANAGEMENT_BODY_BYTES: usize = 64 * 1024;
+/// Scopes a Carbon grants Hook at sign-in unless configured otherwise.
+const DEFAULT_IAM_SCOPES: &str = "profile organizations.read memberships.read roles.read";
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_KEYRING_ENTRIES: usize = 16;
 const MAX_MAINTENANCE_BATCH_SIZE: usize = 10_000;
@@ -150,40 +152,75 @@ pub struct CryptoSettings {
     pub cursor_signing_key: SecretString,
 }
 
-/// Silicon IAM HTTP and local-development adapter settings.
+/// Silicon IAM adapter settings.
+///
+/// The `silicon-iam` crate negotiates the API version at startup and owns
+/// sign-in, introspection, and webhook verification; the directory reads Hook
+/// performs with the caller's own bearer use the same origin and deadlines.
 #[derive(Clone, Debug)]
 pub struct IamSettings {
-    /// IAM origin or API base URL.
+    /// IAM origin without a path.
     pub base_url: Url,
-    /// Hook's registered IAM application identifier.
+    /// Hook's registered IAM Application ID.
     pub app_id: Option<String>,
-    /// Hook's registered IAM application secret.
+    /// Hook's current `ask_` Application secret.
     pub app_secret: Option<SecretString>,
-    /// Audience IAM must bind Hook credentials to.
-    pub audience: String,
     /// Outbound connection establishment deadline.
     pub connect_timeout: Duration,
     /// Complete IAM request deadline.
     pub request_timeout: Duration,
     /// Maximum IAM response body accepted into memory.
     pub max_response_bytes: usize,
-    /// Explicitly enabled local authentication settings.
-    pub local_auth: Option<LocalAuthSettings>,
+    /// Whether plain HTTP to a loopback IAM is allowed (never in production).
+    pub allow_insecure_local_http: bool,
+    /// Whether deterministic `local:` credentials are accepted (never in production).
+    pub local_auth: bool,
+    /// Carbon sign-in settings, when Hook offers sign-in.
+    pub login: Option<LoginSettings>,
+    /// Application webhook secrets, when Hook receives IAM events.
+    pub webhook: Option<IamWebhookSettings>,
 }
 
 impl IamSettings {
     /// Returns true when deterministic local credentials may be used.
     #[must_use]
     pub const fn local_auth_enabled(&self) -> bool {
-        self.local_auth.is_some()
+        self.local_auth
     }
 }
 
-/// Credentials accepted only by the deterministic local IAM adapter.
+/// OAuth sign-in settings registered with IAM for the Hook Application.
 #[derive(Clone, Debug)]
-pub struct LocalAuthSettings {
-    /// Token that represents the `silicon-iam` service locally.
-    pub iam_service_token: SecretString,
+pub struct LoginSettings {
+    /// The exact redirect URI registered with IAM.
+    pub redirect_uri: Url,
+    /// Scopes requested at sign-in.
+    pub scopes: Vec<String>,
+}
+
+/// Versioned `whs_` secrets IAM signs Application webhook deliveries with.
+#[derive(Clone)]
+pub struct IamWebhookSettings {
+    /// Current signing secret.
+    pub secret: SecretString,
+    /// Version IAM presents for the current secret.
+    pub version: u64,
+    /// Previous secret and version retained across a rotation.
+    pub previous: Option<(SecretString, u64)>,
+}
+
+impl fmt::Debug for IamWebhookSettings {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IamWebhookSettings")
+            .field("secret", &"[REDACTED]")
+            .field("version", &self.version)
+            .field(
+                "previous",
+                &self.previous.as_ref().map(|(_, version)| version),
+            )
+            .finish()
+    }
 }
 
 /// Security and lifecycle durations enforced by the API process.
@@ -499,52 +536,55 @@ impl IamSettings {
             source.url_or("HOOK_IAM_BASE_URL", "http://127.0.0.1:8081")?
         };
         validate_http_url(environment, &base_url, "HOOK_IAM_BASE_URL")?;
+        if !matches!(base_url.path(), "" | "/") {
+            return Err(invalid(
+                "HOOK_IAM_BASE_URL",
+                "must be an origin without a path",
+            ));
+        }
+        let allow_insecure_local_http =
+            source.parse_or("HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP", "false")?;
+        if environment.is_production() && allow_insecure_local_http {
+            return Err(invalid(
+                "HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP",
+                "plain HTTP to IAM is forbidden in production",
+            ));
+        }
+        if base_url.scheme() == "http" && !allow_insecure_local_http {
+            return Err(invalid(
+                "HOOK_IAM_BASE_URL",
+                "plain HTTP requires HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP=true and a loopback host",
+            ));
+        }
 
-        let allow_local_auth = source.parse_or("HOOK_ALLOW_LOCAL_AUTH", "false")?;
-        if environment.is_production() && allow_local_auth {
+        let local_auth = source.parse_or("HOOK_ALLOW_LOCAL_AUTH", "false")?;
+        if environment.is_production() && local_auth {
             return Err(invalid(
                 "HOOK_ALLOW_LOCAL_AUTH",
                 "local authentication is forbidden in production",
             ));
         }
-        let local_auth = if allow_local_auth {
-            Some(LocalAuthSettings {
-                iam_service_token: source.required_secret("HOOK_LOCAL_IAM_SERVICE_TOKEN")?,
-            })
-        } else {
-            None
-        };
 
         let app_id = source.optional("HOOK_IAM_APP_ID");
         let app_secret = source.optional_secret("HOOK_IAM_APP_SECRET");
-        if local_auth.is_none() && (app_id.is_none() || app_secret.is_none()) {
+        if !local_auth && (app_id.is_none() || app_secret.is_none()) {
             return Err(SettingsError::Missing(if app_id.is_none() {
                 "HOOK_IAM_APP_ID"
             } else {
                 "HOOK_IAM_APP_SECRET"
             }));
         }
-        if environment.is_production() {
-            validate_secret_minimum("HOOK_IAM_APP_SECRET", app_secret.as_ref(), 16)?;
-        }
         if let Some(app_id) = &app_id {
-            validate_identifier("HOOK_IAM_APP_ID", app_id, 1, 128)?;
-            if app_id.contains(':') {
-                return Err(invalid(
-                    "HOOK_IAM_APP_ID",
-                    "must not contain the HTTP Basic separator",
-                ));
-            }
+            validate_iam_app_id(app_id)?;
         }
-
-        let audience = source.value_or("HOOK_IAM_AUDIENCE", "silicon-hook");
-        validate_identifier("HOOK_IAM_AUDIENCE", &audience, 1, 128)?;
+        if let Some(app_secret) = &app_secret {
+            validate_iam_secret("HOOK_IAM_APP_SECRET", app_secret, "ask_")?;
+        }
 
         Ok(Self {
             base_url,
             app_id,
             app_secret,
-            audience,
             connect_timeout: source.bounded_duration_millis(
                 "HOOK_PROVIDER_CONNECT_TIMEOUT_MS",
                 1_000,
@@ -563,8 +603,100 @@ impl IamSettings {
                 1,
                 MAX_PROVIDER_RESPONSE_BYTES,
             )?,
+            allow_insecure_local_http,
             local_auth,
+            login: LoginSettings::load(source, environment)?,
+            webhook: IamWebhookSettings::load(source)?,
         })
+    }
+}
+
+impl LoginSettings {
+    fn load(
+        source: &impl ConfigurationSource,
+        environment: RuntimeEnvironment,
+    ) -> Result<Option<Self>, SettingsError> {
+        let Some(redirect_uri) = source.optional("HOOK_IAM_REDIRECT_URI") else {
+            return Ok(None);
+        };
+        let redirect_uri = Url::parse(&redirect_uri)
+            .map_err(|_| invalid("HOOK_IAM_REDIRECT_URI", "must be an absolute URL"))?;
+        if !matches!(redirect_uri.scheme(), "http" | "https")
+            || redirect_uri.host_str().is_none()
+            || redirect_uri.fragment().is_some()
+        {
+            return Err(invalid(
+                "HOOK_IAM_REDIRECT_URI",
+                "must be an absolute HTTP(S) URL without a fragment",
+            ));
+        }
+        if environment.is_production() && redirect_uri.scheme() != "https" {
+            return Err(invalid(
+                "HOOK_IAM_REDIRECT_URI",
+                "production redirect URIs must use HTTPS",
+            ));
+        }
+        let scopes = source
+            .value_or("HOOK_IAM_SCOPES", DEFAULT_IAM_SCOPES)
+            .split_whitespace()
+            .map(ToOwned::to_owned)
+            .collect::<Vec<_>>();
+        if scopes.is_empty() {
+            return Err(invalid("HOOK_IAM_SCOPES", "must name at least one scope"));
+        }
+        Ok(Some(Self {
+            redirect_uri,
+            scopes,
+        }))
+    }
+}
+
+impl IamWebhookSettings {
+    fn load(source: &impl ConfigurationSource) -> Result<Option<Self>, SettingsError> {
+        let Some(secret) = source.optional_secret("HOOK_IAM_WEBHOOK_SECRET") else {
+            return Ok(None);
+        };
+        validate_iam_secret("HOOK_IAM_WEBHOOK_SECRET", &secret, "whs_")?;
+        let version: u64 = source.parse_or("HOOK_IAM_WEBHOOK_SECRET_VERSION", "1")?;
+        if version == 0 {
+            return Err(invalid(
+                "HOOK_IAM_WEBHOOK_SECRET_VERSION",
+                "must be a positive integer",
+            ));
+        }
+        let previous = match (
+            source.optional_secret("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET"),
+            source.optional("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION"),
+        ) {
+            (None, None) => None,
+            (Some(previous), Some(previous_version)) => {
+                validate_iam_secret("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET", &previous, "whs_")?;
+                let previous_version = previous_version.parse::<u64>().map_err(|_| {
+                    invalid(
+                        "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION",
+                        "must be a positive integer",
+                    )
+                })?;
+                if previous_version == 0 || previous_version == version {
+                    return Err(invalid(
+                        "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION",
+                        "must be a positive integer distinct from the current version",
+                    ));
+                }
+                Some((previous, previous_version))
+            }
+            _ => {
+                return Err(invalid(
+                    "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET",
+                    "must be set together with HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION",
+                ));
+            }
+        };
+        Ok(Some(Self {
+            secret,
+            version,
+            previous,
+        }))
     }
 }
 
@@ -929,35 +1061,47 @@ fn validate_base64url_key(
     Ok(key)
 }
 
-fn validate_identifier(
-    name: &'static str,
-    value: &str,
-    minimum: usize,
-    maximum: usize,
-) -> Result<(), SettingsError> {
-    if !(minimum..=maximum).contains(&value.len())
-        || !value.bytes().all(|byte| byte.is_ascii_graphic())
-    {
-        return Err(invalid(
-            name,
-            format!("must contain {minimum} to {maximum} visible ASCII bytes"),
-        ));
+/// IAM Application IDs are 3 to 63 lowercase ASCII letters, digits, `_`, or
+/// `-`, starting with a letter.
+fn validate_iam_app_id(app_id: &str) -> Result<(), SettingsError> {
+    let valid = (3..=63).contains(&app_id.len())
+        && app_id
+            .bytes()
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && app_id.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        });
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid(
+            "HOOK_IAM_APP_ID",
+            "must be 3 to 63 lowercase letters, digits, '_' or '-', starting with a letter",
+        ))
     }
-    Ok(())
 }
 
-fn validate_secret_minimum(
+/// IAM secrets are a fixed 4-character prefix plus 43 URL-safe base64 characters.
+fn validate_iam_secret(
     name: &'static str,
-    value: Option<&SecretString>,
-    minimum: usize,
+    secret: &SecretString,
+    prefix: &str,
 ) -> Result<(), SettingsError> {
-    let Some(value) = value else {
-        return Err(SettingsError::Missing(name));
-    };
-    if value.expose_secret().len() < minimum {
-        return Err(invalid(name, "does not meet the minimum secret length"));
+    let value = secret.expose_secret();
+    let valid = value.len() == 47
+        && value.starts_with(prefix)
+        && value[prefix.len()..]
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+    if valid {
+        Ok(())
+    } else {
+        Err(invalid(
+            name,
+            "must be the IAM-issued secret: a 4-character prefix plus 43 URL-safe characters",
+        ))
     }
-    Ok(())
 }
 
 fn validate_positive_at_most(
@@ -1049,10 +1193,7 @@ mod tests {
                 "https://backend.iam.teamofsilicons.com".to_owned(),
             ),
             ("HOOK_IAM_APP_ID", "silicon-hook".to_owned()),
-            (
-                "HOOK_IAM_APP_SECRET",
-                "a-production-length-iam-secret".to_owned(),
-            ),
+            ("HOOK_IAM_APP_SECRET", format!("ask_{}", "A".repeat(43))),
         ]);
         TestEnvironment(values)
     }
@@ -1164,10 +1305,6 @@ mod tests {
         environment
             .0
             .insert("HOOK_ALLOW_LOCAL_AUTH", "true".to_owned());
-        environment.0.insert(
-            "HOOK_LOCAL_IAM_SERVICE_TOKEN",
-            "development-service-token".to_owned(),
-        );
 
         assert!(matches!(
             ApiSettings::load(&environment),
@@ -1237,15 +1374,90 @@ mod tests {
         environment
             .0
             .insert("HOOK_ALLOW_LOCAL_AUTH", "true".to_owned());
-        environment.0.insert(
-            "HOOK_LOCAL_IAM_SERVICE_TOKEN",
-            "development-service-token".to_owned(),
-        );
+        environment
+            .0
+            .insert("HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP", "true".to_owned());
         environment.0.remove("HOOK_IAM_APP_ID");
         environment.0.remove("HOOK_IAM_APP_SECRET");
 
         let settings = ApiSettings::load(&environment)?;
         assert!(settings.iam.local_auth_enabled());
+        assert!(settings.iam.login.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn iam_secrets_and_optional_features_are_validated() -> Result<(), SettingsError> {
+        let mut malformed = valid_api_environment("production");
+        malformed
+            .0
+            .insert("HOOK_IAM_APP_SECRET", "not-an-iam-secret".to_owned());
+        assert!(matches!(
+            ApiSettings::load(&malformed),
+            Err(SettingsError::Invalid {
+                name: "HOOK_IAM_APP_SECRET",
+                ..
+            })
+        ));
+
+        let mut configured = valid_api_environment("production");
+        configured.0.insert(
+            "HOOK_IAM_REDIRECT_URI",
+            "https://hook.teamofsilicons.com/auth/callback".to_owned(),
+        );
+        configured
+            .0
+            .insert("HOOK_IAM_WEBHOOK_SECRET", format!("whs_{}", "B".repeat(43)));
+        configured
+            .0
+            .insert("HOOK_IAM_WEBHOOK_SECRET_VERSION", "2".to_owned());
+        configured.0.insert(
+            "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET",
+            format!("whs_{}", "C".repeat(43)),
+        );
+        configured
+            .0
+            .insert("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION", "1".to_owned());
+        let settings = ApiSettings::load(&configured)?;
+        let login = settings
+            .iam
+            .login
+            .as_ref()
+            .ok_or(SettingsError::Missing("HOOK_IAM_REDIRECT_URI"))?;
+        assert_eq!(login.scopes.len(), 4);
+        let webhook = settings
+            .iam
+            .webhook
+            .as_ref()
+            .ok_or(SettingsError::Missing("HOOK_IAM_WEBHOOK_SECRET"))?;
+        assert_eq!(webhook.version, 2);
+        assert_eq!(
+            webhook.previous.as_ref().map(|(_, version)| *version),
+            Some(1)
+        );
+
+        configured
+            .0
+            .remove("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION");
+        assert!(matches!(
+            ApiSettings::load(&configured),
+            Err(SettingsError::Invalid {
+                name: "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET",
+                ..
+            })
+        ));
+
+        let mut insecure = valid_api_environment("production");
+        insecure
+            .0
+            .insert("HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP", "true".to_owned());
+        assert!(matches!(
+            ApiSettings::load(&insecure),
+            Err(SettingsError::Invalid {
+                name: "HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP",
+                ..
+            })
+        ));
         Ok(())
     }
 

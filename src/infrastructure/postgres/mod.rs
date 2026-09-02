@@ -143,8 +143,6 @@ const fn actor_kind_as_str(kind: ActorKind) -> &'static str {
     match kind {
         ActorKind::Carbon => "carbon",
         ActorKind::Silicon => "silicon",
-        ActorKind::Application => "application",
-        ActorKind::Service => "service",
     }
 }
 
@@ -152,8 +150,6 @@ fn parse_actor_kind(value: &str) -> Result<ActorKind> {
     match value {
         "carbon" => Ok(ActorKind::Carbon),
         "silicon" => Ok(ActorKind::Silicon),
-        "application" => Ok(ActorKind::Application),
-        "service" => Ok(ActorKind::Service),
         _ => Err(StoreError::corrupt("actor", "unknown actor kind")),
     }
 }

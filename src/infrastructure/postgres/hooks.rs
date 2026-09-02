@@ -5,8 +5,8 @@ use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::domain::{
-    ApplicationId, EncryptedSecret, EndpointKey, HOOK_RECOVERY_DAYS, Hook, HookDescription, HookId,
-    HookStatus, OrganizationId, SiliconId, TransitionError,
+    EncryptedSecret, EndpointKey, HOOK_RECOVERY_DAYS, Hook, HookDescription, HookId, HookStatus,
+    OrganizationId, SiliconId, TransitionError,
 };
 
 use super::{
@@ -98,6 +98,29 @@ impl PostgresStore {
         } else {
             EndpointResolution::Unknown
         })
+    }
+
+    /// Finds the Silicon's IAM hook in any lifecycle state.
+    ///
+    /// # Errors
+    ///
+    /// Returns a PostgreSQL failure or a corrupt row.
+    pub async fn find_iam_hook(
+        &self,
+        organization_id: &OrganizationId,
+        silicon_id: &SiliconId,
+    ) -> Result<Option<Hook>, StoreError> {
+        sqlx::query_as::<_, HookRow>(concat!(
+            "SELECT ",
+            hook_columns!(),
+            " FROM hook.hooks WHERE org_id = $1 AND silicon_id = $2 AND is_iam_default"
+        ))
+        .bind(organization_id.as_str())
+        .bind(silicon_id.as_str())
+        .fetch_optional(&self.pool)
+        .await?
+        .map(Hook::try_from)
+        .transpose()
     }
 
     /// Lists recoverable hooks in deterministic newest-first order.
@@ -234,10 +257,6 @@ impl PostgresStore {
             ManagementReservation::Reserved => {}
         }
 
-        if command.is_iam_default {
-            reserve_iam_hook_registration(&mut transaction, &command.hook, command.recorded_at)
-                .await?;
-        }
         reserve_retained_hook_slot(
             &mut transaction,
             command.hook.organization_id(),
@@ -257,7 +276,7 @@ impl PostgresStore {
             return Err(classify_hook_insert_error(error));
         }
         let action = if command.is_iam_default {
-            AuditAction::IamProvisioned
+            AuditAction::IamConnected
         } else {
             AuditAction::Created
         };
@@ -730,12 +749,12 @@ async fn insert_activation_audits(
     let inserted = sqlx::query(
         "INSERT INTO hook_private.audit_log (
              id, occurred_at, action, org_id, silicon_id, hook_id,
-             actor_kind, actor_id, calling_app_id, request_id
+             actor_kind, actor_id, request_id
          )
-         SELECT audit.audit_id, $3, $4, hook.org_id, hook.silicon_id, hook.id, $5, $6, $7, $8
+         SELECT audit.audit_id, $3, $4, hook.org_id, hook.silicon_id, hook.id, $5, $6, $7
          FROM unnest($1::uuid[], $2::uuid[]) AS audit(hook_id, audit_id)
          JOIN hook.hooks AS hook ON hook.id = audit.hook_id
-         WHERE hook.org_id = $9 AND hook.silicon_id = $10",
+         WHERE hook.org_id = $8 AND hook.silicon_id = $9",
     )
     .bind(changed_ids)
     .bind(&audit_ids)
@@ -743,13 +762,6 @@ async fn insert_activation_audits(
     .bind(action.as_db_str())
     .bind(super::actor_kind_as_str(command.audit.actor.kind()))
     .bind(command.audit.actor.id().as_str())
-    .bind(
-        command
-            .audit
-            .calling_application_id
-            .as_ref()
-            .map(ApplicationId::as_str),
-    )
     .bind(&command.audit.request_id)
     .bind(command.organization_id.as_str())
     .bind(command.silicon_id.as_str())
@@ -840,9 +852,9 @@ async fn insert_hook(
              id, org_id, silicon_id, endpoint_key, name, description,
              signature_required, signature_config, encryption_key_id, secret_nonce,
              encrypted_signing_secret, time_zone, is_iam_default,
-             created_by_kind, created_by_id, created_via_app_id, created_at, updated_at
+             created_by_kind, created_by_id, created_at, updated_at
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $16)",
     )
     .bind(hook.id().as_uuid())
     .bind(hook.organization_id().as_str())
@@ -859,35 +871,10 @@ async fn insert_hook(
     .bind(is_iam_default)
     .bind(super::actor_kind_as_str(hook.created_by().kind()))
     .bind(hook.created_by().id().as_str())
-    .bind(hook.created_via_application().map(ApplicationId::as_str))
     .bind(hook.created_at())
     .execute(&mut **transaction)
     .await?;
     Ok(())
-}
-
-async fn reserve_iam_hook_registration(
-    transaction: &mut Transaction<'_, Postgres>,
-    hook: &Hook,
-    created_at: time::OffsetDateTime,
-) -> Result<(), StoreError> {
-    let inserted = sqlx::query(
-        "INSERT INTO hook_private.iam_hook_registrations (
-             org_id, silicon_id, original_hook_id, created_at
-         ) VALUES ($1, $2, $3, $4)
-         ON CONFLICT DO NOTHING",
-    )
-    .bind(hook.organization_id().as_str())
-    .bind(hook.silicon_id().as_str())
-    .bind(hook.id().as_uuid())
-    .bind(created_at)
-    .execute(&mut **transaction)
-    .await?;
-    if inserted.rows_affected() == 1 {
-        Ok(())
-    } else {
-        Err(StoreError::IamDefaultExists)
-    }
 }
 
 pub(super) async fn select_scoped_hook_for_update(
@@ -939,9 +926,9 @@ pub(super) async fn insert_audit(
     sqlx::query(
         "INSERT INTO hook_private.audit_log (
              id, occurred_at, action, org_id, silicon_id, hook_id,
-             actor_kind, actor_id, calling_app_id, request_id
+             actor_kind, actor_id, request_id
          )
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(Uuid::now_v7())
     .bind(occurred_at)
@@ -951,12 +938,6 @@ pub(super) async fn insert_audit(
     .bind(hook.id().as_uuid())
     .bind(super::actor_kind_as_str(context.actor.kind()))
     .bind(context.actor.id().as_str())
-    .bind(
-        context
-            .calling_application_id
-            .as_ref()
-            .map(ApplicationId::as_str),
-    )
     .bind(&context.request_id)
     .execute(&mut **transaction)
     .await?;
@@ -977,13 +958,11 @@ fn validate_create_command(command: &CreateHook) -> Result<(), StoreError> {
         });
     }
     if command.idempotency.actor != command.audit.actor
-        || command.idempotency.calling_application_id != command.audit.calling_application_id
         || command.audit.actor != *command.hook.created_by()
-        || command.audit.calling_application_id.as_ref() != command.hook.created_via_application()
     {
         return Err(StoreError::InvalidArgument {
             field: "audit.actor",
-            reason: "must match the effective creator and idempotency actor",
+            reason: "must match the creator and idempotency actor",
         });
     }
     if command.response.resource_id != Some(command.hook.id()) {
@@ -1078,9 +1057,7 @@ fn validate_mutation_scope(
             reason: "must match the hook organization",
         });
     }
-    if idempotency.actor != audit.actor
-        || idempotency.calling_application_id != audit.calling_application_id
-    {
+    if idempotency.actor != audit.actor {
         return Err(StoreError::InvalidArgument {
             field: "audit.actor",
             reason: "must match the idempotency actor",

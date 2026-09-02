@@ -6,6 +6,7 @@ use axum::{
     extract::{Path, Query, State, rejection::QueryRejection},
     http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
 };
+use secrecy::ExposeSecret as _;
 use serde::de::DeserializeOwned;
 
 use super::{
@@ -13,39 +14,29 @@ use super::{
         AcknowledgeRequest, BlockedRequestResponse, CreateHookRequest, DeliveriesQuery,
         DeliveryBatchResponse, DeliveryCursorResponse, EventResponse, HealthResponse,
         HistoryPageResponse, HistoryQuery, HookPageResponse, HookResponse, HookWithSecretResponse,
-        ListHooksQuery, OneTimeSecret, ProvisionIamHookRequest, ReceiptResponse,
-        SetHooksEnabledRequest, SigningSecretResponse, UpdateHookRequest, VersionResponse,
+        IamHookResponse, IamWebhookResponse, ListHooksQuery, LoginCallbackRequest, LoginRequest,
+        LoginResponse, OneTimeSecret, ReceiptResponse, RefreshRequest, SetHooksEnabledRequest,
+        SigningSecretResponse, TokensResponse, UpdateHookRequest, VersionResponse,
     },
     extractors::{self, PeerAddress},
     state::ApiState,
 };
 use crate::{
     application::{
-        AcknowledgeDeliveriesCommand, ApplicationError, CreateHookCommand, DeleteHookCommand,
-        HookMutationCommand, HookPatch, ListHistoryCommand, ManagementContext,
-        ProvisionIamHookCommand, PullDeliveriesCommand, ReceiveRequestCommand,
-        SetHooksEnabledCommand, UpdateHookCommand,
+        AcknowledgeDeliveriesCommand, ApplicationError, BindIamHookSecretCommand,
+        ConnectIamHookCommand, CreateHookCommand, DeleteHookCommand, HookMutationCommand,
+        HookPatch, ListHistoryCommand, ManagementContext, PullDeliveriesCommand,
+        ReceiveRequestCommand, SetHooksEnabledCommand, UpdateHookCommand,
     },
     domain::{
         AuthorizationContext, EndpointKey, Hook, HookDescription, HookId, HookName, HookTimeZone,
         OrganizationId, SiliconId,
     },
     error::AppError,
-    infrastructure::iam::AuthorizationRequest,
+    infrastructure::iam::{AuthorizationRequest, LoginOutcome},
     infrastructure::postgres::RuntimeDatabaseRole,
     request_context,
 };
-
-pub(super) const ACTION_LIST_HOOKS: &str = "hook.hooks.list";
-pub(super) const ACTION_READ_HOOK: &str = "hook.hooks.read";
-pub(super) const ACTION_CREATE_HOOK: &str = "hook.hooks.create";
-pub(super) const ACTION_UPDATE_HOOK: &str = "hook.hooks.update";
-pub(super) const ACTION_DELETE_HOOK: &str = "hook.hooks.delete";
-pub(super) const ACTION_SET_HOOK_ENABLED: &str = "hook.hooks.enabled.update";
-pub(super) const ACTION_RESTORE_HOOK: &str = "hook.hooks.restore";
-pub(super) const ACTION_ROTATE_SECRET: &str = "hook.hooks.secret.rotate";
-pub(super) const ACTION_ROTATE_ENDPOINT: &str = "hook.hooks.endpoint.rotate";
-pub(super) const ACTION_READ_EVENTS: &str = "hook.events.read";
 
 pub(super) async fn liveness() -> Json<HealthResponse> {
     Json(HealthResponse { status: "ok" })
@@ -85,7 +76,7 @@ pub(super) async fn list_hooks(
     let silicon_id = parse_silicon_id(silicon_id)?;
     let Query(query) = query.map_err(|_| AppError::validation("invalid_query"))?;
     let authorization =
-        authorize_management(&state, &headers, ACTION_LIST_HOOKS, silicon_id.as_str()).await?;
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let hooks = state
         .application
         .list_hooks(&authorization, &silicon_id, query.include_deleted)
@@ -116,7 +107,7 @@ pub(super) async fn create_hook(
         .transpose()?
         .unwrap_or_default();
     let authorization =
-        authorize_management(&state, &headers, ACTION_CREATE_HOOK, silicon_id.as_str()).await?;
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let result = state
         .application
         .create_hook(CreateHookCommand {
@@ -146,7 +137,7 @@ pub(super) async fn get_hook(
     let silicon_id = parse_silicon_id(silicon_id)?;
     let hook_id = parse_hook_id(&hook_id)?;
     let authorization =
-        authorize_management(&state, &headers, ACTION_READ_HOOK, &hook_id.to_string()).await?;
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let hook = state
         .application
         .get_hook(&authorization, &silicon_id, hook_id)
@@ -186,15 +177,8 @@ pub(super) async fn update_hook(
     if patch.enabled.is_none() && !patch.changes_metadata() {
         return Err(AppError::validation("empty_update"));
     }
-    // A pure activation change keeps its dedicated IAM action; anything else
-    // is authorized as an update.
-    let action = if patch.changes_metadata() {
-        ACTION_UPDATE_HOOK
-    } else {
-        ACTION_SET_HOOK_ENABLED
-    };
     let authorization =
-        authorize_management(&state, &headers, action, &hook_id.to_string()).await?;
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let hook = state
         .application
         .update_hook(UpdateHookCommand {
@@ -219,7 +203,7 @@ pub(super) async fn delete_hook(
     let silicon_id = parse_silicon_id(silicon_id)?;
     let hook_id = parse_hook_id(&hook_id)?;
     let authorization =
-        authorize_management(&state, &headers, ACTION_DELETE_HOOK, &hook_id.to_string()).await?;
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     state
         .application
         .delete_hook(DeleteHookCommand {
@@ -242,13 +226,8 @@ pub(super) async fn set_hooks_enabled(
     extractors::require_json(&headers)?;
     let silicon_id = parse_silicon_id(silicon_id)?;
     let request: SetHooksEnabledRequest = parse_json(&body)?;
-    let authorization = authorize_management(
-        &state,
-        &headers,
-        ACTION_SET_HOOK_ENABLED,
-        silicon_id.as_str(),
-    )
-    .await?;
+    let authorization =
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let hooks = state
         .application
         .set_hooks_enabled(SetHooksEnabledCommand {
@@ -276,7 +255,7 @@ pub(super) async fn restore_hook(
     let hook_id = parse_hook_id(&hook_id)?;
     let idempotency_key = extractors::idempotency_key(&headers)?;
     let authorization =
-        authorize_management(&state, &headers, ACTION_RESTORE_HOOK, &hook_id.to_string()).await?;
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let hook = state
         .application
         .restore_hook(HookMutationCommand {
@@ -300,7 +279,7 @@ pub(super) async fn rotate_hook_secret(
     let hook_id = parse_hook_id(&hook_id)?;
     let idempotency_key = extractors::idempotency_key(&headers)?;
     let authorization =
-        authorize_management(&state, &headers, ACTION_ROTATE_SECRET, &hook_id.to_string()).await?;
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let result = state
         .application
         .rotate_hook_secret(HookMutationCommand {
@@ -331,13 +310,8 @@ pub(super) async fn rotate_hook_endpoint(
     let silicon_id = parse_silicon_id(silicon_id)?;
     let hook_id = parse_hook_id(&hook_id)?;
     let idempotency_key = extractors::idempotency_key(&headers)?;
-    let authorization = authorize_management(
-        &state,
-        &headers,
-        ACTION_ROTATE_ENDPOINT,
-        &hook_id.to_string(),
-    )
-    .await?;
+    let authorization =
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let hook = state
         .application
         .rotate_hook_endpoint(HookMutationCommand {
@@ -444,8 +418,8 @@ async fn history_command(
     if hook_id.is_some() && query.hook_id.is_some_and(|filter| Some(filter) != hook_id) {
         return Err(AppError::validation("invalid_hook_id"));
     }
-    let resource = hook_id.map_or_else(|| silicon_id.as_str().to_owned(), |id| id.to_string());
-    let authorization = authorize_management(state, headers, ACTION_READ_EVENTS, &resource).await?;
+    let authorization =
+        authorize_management(state, headers, std::slice::from_ref(&silicon_id)).await?;
     Ok(ListHistoryCommand {
         authorization,
         silicon_id,
@@ -464,7 +438,7 @@ pub(super) async fn pull_deliveries(
     let silicon_id = parse_silicon_id(silicon_id)?;
     let Query(query) = query.map_err(|_| AppError::validation("invalid_query"))?;
     let authorization =
-        authorize_management(&state, &headers, ACTION_READ_EVENTS, silicon_id.as_str()).await?;
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let batch = state
         .application
         .pull_deliveries(PullDeliveriesCommand {
@@ -492,7 +466,7 @@ pub(super) async fn acknowledge_deliveries(
     let silicon_id = parse_silicon_id(silicon_id)?;
     let request: AcknowledgeRequest = parse_json(&body)?;
     let authorization =
-        authorize_management(&state, &headers, ACTION_READ_EVENTS, silicon_id.as_str()).await?;
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let cursor = state
         .application
         .acknowledge_deliveries(AcknowledgeDeliveriesCommand {
@@ -512,7 +486,7 @@ pub(super) async fn delivery_cursor(
 ) -> Result<Json<DeliveryCursorResponse>, AppError> {
     let silicon_id = parse_silicon_id(silicon_id)?;
     let authorization =
-        authorize_management(&state, &headers, ACTION_READ_EVENTS, silicon_id.as_str()).await?;
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
     let access = state
         .application
         .authorize_stream(&authorization, &silicon_id)
@@ -558,59 +532,21 @@ pub(super) async fn receive(
     ))
 }
 
-pub(super) async fn provision_iam_hook(
-    State(state): State<ApiState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<(StatusCode, HeaderMap, Json<HookWithSecretResponse>), AppError> {
-    extractors::require_json(&headers)?;
-    let token = extractors::service_bearer(&headers)?;
-    let idempotency_key = extractors::idempotency_key(&headers)?;
-    let request: ProvisionIamHookRequest = parse_json(&body)?;
-    let organization_id =
-        OrganizationId::new(request.org_id).map_err(|_| AppError::validation("invalid_org_id"))?;
-    let silicon_id = SiliconId::new(request.silicon_id)
-        .map_err(|_| AppError::validation("invalid_silicon_id"))?;
-    let actor = state
-        .iam
-        .authenticate_iam_service(&token)
-        .await
-        .map_err(AppError::from)?;
-    let result = state
-        .application
-        .provision_iam_hook(ProvisionIamHookCommand {
-            actor,
-            organization_id,
-            silicon_id,
-            idempotency_key,
-            request_id: request_context::current_request_id(),
-        })
-        .await
-        .map_err(map_application_error)?;
-    let response =
-        HookWithSecretResponse::from_result(&result, endpoint_url(&state, &result.hook)?);
-    Ok((
-        StatusCode::CREATED,
-        secret_response_headers(),
-        Json(response),
-    ))
-}
-
+/// Authenticates the bearer with IAM and establishes, online, which of the
+/// request's target Silicons the actor may act on.
 pub(super) async fn authorize_management(
     state: &ApiState,
     headers: &HeaderMap,
-    action: &'static str,
-    resource: &str,
+    targets: &[SiliconId],
 ) -> Result<AuthorizationContext, AppError> {
-    let credential = extractors::management_credential(headers, state.allow_local_credentials)?;
+    let token = extractors::bearer_token(headers)?;
     let org_id = extractors::organization_id(headers)?;
     state
         .iam
         .authorize(&AuthorizationRequest {
-            credential,
+            token,
             org_id,
-            action: action.to_owned(),
-            resource: Some(resource.to_owned()),
+            targets: targets.to_vec(),
         })
         .await
         .map_err(AppError::from)
@@ -700,15 +636,12 @@ pub(super) fn map_application_error(error: ApplicationError) -> AppError {
         ApplicationError::RecoveryExpired => AppError::gone("recovery_expired"),
         ApplicationError::EndpointRetired => AppError::gone("endpoint_retired"),
         ApplicationError::IpBlocked { until } => AppError::Blocked {
-            retry_after: until.map(|until| {
-                let remaining = until - time::OffsetDateTime::now_utc();
-                std::time::Duration::try_from(remaining).unwrap_or_default()
-            }),
+            retry_after: std::time::Duration::try_from(until - time::OffsetDateTime::now_utc())
+                .unwrap_or_default(),
         },
         ApplicationError::IdempotencyConflict => AppError::conflict("idempotency_conflict"),
         ApplicationError::StateConflict => AppError::conflict("state_conflict"),
         ApplicationError::SecretUnavailable => AppError::gone("secret_unavailable"),
-        ApplicationError::IamHookAlreadyExists => AppError::conflict("iam_hook_already_exists"),
         ApplicationError::HookLimitReached => AppError::conflict("hook_limit_reached"),
         ApplicationError::PayloadTooLarge => AppError::PayloadTooLarge,
         ApplicationError::Unavailable(_source) => {
@@ -725,6 +658,166 @@ pub(super) async fn not_found() -> AppError {
 
 pub(super) async fn method_not_allowed() -> AppError {
     AppError::MethodNotAllowed
+}
+
+pub(super) async fn login_begin(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(HeaderMap, Json<LoginResponse>), AppError> {
+    let request: LoginRequest = if body.is_empty() {
+        LoginRequest::default()
+    } else {
+        extractors::require_json(&headers)?;
+        parse_json(&body)?
+    };
+    let organization_id = request
+        .org_id
+        .map(OrganizationId::new)
+        .transpose()
+        .map_err(|_| AppError::validation("invalid_org_id"))?;
+    let start = state
+        .iam
+        .begin_login(organization_id.as_ref())
+        .map_err(AppError::from)?;
+    Ok((
+        secret_response_headers(),
+        Json(LoginResponse {
+            authorization_url: start.authorization_url,
+            continuation: OneTimeSecret::new(start.continuation),
+        }),
+    ))
+}
+
+pub(super) async fn login_callback(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(HeaderMap, Json<TokensResponse>), AppError> {
+    extractors::require_json(&headers)?;
+    let request: LoginCallbackRequest = parse_json(&body)?;
+    let outcome = state
+        .iam
+        .complete_login(&request.continuation, &request.callback_url)
+        .await
+        .map_err(AppError::from)?;
+    match outcome {
+        LoginOutcome::Granted(tokens) => Ok((
+            secret_response_headers(),
+            Json(TokensResponse::from_issued(tokens)),
+        )),
+        LoginOutcome::Denied { code } => Err(AppError::LoginDenied { code }),
+    }
+}
+
+pub(super) async fn refresh_tokens(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(HeaderMap, Json<TokensResponse>), AppError> {
+    extractors::require_json(&headers)?;
+    let request: RefreshRequest = parse_json(&body)?;
+    let tokens = state
+        .iam
+        .refresh(&request.refresh_token)
+        .await
+        .map_err(AppError::from)?;
+    Ok((
+        secret_response_headers(),
+        Json(TokensResponse::from_issued(tokens)),
+    ))
+}
+
+pub(super) async fn logout(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, AppError> {
+    require_empty_body(&body)?;
+    let token = extractors::bearer_token(&headers)?;
+    state
+        .iam
+        .logout(token.expose_secret())
+        .await
+        .map_err(AppError::from)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Connects the Silicon's IAM hook: prepares the hook, registers its endpoint
+/// as the Silicon's IAM webhook with the caller's own bearer, then stores the
+/// secret IAM issued. A retry after a partial failure reconciles each step.
+pub(super) async fn connect_iam_hook(
+    State(state): State<ApiState>,
+    Path(silicon_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<Json<IamHookResponse>, AppError> {
+    require_empty_body(&body)?;
+    let silicon_id = parse_silicon_id(silicon_id)?;
+    let idempotency_key = extractors::idempotency_key(&headers)?;
+    let token = extractors::bearer_token(&headers)?;
+    let authorization =
+        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
+    let organization_id = authorization.organization_id().clone();
+    let prepared = state
+        .application
+        .prepare_iam_hook(ConnectIamHookCommand {
+            context: management_context(authorization.clone(), idempotency_key.clone()),
+            silicon_id: silicon_id.clone(),
+        })
+        .await
+        .map_err(map_application_error)?;
+    let registered = state
+        .iam
+        .register_silicon_webhook(
+            &token,
+            &organization_id,
+            &silicon_id,
+            &endpoint_url(&state, &prepared)?,
+            &idempotency_key,
+        )
+        .await
+        .map_err(AppError::from)?;
+    let hook = state
+        .application
+        .bind_iam_hook_secret(BindIamHookSecretCommand {
+            context: management_context(authorization, idempotency_key),
+            silicon_id,
+            hook_id: prepared.id(),
+            signing_secret: registered.signing_secret,
+        })
+        .await
+        .map_err(map_application_error)?;
+    Ok(Json(IamHookResponse {
+        hook: hook_response(&state, &hook)?,
+        iam_webhook: IamWebhookResponse {
+            secret_version: registered.secret_version,
+        },
+    }))
+}
+
+/// Receives Hook's own Application webhook from IAM. Deliveries are
+/// authenticated by the `silicon-iam` verifier before anything is read; Hook
+/// keeps no authorization cache, so the event is recorded and acknowledged.
+pub(super) async fn receive_iam_event(
+    State(state): State<ApiState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<StatusCode, AppError> {
+    let verified = state
+        .iam
+        .verify_application_webhook(&headers, &body)
+        .map_err(AppError::from)?;
+    let event = verified.event();
+    tracing::info!(
+        event_id = %event.event_id(),
+        event_type = %event.event_type(),
+        aggregate_kind = event.aggregate().kind(),
+        aggregate_version = event.aggregate().version(),
+        signing_key_version = verified.signing_key_version(),
+        "Silicon IAM event received"
+    );
+    Ok(StatusCode::NO_CONTENT)
 }
 
 #[cfg(test)]
@@ -772,7 +865,10 @@ mod tests {
             http::StatusCode::GONE
         );
         assert_eq!(
-            map_application_error(ApplicationError::IpBlocked { until: None }).status(),
+            map_application_error(ApplicationError::IpBlocked {
+                until: time::OffsetDateTime::now_utc() + time::Duration::days(1),
+            })
+            .status(),
             http::StatusCode::FORBIDDEN
         );
         assert_eq!(

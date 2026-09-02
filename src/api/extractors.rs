@@ -8,23 +8,13 @@ use axum::{
 };
 use secrecy::SecretString;
 
-use crate::{
-    domain::{ApplicationId, OrganizationId},
-    error::AppError,
-    infrastructure::iam::PresentedCredential,
-};
+use crate::{domain::OrganizationId, error::AppError};
 
-const OBO_PROOF_HEADER: &str = "x-iam-obo-access-proof";
-const APP_ID_HEADER: &str = "x-app-id";
 const ORG_ID_HEADER: &str = "x-org-id";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 const FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
 const MAX_BEARER_TOKEN_BYTES: usize = 4_096;
 const MAX_AUTHORIZATION_HEADER_BYTES: usize = "Bearer ".len() + MAX_BEARER_TOKEN_BYTES;
-const IAM_PROOF_PREFIX: &str = "obo_";
-const IAM_PROOF_PAYLOAD_BYTES: usize = 43;
-const IAM_PROOF_BYTES: usize = IAM_PROOF_PREFIX.len() + IAM_PROOF_PAYLOAD_BYTES;
-const MAX_LOCAL_PROOF_BYTES: usize = 512;
 const MAX_FORWARDED_FOR_BYTES: usize = 1_024;
 
 /// TCP peer address when the listener was started with connection info.
@@ -103,39 +93,13 @@ fn parse_forwarded_ip(entry: &str) -> Result<IpAddr, std::net::AddrParseError> {
         .parse::<IpAddr>()
 }
 
-pub(super) fn management_credential(
-    headers: &HeaderMap,
-    allow_local_credentials: bool,
-) -> Result<PresentedCredential, AppError> {
-    let bearer = optional_bearer(headers)?;
-    let proof = optional_header_bounded(headers, OBO_PROOF_HEADER, MAX_LOCAL_PROOF_BYTES)?;
-    let app_id = optional_header_bounded(headers, APP_ID_HEADER, 255)?;
-
-    if let Some(proof) = proof.as_deref()
-        && !is_canonical_obo_proof(proof)
-        && !(allow_local_credentials && is_local_credential(proof))
-    {
-        return Err(AppError::Unauthenticated);
-    }
-
-    match (bearer, proof, app_id) {
-        (Some(token), None, None) => Ok(PresentedCredential::Bearer(token)),
-        (None, Some(proof), Some(app_id)) => Ok(PresentedCredential::Obo {
-            app_id: ApplicationId::new(app_id)
-                .map_err(|_| AppError::bad_request("invalid_app_id"))?,
-            proof: SecretString::from(proof),
-        }),
-        (None, None | Some(_), None) | (None, None, Some(_)) => Err(AppError::Unauthenticated),
-        _ => Err(AppError::bad_request("ambiguous_credentials")),
-    }
-}
-
-pub(super) fn service_bearer(headers: &HeaderMap) -> Result<SecretString, AppError> {
-    let token = optional_bearer(headers)?.ok_or(AppError::Unauthenticated)?;
-    if headers.contains_key(OBO_PROOF_HEADER) || headers.contains_key(APP_ID_HEADER) {
-        return Err(AppError::bad_request("ambiguous_credentials"));
-    }
-    Ok(token)
+/// Extracts the opaque IAM bearer token every authenticated route requires.
+///
+/// Hook exposes no OBO endpoints: the bearer token is the only credential a
+/// Carbon, Silicon, or service can present, and IAM decides online what it
+/// authorizes.
+pub(super) fn bearer_token(headers: &HeaderMap) -> Result<SecretString, AppError> {
+    optional_bearer(headers)?.ok_or(AppError::Unauthenticated)
 }
 
 pub(super) fn organization_id(headers: &HeaderMap) -> Result<OrganizationId, AppError> {
@@ -241,20 +205,6 @@ fn header_count(headers: &HeaderMap, name: &str) -> usize {
     headers.get_all(name).iter().count()
 }
 
-fn is_canonical_obo_proof(value: &str) -> bool {
-    value.len() == IAM_PROOF_BYTES
-        && value.starts_with(IAM_PROOF_PREFIX)
-        && value[IAM_PROOF_PREFIX.len()..]
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_'))
-}
-
-fn is_local_credential(value: &str) -> bool {
-    value.starts_with("local:")
-        && value.len() <= MAX_LOCAL_PROOF_BYTES
-        && value.bytes().all(|byte| byte.is_ascii_graphic())
-}
-
 #[cfg(test)]
 mod tests {
     use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
@@ -262,8 +212,7 @@ mod tests {
     use axum::http::{HeaderMap, HeaderValue};
     use secrecy::ExposeSecret as _;
 
-    use super::{PeerAddress, client_ip, idempotency_key, management_credential, require_json};
-    use crate::infrastructure::iam::PresentedCredential;
+    use super::{PeerAddress, bearer_token, client_ip, idempotency_key, require_json};
 
     fn peer() -> PeerAddress {
         PeerAddress(Some(SocketAddr::new(
@@ -280,27 +229,23 @@ mod tests {
             HeaderValue::from_static("Bearer token_123"),
         );
 
-        let credential = management_credential(&headers, false)?;
-        match credential {
-            PresentedCredential::Bearer(token) => {
-                assert_eq!(token.expose_secret(), "token_123");
-            }
-            PresentedCredential::Obo { .. } => return Err("expected bearer".into()),
-        }
+        assert_eq!(bearer_token(&headers)?.expose_secret(), "token_123");
         Ok(())
     }
 
     #[test]
-    fn rejects_mixed_credential_forms() {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            HeaderValue::from_static("Bearer token_123"),
-        );
-        headers.insert("x-app-id", HeaderValue::from_static("app"));
-        headers.insert("x-iam-obo-access-proof", HeaderValue::from_static("proof"));
-
-        assert!(management_credential(&headers, false).is_err());
+    fn rejects_missing_or_malformed_bearers() {
+        assert!(bearer_token(&HeaderMap::new()).is_err());
+        for value in [
+            "Basic dXNlcjpwYXNz",
+            "Bearer",
+            "Bearer ",
+            "Bearer two words",
+        ] {
+            let mut headers = HeaderMap::new();
+            headers.insert("authorization", HeaderValue::from_static(value));
+            assert!(bearer_token(&headers).is_err(), "{value:?} is not a bearer");
+        }
     }
 
     #[test]
@@ -316,7 +261,7 @@ mod tests {
         headers.append("authorization", HeaderValue::from_static("Bearer first"));
         headers.append("authorization", HeaderValue::from_static("Bearer second"));
 
-        assert!(management_credential(&headers, false).is_err());
+        assert!(bearer_token(&headers).is_err());
     }
 
     #[test]
@@ -328,29 +273,6 @@ mod tests {
         );
 
         assert!(require_json(&headers).is_ok());
-    }
-
-    #[test]
-    fn validates_canonical_obo_proofs_and_gates_local_proofs()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let mut headers = HeaderMap::new();
-        headers.insert("x-app-id", HeaderValue::from_static("calendar"));
-        headers.insert(
-            "x-iam-obo-access-proof",
-            HeaderValue::from_str(&format!("obo_{}", "A".repeat(43)))?,
-        );
-        assert!(matches!(
-            management_credential(&headers, false)?,
-            PresentedCredential::Obo { .. }
-        ));
-
-        headers.insert(
-            "x-iam-obo-access-proof",
-            HeaderValue::from_static("local:silicon:member:cos:tos"),
-        );
-        assert!(management_credential(&headers, false).is_err());
-        assert!(management_credential(&headers, true).is_ok());
-        Ok(())
     }
 
     #[test]

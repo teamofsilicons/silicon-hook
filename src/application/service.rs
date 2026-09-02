@@ -132,13 +132,11 @@ pub(super) fn authorize_action(
     authorization: &AuthorizationContext,
     action: Action,
     silicon_id: &SiliconId,
-    creator_application: Option<&crate::domain::ApplicationId>,
 ) -> Result<(), ApplicationError> {
-    match authorize(authorization, action, silicon_id, creator_application) {
+    match authorize(authorization, action, silicon_id) {
         AuthorizationDecision::Allowed => Ok(()),
         AuthorizationDecision::TargetNotVisible => Err(ApplicationError::NotFound),
-        AuthorizationDecision::InsufficientPrivilege
-        | AuthorizationDecision::ApplicationOwnershipMismatch => Err(ApplicationError::Forbidden),
+        AuthorizationDecision::InsufficientPrivilege => Err(ApplicationError::Forbidden),
     }
 }
 
@@ -148,7 +146,6 @@ pub(super) fn audit_context(
 ) -> AuditContext {
     AuditContext {
         actor: authorization.actor().clone(),
-        calling_application_id: authorization.acting_application().cloned(),
         request_id,
     }
 }
@@ -163,7 +160,6 @@ pub(super) fn idempotency_scope(
     IdempotencyScope {
         operation: operation.to_owned(),
         actor: authorization.actor().clone(),
-        calling_application_id: authorization.acting_application().cloned(),
         organization_id: authorization.organization_id().clone(),
         target_id,
         key,
@@ -207,12 +203,13 @@ fn database_is_unavailable(error: &sqlx::Error) -> bool {
 pub(super) fn map_store_error(error: StoreError) -> ApplicationError {
     match error {
         StoreError::NotFound { .. } => ApplicationError::NotFound,
-        StoreError::StateConflict { .. } => ApplicationError::StateConflict,
+        StoreError::StateConflict { .. } | StoreError::IamDefaultExists => {
+            ApplicationError::StateConflict
+        }
         StoreError::IdempotencyConflict => ApplicationError::IdempotencyConflict,
         StoreError::SecretReplayExpired | StoreError::SecretSuperseded => {
             ApplicationError::SecretUnavailable
         }
-        StoreError::IamDefaultExists => ApplicationError::IamHookAlreadyExists,
         StoreError::HookLimitReached => ApplicationError::HookLimitReached,
         StoreError::InvalidArgument { field, .. } => ApplicationError::Validation { field },
         StoreError::Database(source) if database_is_unavailable(&source) => {
@@ -259,11 +256,11 @@ mod tests {
         let url = endpoint_url(
             &url::Url::parse("https://hook.teamofsilicons.com/")?,
             &SiliconId::new("cos:tos")?,
-            &EndpointKey::parse("402e2f")?,
+            &EndpointKey::parse("402e2j2u")?,
         )?;
         assert_eq!(
             url.as_str(),
-            "https://hook.teamofsilicons.com/silicon/cos:tos/402E2F"
+            "https://hook.teamofsilicons.com/silicon/cos:tos/402E2J2U"
         );
         Ok(())
     }

@@ -35,8 +35,8 @@ pub enum ApplicationError {
     /// The client address is blocked for this endpoint.
     #[error("client address is blocked for this endpoint")]
     IpBlocked {
-        /// End of a temporary block; `None` when permanent.
-        until: Option<OffsetDateTime>,
+        /// End of the block.
+        until: OffsetDateTime,
     },
     /// An idempotency key was reused for different content.
     #[error("idempotency key conflicts with an earlier request")]
@@ -47,9 +47,6 @@ pub enum ApplicationError {
     /// A one-time credential can no longer be replayed safely.
     #[error("one-time secret is no longer available")]
     SecretUnavailable,
-    /// IAM has already provisioned the unique default hook.
-    #[error("the Silicon IAM hook already exists")]
-    IamHookAlreadyExists,
     /// The target Silicon owns the maximum number of retained hooks.
     #[error("the retained hook limit has been reached")]
     HookLimitReached,

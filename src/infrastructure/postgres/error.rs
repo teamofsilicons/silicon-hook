@@ -52,7 +52,7 @@ pub enum StoreError {
     /// A generated endpoint key collided with a live or retired key.
     #[error("endpoint key already exists or was retired for this Silicon")]
     EndpointKeyConflict,
-    /// IAM has already provisioned a default hook for this Silicon.
+    /// A concurrent request already created the Silicon's IAM hook.
     #[error("the Silicon IAM hook already exists")]
     IamDefaultExists,
     /// The Silicon already owns the maximum number of recoverable hooks.

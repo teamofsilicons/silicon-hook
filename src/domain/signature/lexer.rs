@@ -41,6 +41,8 @@ pub enum ParseErrorKind {
     UnknownFunction(String),
     /// A block root is not defined.
     UnknownRoot(String),
+    /// A block path names a member the contract does not define.
+    UnsupportedPath(String),
     /// A keyword argument is not accepted by the function.
     UnexpectedOption(String),
     /// The `order:` keyword must be `asc` or `desc`.
@@ -83,6 +85,7 @@ impl fmt::Display for ParseErrorKind {
             }
             Self::UnknownFunction(name) => write!(formatter, "unknown function {name}"),
             Self::UnknownRoot(name) => write!(formatter, "unknown block {name}"),
+            Self::UnsupportedPath(path) => write!(formatter, "{path} is not a supported block"),
             Self::UnexpectedOption(name) => write!(formatter, "unexpected option {name}"),
             Self::InvalidOrder(value) => {
                 write!(formatter, "order must be asc or desc, not {value}")

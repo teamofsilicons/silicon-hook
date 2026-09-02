@@ -156,7 +156,9 @@ impl Parser {
             }
             self.count_node()?;
         }
-        Ok(Expr::Path(Path { root, segments }))
+        let path = Path { root, segments };
+        validate_path(&path, offset)?;
+        Ok(Expr::Path(path))
     }
 
     fn call(&mut self, name: &str, offset: usize, depth: usize) -> Result<Expr, ParseError> {
@@ -304,11 +306,95 @@ fn validate_call(call: &Call, offset: usize) -> Result<(), ParseError> {
     Ok(())
 }
 
+/// Request blocks the contract defines, in contract order.
+const REQUEST_BLOCKS: &[&str] = &[
+    "raw_body",
+    "raw_body_bytes",
+    "body",
+    "form",
+    "multipart",
+    "method",
+    "url",
+    "scheme",
+    "authority",
+    "host",
+    "hostname",
+    "port",
+    "path",
+    "query_string",
+    "query",
+    "headers",
+    "cookies",
+];
+
+/// Rejects block paths the contract does not define at parse time, so a
+/// misconfigured policy fails when the hook is created rather than when the
+/// first provider request arrives. Dynamic members (JSON paths, header names,
+/// form and query keys) are still resolved against the live request.
+fn validate_path(path: &Path, offset: usize) -> Result<(), ParseError> {
+    let first = match path.segments.first() {
+        Some(Segment::Key(name)) => Some(name.as_str()),
+        Some(Segment::Index(_)) => None,
+        None => Some(""),
+    };
+    let supported = match path.root {
+        Root::Request => first.is_some_and(|name| REQUEST_BLOCKS.contains(&name)),
+        Root::Hook => path.segments.len() == 1 && matches!(first, Some("id" | "url")),
+        Root::Secret => path.segments.is_empty(),
+        // Hook verifies signatures; it never holds a provider's private key.
+        Root::Key => path.segments.len() == 1 && first == Some("public"),
+    };
+    if supported {
+        Ok(())
+    } else {
+        Err(ParseError {
+            offset,
+            kind: ParseErrorKind::UnsupportedPath(path.to_string()),
+        })
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
         Expr, Function, ParseError, ParseErrorKind, Path, Root, Segment, SortOrder, parse,
     };
+
+    #[test]
+    fn contract_blocks_are_checked_at_parse_time() {
+        for source in [
+            "request.raw_body",
+            "request.body.data.id",
+            "request.headers[\"x-signature\"]",
+            "request.query.token",
+            "hook.id",
+            "hook.url",
+            "secret",
+            "key.public",
+        ] {
+            assert!(parse(source).is_ok(), "{source} is a contract block");
+        }
+        for (source, expected) in [
+            ("request", "request"),
+            ("request.private", "request.private"),
+            ("request[0]", "request[0]"),
+            ("hook.secret", "hook.secret"),
+            ("hook.id.more", "hook.id.more"),
+            ("secret.value", "secret.value"),
+            ("key", "key"),
+            ("key.private", "key.private"),
+            ("key.public.pem", "key.public.pem"),
+        ] {
+            assert_eq!(
+                parse(source).map(|_| ()),
+                Err(ParseError {
+                    offset: 0,
+                    kind: ParseErrorKind::UnsupportedPath(expected.to_owned()),
+                }),
+                "{source} is not a contract block"
+            );
+        }
+    }
 
     #[test]
     fn parses_the_default_standard_webhooks_payload() -> Result<(), ParseError> {

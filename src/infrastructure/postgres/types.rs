@@ -3,9 +3,8 @@
 use time::OffsetDateTime;
 
 use crate::domain::{
-    ActorRef, ApplicationId, BlockReason, BlockedRequestId, EncryptedSecret, EndpointKey, EventId,
-    HistoryCursor, HistoryFilter, Hook, HookId, HookUpdate, OrganizationId, SiliconId,
-    request::CapturedRequest,
+    ActorRef, BlockReason, BlockedRequestId, EncryptedSecret, EndpointKey, EventId, HistoryCursor,
+    HistoryFilter, Hook, HookId, HookUpdate, OrganizationId, SiliconId, request::CapturedRequest,
 };
 
 /// Stable scope and content binding for a management idempotency key.
@@ -13,10 +12,8 @@ use crate::domain::{
 pub struct IdempotencyScope {
     /// Stable operation name, such as `hook.create`.
     pub operation: String,
-    /// Effective IAM actor, excluding an OBO calling application.
+    /// Authenticated IAM actor.
     pub actor: ActorRef,
-    /// OBO calling application; part of the replay-authority boundary.
-    pub calling_application_id: Option<ApplicationId>,
     /// Organization in which the operation is performed.
     pub organization_id: OrganizationId,
     /// Stable operation-specific target identity.
@@ -46,10 +43,8 @@ pub struct PersistedResponse {
 /// Actor and request facts written to the append-only audit trail.
 #[derive(Clone, Debug)]
 pub struct AuditContext {
-    /// Effective IAM actor.
+    /// Authenticated IAM actor.
     pub actor: ActorRef,
-    /// OBO application, separate from the effective actor.
-    pub calling_application_id: Option<ApplicationId>,
     /// Correlation identifier assigned by the API.
     pub request_id: Option<String>,
 }
@@ -91,8 +86,8 @@ pub enum AuditAction {
     SecretRotated,
     /// A hook endpoint key was replaced and the old key retired.
     EndpointRotated,
-    /// IAM provisioned the default hook for a Silicon.
-    IamProvisioned,
+    /// The Silicon's IAM hook was created for registration with IAM.
+    IamConnected,
 }
 
 impl AuditAction {
@@ -106,7 +101,7 @@ impl AuditAction {
             Self::Restored => "hook.restored",
             Self::SecretRotated => "hook.secret_rotated",
             Self::EndpointRotated => "hook.endpoint_rotated",
-            Self::IamProvisioned => "hook.iam_provisioned",
+            Self::IamConnected => "hook.iam_connected",
         }
     }
 }

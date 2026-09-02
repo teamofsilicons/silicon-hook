@@ -11,7 +11,6 @@ use crate::{
 pub(super) struct ApiState {
     pub(super) application: HookApplication,
     pub(super) iam: IamClient,
-    pub(super) allow_local_credentials: bool,
     pub(super) trusted_proxy_hops: u8,
     pub(super) realtime: RealtimeSettings,
     pub(super) wakeups: DeliveryWakeups,

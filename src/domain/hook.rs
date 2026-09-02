@@ -7,8 +7,7 @@ use time::{Duration, OffsetDateTime};
 use zeroize::Zeroizing;
 
 use super::{
-    ActorRef, ApplicationId, DomainError, EntropyError, HookId, OrganizationId, SiliconId,
-    TransitionError,
+    ActorRef, DomainError, EntropyError, HookId, OrganizationId, SiliconId, TransitionError,
     signature::{MAX_SECRET_BYTES, SignatureConfig},
 };
 
@@ -23,7 +22,7 @@ pub const ENCRYPTION_TAG_BYTES: usize = 16;
 /// Recovery window for a soft-deleted hook.
 pub const HOOK_RECOVERY_DAYS: i64 = 45;
 /// Number of characters in an endpoint routing key.
-pub const ENDPOINT_KEY_LENGTH: usize = 6;
+pub const ENDPOINT_KEY_LENGTH: usize = 8;
 
 const ENDPOINT_KEY_ALPHABET: &[u8; 36] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
 const SECRET_ALPHABET: &[u8; 62] =
@@ -33,7 +32,7 @@ const MAX_HOOK_DESCRIPTION_LENGTH: usize = 2_000;
 const MAX_ENCRYPTION_KEY_ID_BYTES: usize = 64;
 const MAX_TIME_ZONE_BYTES: usize = 64;
 
-/// Six-character uppercase alphanumeric routing key in a public webhook URL.
+/// Eight-character uppercase alphanumeric routing key in a public webhook URL.
 ///
 /// The key routes a request to one hook and is never a credential; authenticity
 /// comes from the hook's signature configuration.
@@ -58,7 +57,7 @@ impl EndpointKey {
     ///
     /// # Errors
     ///
-    /// Returns [`DomainError`] unless the input contains exactly six ASCII
+    /// Returns [`DomainError`] unless the input contains exactly eight ASCII
     /// letters or digits.
     pub fn parse(value: &str) -> Result<Self, DomainError> {
         if value.len() != ENDPOINT_KEY_LENGTH
@@ -66,7 +65,7 @@ impl EndpointKey {
         {
             return Err(DomainError::InvalidFormat {
                 field: "endpoint_key",
-                reason: "must be exactly six ASCII letters or digits",
+                reason: "must be exactly eight ASCII letters or digits",
             });
         }
         Ok(Self(value.to_ascii_uppercase()))
@@ -549,10 +548,8 @@ pub struct NewHook {
     pub signing: SigningPolicy,
     /// Zone for rendered delivery summaries.
     pub time_zone: HookTimeZone,
-    /// Effective creator.
+    /// Creator.
     pub created_by: ActorRef,
-    /// OBO application that created the hook, if any.
-    pub created_via_application: Option<ApplicationId>,
     /// Authoritative creation time.
     pub created_at: OffsetDateTime,
 }
@@ -578,10 +575,8 @@ pub struct HookSnapshot {
     pub time_zone: HookTimeZone,
     /// Lifecycle state.
     pub status: HookStatus,
-    /// Effective creator.
+    /// Creator.
     pub created_by: ActorRef,
-    /// OBO application that created it, if any.
-    pub created_via_application: Option<ApplicationId>,
     /// Creation time.
     pub created_at: OffsetDateTime,
     /// Time at which ingress was disabled for a disabled hook.
@@ -618,7 +613,6 @@ impl Hook {
                 time_zone: new.time_zone,
                 status: HookStatus::Active,
                 created_by: new.created_by,
-                created_via_application: new.created_via_application,
                 created_at: new.created_at,
                 disabled_at: None,
                 deleted_at: None,
@@ -733,12 +727,6 @@ impl Hook {
     #[must_use]
     pub const fn created_by(&self) -> &ActorRef {
         &self.snapshot.created_by
-    }
-
-    /// Returns the OBO creating application, if any.
-    #[must_use]
-    pub const fn created_via_application(&self) -> Option<&ApplicationId> {
-        self.snapshot.created_via_application.as_ref()
     }
 
     /// Returns the creation time.
@@ -1041,21 +1029,20 @@ mod tests {
             silicon_id: SiliconId::new("silicon:test")?,
             name: HookName::new("GitHub")?,
             description: HookDescription::optional(Some("Source events".to_owned()))?,
-            endpoint_key: EndpointKey::parse("A0B1C2")?,
+            endpoint_key: EndpointKey::parse("A0B1C2D3")?,
             signing: policy(1)?,
             time_zone: HookTimeZone::default(),
             created_by: ActorRef::new(ActorKind::Carbon, ActorId::new("carbon:test")?),
-            created_via_application: None,
             created_at: datetime!(2026-01-01 0:00 UTC),
         }))
     }
 
     #[test]
-    fn endpoint_key_is_six_uppercase_alphanumerics() -> Result<(), Box<dyn std::error::Error>> {
-        assert_eq!(EndpointKey::parse("a0z1c2")?.as_str(), "A0Z1C2");
-        assert!(EndpointKey::parse("A0B1C").is_err());
+    fn endpoint_key_is_eight_uppercase_alphanumerics() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(EndpointKey::parse("a0z1c2d3")?.as_str(), "A0Z1C2D3");
         assert!(EndpointKey::parse("A0B1C2D").is_err());
-        assert!(EndpointKey::parse("A0-1C2").is_err());
+        assert!(EndpointKey::parse("A0B1C2D3E").is_err());
+        assert!(EndpointKey::parse("A0-1C2D3").is_err());
         let generated = EndpointKey::generate()?;
         assert_eq!(generated.as_str().len(), ENDPOINT_KEY_LENGTH);
         assert!(
@@ -1142,7 +1129,7 @@ mod tests {
             Err(TransitionError::HookRecoveryExpired)
         );
         assert_eq!(
-            hook.rotate_endpoint(EndpointKey::parse("ZZZZZZ")?, deleted_at),
+            hook.rotate_endpoint(EndpointKey::parse("ZZZZZZZZ")?, deleted_at),
             Err(TransitionError::HookAlreadyDeleted)
         );
         hook.restore(deleted_at + Duration::days(HOOK_RECOVERY_DAYS))?;
@@ -1166,9 +1153,9 @@ mod tests {
         assert_eq!(hook.encrypted_signing_secret(), Some(&replacement));
 
         let rotated_at = datetime!(2026-01-04 0:00 UTC);
-        let retired = hook.rotate_endpoint(EndpointKey::parse("NEW123")?, rotated_at)?;
-        assert_eq!(retired.as_str(), "A0B1C2");
-        assert_eq!(hook.endpoint_key().as_str(), "NEW123");
+        let retired = hook.rotate_endpoint(EndpointKey::parse("NEW12345")?, rotated_at)?;
+        assert_eq!(retired.as_str(), "A0B1C2D3");
+        assert_eq!(hook.endpoint_key().as_str(), "NEW12345");
         assert_eq!(hook.endpoint_rotated_at(), Some(rotated_at));
 
         hook.enable(datetime!(2026-01-05 0:00 UTC))?;
@@ -1224,7 +1211,7 @@ mod tests {
 
     proptest! {
         #[test]
-        fn every_alphanumeric_key_round_trips(value in "[A-Za-z0-9]{6}") {
+        fn every_alphanumeric_key_round_trips(value in "[A-Za-z0-9]{8}") {
             let parsed = EndpointKey::parse(&value);
             prop_assert!(parsed.is_ok());
             if let Ok(parsed) = parsed {

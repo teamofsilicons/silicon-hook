@@ -20,10 +20,6 @@ pub(super) async fn reserve_management_key(
     now: OffsetDateTime,
 ) -> Result<ManagementReservation, StoreError> {
     let actor_kind = super::actor_kind_as_str(scope.actor.kind());
-    let calling_app_id = scope
-        .calling_application_id
-        .as_ref()
-        .map_or("", crate::domain::ApplicationId::as_str);
 
     // Expired rows are reusable even when the asynchronous sweeper has not run.
     // The row lock acquired by DELETE/INSERT also serializes identical keys.
@@ -33,17 +29,15 @@ pub(super) async fn reserve_management_key(
         WHERE operation = $1
           AND actor_kind = $2
           AND actor_id = $3
-          AND calling_app_id = $4
-          AND org_id = $5
-          AND target_id = $6
-          AND idempotency_key = $7
-          AND expires_at <= $8
+          AND org_id = $4
+          AND target_id = $5
+          AND idempotency_key = $6
+          AND expires_at <= $7
         ",
     )
     .bind(&scope.operation)
     .bind(actor_kind)
     .bind(scope.actor.id().as_str())
-    .bind(calling_app_id)
     .bind(scope.organization_id.as_str())
     .bind(&scope.target_id)
     .bind(&scope.key)
@@ -57,7 +51,6 @@ pub(super) async fn reserve_management_key(
             operation,
             actor_kind,
             actor_id,
-            calling_app_id,
             org_id,
             target_id,
             idempotency_key,
@@ -65,15 +58,14 @@ pub(super) async fn reserve_management_key(
             created_at,
             expires_at
         )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9,
-                $9 + INTERVAL '24 hours')
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8,
+                $8 + INTERVAL '24 hours')
         ON CONFLICT DO NOTHING
         ",
     )
     .bind(&scope.operation)
     .bind(actor_kind)
     .bind(scope.actor.id().as_str())
-    .bind(calling_app_id)
     .bind(scope.organization_id.as_str())
     .bind(&scope.target_id)
     .bind(&scope.key)
@@ -99,17 +91,15 @@ pub(super) async fn reserve_management_key(
         WHERE operation = $1
           AND actor_kind = $2
           AND actor_id = $3
-          AND calling_app_id = $4
-          AND org_id = $5
-          AND target_id = $6
-          AND idempotency_key = $7
+          AND org_id = $4
+          AND target_id = $5
+          AND idempotency_key = $6
         FOR UPDATE
         ",
     )
     .bind(&scope.operation)
     .bind(actor_kind)
     .bind(scope.actor.id().as_str())
-    .bind(calling_app_id)
     .bind(scope.organization_id.as_str())
     .bind(&scope.target_id)
     .bind(&scope.key)
@@ -134,34 +124,28 @@ pub(super) async fn finish_management_key(
     let response_status =
         i16::try_from(response.status).map_err(|_| StoreError::NumericRange { field: "status" })?;
     let actor_kind = super::actor_kind_as_str(scope.actor.kind());
-    let calling_app_id = scope
-        .calling_application_id
-        .as_ref()
-        .map_or("", crate::domain::ApplicationId::as_str);
     let result = sqlx::query(
         r"
         UPDATE hook_private.management_idempotency
-        SET response_status = $8,
-            resource_id = $9,
-            response_secret_key_id = $10,
-            response_secret_nonce = $11,
-            response_encrypted_secret = $12,
-            secret_replay_until = $13
+        SET response_status = $7,
+            resource_id = $8,
+            response_secret_key_id = $9,
+            response_secret_nonce = $10,
+            response_encrypted_secret = $11,
+            secret_replay_until = $12
         WHERE operation = $1
           AND actor_kind = $2
           AND actor_id = $3
-          AND calling_app_id = $4
-          AND org_id = $5
-          AND target_id = $6
-          AND idempotency_key = $7
-          AND request_digest = $14
+          AND org_id = $4
+          AND target_id = $5
+          AND idempotency_key = $6
+          AND request_digest = $13
           AND response_status IS NULL
         ",
     )
     .bind(&scope.operation)
     .bind(actor_kind)
     .bind(scope.actor.id().as_str())
-    .bind(calling_app_id)
     .bind(scope.organization_id.as_str())
     .bind(&scope.target_id)
     .bind(&scope.key)
