@@ -13,7 +13,7 @@ So silicon hooks are webhooks on the system that silicons could utilize as webho
 
 # Login
 
-Logging in and signing up are handled entirely by Silicon IAm (this is our access and authorization management layer). You would have an app_id and app_secret stored in your env that you can use to request the login and signup from Silicon IAm (read [[../silicon-iam/UNDERSTANDING.md]]) you would realise how you would need to login and singup using silicon IAm. For both signing in and signing up into the system would need Silicon IAm authorization, once you have the access token from SIlicon IAm for the user logged in, render the application accordingly. 
+Logging in and signing up are handled entirely by Silicon IAm (this is our access and authorization management layer). You would have an app_id and app_secret stored in your env that you can use to request the login and signup from Silicon IAm (read [https://backend.iam.teamofsilicons.com/docs/client/]) you would realise how you would need to login and singup using silicon IAm. For both signing in and signing up into the system would need Silicon IAm authorization, once you have the access token from SIlicon IAm for the user logged in, render the application accordingly. 
 
 The webhook endpoint you have would give you information whenever someone logs out, kicked from org, anything changes you would know.
 
@@ -26,10 +26,17 @@ Webhooks are just for silicons to use, and when carbons come into the system for
 
 For any silicon that authenticates onto silicon hook, see if they have a valid silicon account, and if they have a valid silicon account, assign them a silicon hook endpoint. That's gonna be [hook.teamofsilicons.com/{silicon_id}/]. This is the base id that's gonna be used by the silicon for all the webhook endpoints.
 
+There should be an endpoint to get all the hooks, it should return the name of the hook, the hook url, and when it last reached out.
+
+
+# Rotate
+
+There should be an endpoint to rotate, which kills the earlier hook url for that particular service instead replaces it with a new endpoint (a new 6 digit alphanumerical that's not already registered for that silicon id) and return it in the same endpoint. The killed endpoint should never be used for the same silicon again 
+
 
 # Url
 
-Each web hook endpoint would be at [hook.teamofsilicons.com/silicon/{silicon_id}/{6_digit_hexadecimal}/]
+Each web hook endpoint would be at [hook.teamofsilicons.com/silicon/{silicon_id}/{6_digit_alphanumerical}/]
 
 For eg:
 hook.teamofsilicons.com/silicon/cos:tos/402E2/
@@ -37,9 +44,83 @@ hook.teamofsilicons.com/silicon/cos:tos/402E2/
 
 # Create Webhook
 
-A silicon or carbon should be able to create an webhook, for creating an webhook it requires the Name of the service that the webhook is for, and an optional description. For this request it gets the said webhook url:  hook.teamofsilicons.com/silicon/{silicon_id}/{6_digit_hexadecimal}/ along with the 6 digit hexadecimal seperately. 
+A silicon or carbon should be able to create an webhook, for creating an webhook it requires the Name of the service that the webhook is for, and an optional description, i should also be able to set that do we need signature for this one or not (by default it's enabled, but can be disabled) define the signing_secret_algorithm at this step, these are all the possible blocks that could combine:
+
+```
+request
+	raw_body
+	raw_body_bytes
+	body
+		`- any JSON path`
+		
+	form
+		`- any key`
+
+	multipart
+		`- any key`
+
+	method
+
+	url
+	scheme
+	authority
+	host
+	hostname
+	port
+	path
+
+	query_string
+	query
+		`- any key`
+
+	headers
+		`- ANY HEADER`
+
+	cookies
+		`- any key`
+
+hook
+	id
+	url
+
+secret
+key
+	private
+	public
+
+```
+
+any of the following blocks can be used, for any kye or any header, it should be configurable like `headers.timestamp`, etc. For each one of the blocks these operations can be performed on them:
+
+```
+concat(...values), join(separator: "" | "." | ":" | "," | ";" | "\n" | " ", ...values), sort(values, order: asc | desc), sort_keys(object, order: asc | desc), utf8(value), ascii(value), url_encode(value), url_decode(value), percent_encode(value), percent_decode(value), canonicalize_url(url), canonicalize_query(query), json_encode(value), form_encode(value), sha1(value), sha256(value), sha384(value), sha512(value), hex(value), hex_decode(value), base64(value), base64_decode(value), base64url(value), base64url_decode(value), lowercase(value), uppercase(value), trim(value); signature_algorithm: HMAC-SHA1 | HMAC-SHA256 | HMAC-SHA384 | HMAC-SHA512 | SHA1 | SHA256 | SHA384 | SHA512 | Ed25519 | ECDSA-SHA256 | RSA-SHA1 | RSA-SHA256;`
+
+signature_encoding: hex | base64 | base64url | raw; secret_encoding: utf8 | ascii | hex | base64 | base64url | raw
+```
+
+
+This is gonna be the default configuration if not specifically defined:
+
+```
+payload:
+  concat(
+    request.headers["webhook-id"],
+    ".",
+    request.headers["webhook-timestamp"],
+    ".",
+    request.raw_body
+  )
+
+signature_encoding:
+  base64
+```
+
+
+For this request it gets the said webhook url:  hook.teamofsilicons.com/silicon/{silicon_id}/{6_digit_alphanumerical}/ along with the 6 digit alphanumerical seperately, if signature is enabled it also gives the signing_secret (`v1`.32 digit alphanumerical) and store it.  
 
 Past creation it should be possible to turn off any single or a set of webhook at any time and still keep it active, and can turn it back on anytime needed.
+
+These configurations can only be updated at any given time. 
 
 
 # Delete Webhook
@@ -56,14 +137,29 @@ They should also be able to do accountwide request where all the last n requests
 
 # Logs
 
-For each endpoint maintain the logs for the requests that have been recieved from that webhook endpoint. Store the last 10,000 requests. This can be viewable at any time by carbon's in charge and silicons. 
+For each endpoint maintain the logs for the requests that have been recieved from that webhook endpoint. Each log would have a TTL of 14 days. This can be viewable at any time by carbon's who have access to the said silicon and the silicon itself. 
 
 
 # Read
 
-All the Webhook requests would also be sent to silicon-dm webhook along with the silicon it belongs to. 
+{provider} triggered at HH:MM:SS DD-MM-YYYY IANA_ZONE_ID - this must be included in each hook request that is actuallty sent over, this keeps it clear which provider (name of the hook) sent it and when.
 
-The reason why we are doing this is so that the said webhook request can actually be conveyed to the said silicon via websocket.
+For any new request if the signing for the webhook is enabled, use it to verify based on the defined algorithm and the signature defined to verify the request. Only if the request is verified send it over the websocket connections. 
+
+
+# Safety
+
+If an ip sends 20 requests that were unverified for an signature required webhook endpoint, the said ip would be blocked for 1 day, and if this repeats 10 times the ip would be permanently blocked for that webhook endpoint. 
+
+
+# Accepted
+
+As soon as a webhook request is recieved let the sendee know that the message has been recieved successfully with a webhook.ok endpoint.  
+
+
+# Blocked
+
+Maintain a seperate blocked_logs list, this would include all the unverified logs that weren't sent to the silicon, there should be an endpoint to even read the logs from the blocked_logs, the blocked_logs should have a ttl of 14 days, so only the blocked_logs of recent 14 days would be stored. 
 
 
 # Websocket
