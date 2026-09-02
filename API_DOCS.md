@@ -1,63 +1,40 @@
 # Silicon Hook API documentation
 
-This document explains every operation in the Silicon Hook OpenAPI contract. The machine-readable contract is in [`openapi.yaml`](./openapi.yaml).
+This document explains every operation in the Silicon Hook OpenAPI contract. The machine-readable contract is in [`openapi.yaml`](./openapi.yaml). The product behavior it implements is [`UNDERSTANDING.md`](./UNDERSTANDING.md).
 
 ## API conventions
 
 ### Base URL
 
-Management and internal operations use:
+Management, history, and delivery operations use:
 
 ```text
 https://hook.teamofsilicons.com/api/v1
 ```
 
-After IAM authenticates a Silicon, Hook recognizes its deterministic identity
-namespace:
-
-```text
-https://hook.teamofsilicons.com/{silicon_id}/
-```
-
-This namespace identifies the authenticated Silicon; it is not a persisted
-hook, an addressable management route, or an ingress credential. Authentication
-does not create resources as a side effect. Public webhook delivery uses a
-signed endpoint returned by explicit hook creation:
+An authenticated Silicon owns the namespace `https://hook.teamofsilicons.com/{silicon_id}/`. Each hook it creates receives a public endpoint inside that namespace:
 
 ```text
 https://hook.teamofsilicons.com/silicon/{silicon_id}/{endpoint_key}
 ```
 
-Hook gives each Silicon multiple inbound webhook endpoints. It authenticates and persists incoming events, retains recent history, and forwards durable system events to Silicon DM.
+The endpoint key is six uppercase alphanumeric characters. It routes a request to a hook and is never a credential; authenticity comes from the hook's signature policy.
 
 ### Authentication
 
 - **Bearer authentication:** IAM access token for Silicon, Carbon, or administrator operations.
 - **OBO Access:** An application supplies both `X-App-ID` and a short-lived `X-IAM-OBO-Access-Proof` to act for an authorized actor.
 - **Service authentication:** IAM service token for internal IAM provisioning.
-
-OBO proofs bind to the action and a stable resource identifier. Hook uses the
-target Silicon ID for collection create/list and event-history actions, and the
-hook UUID for per-hook read, enable/disable, delete, restore, and
-secret-rotation actions. Batch enable/disable binds the target Silicon ID and
-authorizes every selected hook before any state changes.
-- **Public ingress:** Individual webhook URLs are publicly reachable but require request signatures.
+- **Provider ingress:** Endpoint URLs are publicly reachable; each hook's signature policy decides what is delivered.
 - **Organization context:** Management requests require `X-Org-ID`.
 
-Webhook endpoint keys help route requests but are not credentials. Authenticity comes from HMAC signatures and replay protection.
+OBO proofs bind to the action and a stable resource identifier. Collection, history, and delivery actions bind the target Silicon ID; per-hook actions bind the hook UUID. Hook verifies opaque credentials online with IAM and fails closed if IAM cannot make a current decision. Every management response, including errors, carries `Cache-Control: private, no-store`.
 
-Hook verifies opaque credentials online with IAM and fails closed if IAM cannot make a current decision. `X-Org-ID`, Silicon ID suffixes, job roles, and trust metadata are never treated as proof of authority.
-
-Every management and internal-IAM response, including errors, carries
-`Cache-Control: private, no-store`, legacy `Pragma: no-cache`, and a `Vary`
-value covering every supported authorization and organization header. Shared
-caches must never retain hook metadata, event payloads, or one-time secrets.
+Hooks are for Silicons. A Silicon manages only its own hooks. A Carbon sees the hooks, logs, and streams of every Silicon IAM says they can view; organization owners, and administrators with the action-specific capability, may also mutate them. Deleting requires the Silicon itself, an owner, or an administrator with `hook.hooks.delete`.
 
 ### Idempotency
 
-Mutation and ingress idempotency keys contain 8–255 visible ASCII characters. Repeating a key in the same operation scope with the same request returns the original result. Reusing it with different content returns `409 idempotency_conflict`.
-
-One-time-secret responses can be replayed for ten minutes only by the same caller, route, target, request digest, and idempotency key. The idempotency record remains for 24 hours; after the secret replay window, callers rotate the secret instead of retrieving it.
+Create, restore, secret rotation, and endpoint rotation require an `Idempotency-Key` of 8–255 visible ASCII characters. Repeating a key in the same operation scope with the same request returns the original result; reusing it with different content returns `409 idempotency_conflict`. Secret-bearing responses can be replayed for ten minutes; afterwards, rotate instead. Update and activation express a desired state and need no key.
 
 ### Errors
 
@@ -66,250 +43,216 @@ Errors use one stable envelope and include the request correlation ID:
 ```json
 {
   "error": {
-    "code": "validation_failed",
+    "code": "invalid_signature",
     "message": "The request contains invalid data.",
-    "request_id": "0198..."
+    "request_id": "0198...",
+    "details": "unknown function md5 at byte 0"
   }
 }
 ```
 
-Authentication failures return `401`, authorization failures return `403`, invisible resources return `404`, request deadlines return `408`, conflicting idempotency or state returns `409`, expired recovery or one-time-secret replay returns `410`, oversized bodies return `413`, unsupported request media return `415`, invalid input returns `422`, internal invariant failures return a redacted `500`, and dependency outages return `503`.
-
-Opaque identifiers and idempotency keys use visible ASCII and are bounded by
-the machine contract. Event `source` and `subject` values may contain Unicode
-but cannot contain control characters. Hook names, descriptions, and every
-string or member name nested in a JSON payload reject `U+0000`, which
-PostgreSQL text and `jsonb` cannot represent.
+Authentication failures return `401`, authorization failures and blocked addresses return `403`, invisible resources return `404`, request deadlines return `408`, conflicts return `409`, expired recovery, expired one-time-secret replay, and retired endpoints return `410`, oversized requests return `413`, unsupported request media return `415`, invalid input returns `422` (with `details` where a safe explanation exists), internal invariant failures return a redacted `500`, and dependency outages return `503`.
 
 ## Hook management
 
 ### `GET /silicons/{silicon_id}/hooks`
 
-Lists webhook connections belonging to a Silicon.
-
-- **Authentication:** Bearer or OBO Access.
-- **Query:** Optional `include_deleted`.
-- **Returns:** Visible hooks.
-
-The Silicon can list its hooks. Carbons may list hooks only for Silicons IAM says they can view. Owners and authorized administrators can manage organization Silicons.
-Disabled hooks remain visible regardless of `include_deleted`; that flag controls
-only recoverable soft-deleted hooks.
-
-A Silicon can retain at most 1,000 hooks, including soft-deleted hooks still
-inside their 45-day recovery period. This keeps the complete, non-paginated
-hook list bounded. Creation returns `409 hook_limit_reached` until an existing
-hook ages out of recovery; callers can restore a deleted hook immediately.
+Lists a Silicon's hooks. Each item includes the hook `name`, its `endpoint_url`, and `last_received_at`, the time the provider last reached out with a verified request, plus `last_blocked_at` and the full signature policy without secret material. `include_deleted=true` adds hooks still inside their 45-day recovery window. A Silicon can retain at most 1,000 hooks including recoverable deleted ones.
 
 ### `POST /silicons/{silicon_id}/hooks`
 
-Creates a webhook connection.
+Creates a hook.
 
-- **Authentication:** Bearer or OBO Access.
-- **Input:** Service name and optional description.
 - **Required header:** `Idempotency-Key`.
-- **Returns:** Hook metadata and a one-time signing secret.
+- **Input:** `name` (the provider name used in every summary), optional `description`, optional IANA `time_zone` (default `UTC`), and an optional `signature` policy.
+- **Returns:** `201` with the hook, its `endpoint_url`, its `endpoint_key`, and `signing_secret`.
 
-The endpoint URL contains the Silicon ID and an uppercase six-character hexadecimal routing key. The signing secret has the form `whsec_<base64url>` and must be displayed only once and stored securely by the sender.
-
-### `PATCH /silicons/{silicon_id}/hooks`
-
-Enables or disables a set of webhook connections atomically.
-
-- **Authentication:** Bearer or OBO Access with action `hook.hooks.enabled.update`.
-- **Input:** `enabled` and 1–1,000 unique Hook UUIDs in `hook_ids`.
-- **Returns:** The selected hooks in request order and their current states.
-
-The operation validates visibility and mutation authority for every selected
-hook before changing any of them. An unknown, deleted, cross-Silicon, or
-unauthorized member makes the complete request fail with no partial state or
-audit changes. The body expresses a desired state, so retries are intrinsically
-idempotent and do not require `Idempotency-Key`. Only actual state
-transitions write `hook.enabled` or `hook.disabled` audit records.
+Omitting `signature` produces the Standard Webhooks policy with a generated secret of the form `v1.` followed by 32 alphanumeric characters. Give that secret to the provider. When the provider issues its own secret, supply it in `signature.secret` and describe its scheme; the response echoes the supplied secret once. Asymmetric algorithms take `public_key` instead and return `signing_secret: null`.
 
 ### `GET /silicons/{silicon_id}/hooks/{hook_id}`
 
-Returns one hook and its status.
-
-- **Authentication:** Bearer or OBO Access.
-- **Returns:** Hook metadata, endpoint URL, creator, and timestamps.
-
-The signing secret is never returned after creation.
-An expired soft-deleted hook returns `404` even if asynchronous physical purge
-has not processed its row yet.
+Returns one hook. The signing secret is never returned after creation. An expired soft-deleted hook returns `404`.
 
 ### `PATCH /silicons/{silicon_id}/hooks/{hook_id}`
 
-Enables or disables one retained webhook connection.
+Changes any subset of `name`, `description` (`null` clears it), `time_zone`, `enabled`, and `signature`. Signature members merge onto the current policy, so a single member such as `{"signature": {"required": false}}` turns verification off while keeping the rest. `"public_key": null` clears the key. Supplying `secret` replaces the stored secret. Requiring signatures for a symmetric algorithm needs a stored or supplied secret; otherwise the request fails with `422 invalid_signature` and an explanation.
 
-- **Authentication:** Bearer or OBO Access with action `hook.hooks.enabled.update`.
-- **Input:** `{"enabled": true}` or `{"enabled": false}`.
-- **Returns:** Hook metadata with status `active` or `disabled`.
+`enabled` alone uses the `hook.hooks.enabled.update` action; any other member uses `hook.hooks.update`. Requesting the current activation state is a successful no-op.
 
-Disabling immediately makes the signed endpoint return the same `404` used for
-an unknown or deleted endpoint, while retaining its endpoint, signing secret,
-metadata, event history, and quota position. Enabling restores ingress with the
-same endpoint and secret. Repeating the current desired state succeeds without
-another audit record and does not require `Idempotency-Key`. A deleted hook must
-use the separate restore operation.
+### `PATCH /silicons/{silicon_id}/hooks`
+
+Enables or disables 1–1,000 unique hooks atomically. An unknown, deleted, cross-Silicon, or unauthorized member makes the whole request fail with no partial change.
 
 ### `DELETE /silicons/{silicon_id}/hooks/{hook_id}`
 
-Soft-deletes a webhook connection.
-
-- **Authentication:** Bearer or OBO Access.
-- **Returns:** `204 No Content`.
-
-The URL immediately stops accepting events. An active or disabled hook may be
-deleted. The deleted hook remains recoverable for 45 days, along with its
-retained event history. Deletion is distinct from reversible disabling: restore
-is required after deletion.
+Soft-deletes a hook. Its endpoint stops accepting requests immediately. The hook, its secret, and its logs remain recoverable for 45 days; repeating the delete is a successful `204`.
 
 ### `POST /silicons/{silicon_id}/hooks/{hook_id}/restore`
 
-Restores a deleted hook during its recovery period.
-
-- **Authentication:** Bearer or OBO Access.
-- **Required header:** `Idempotency-Key`.
-- **Returns:** Active hook.
-
-Restoration retains the same endpoint and secret.
+Restores a deleted hook within its recovery window with the same endpoint and secret. Requires `Idempotency-Key`.
 
 ### `POST /silicons/{silicon_id}/hooks/{hook_id}/secret/rotate`
 
-Rotates the webhook signing secret.
+Issues a new generated secret and returns it once. The previous secret stops verifying immediately. Not applicable to asymmetric policies. Requires `Idempotency-Key`.
 
-- **Authentication:** Bearer or OBO Access.
-- **Required header:** `Idempotency-Key`.
-- **Returns:** New one-time signing secret.
+### `POST /silicons/{silicon_id}/hooks/{hook_id}/endpoint/rotate`
 
-The old secret is invalid immediately. Rotation is transactional and audited.
+Replaces the endpoint key with a fresh six-character key that has never been used for this Silicon, and permanently retires the previous key: it is never reissued for the Silicon, and requests to it receive `410 endpoint_retired` for as long as the Silicon exists. Returns the hook with its new `endpoint_url`. Requires `Idempotency-Key`.
 
-## Events and logs
+## Signature policy
 
-### `GET /silicons/{silicon_id}/events`
+A policy has six parts:
 
-Lists retained events across one or all of a Silicon's hooks.
+| Member | Meaning | Default |
+| --- | --- | --- |
+| `required` | Withhold requests that do not verify | `true` |
+| `algorithm` | `HMAC-SHA1`, `HMAC-SHA256`, `HMAC-SHA384`, `HMAC-SHA512`, `SHA1`, `SHA256`, `SHA384`, `SHA512`, `Ed25519`, `ECDSA-SHA256`, `RSA-SHA1`, `RSA-SHA256` | `HMAC-SHA256` |
+| `payload` | Expression producing the bytes the provider signed | `concat(request.headers["webhook-id"], ".", request.headers["webhook-timestamp"], ".", request.raw_body)` |
+| `signature` | Expression locating the presented signature | `request.headers["webhook-signature"]` |
+| `signature_encoding` | `hex`, `base64`, `base64url`, or `raw` | `base64` |
+| `secret_encoding` | How the stored secret text becomes key bytes: `utf8`, `ascii`, `hex`, `base64`, `base64url`, `raw` | `utf8` |
 
-- **Authentication:** Bearer or OBO Access.
-- **Filters:** Hook ID and event type.
-- **Pagination:** Cursor and item limit, with a maximum requested page size of 10,000.
-- **Returns:** Event envelopes and delivery state.
+Plain `SHA*` algorithms digest the payload without a key, so the payload must include `secret` itself, for example `sha256(concat(secret, request.raw_body))`. Asymmetric algorithms verify with `public_key` (PEM `SubjectPublicKeyInfo`, PEM `RSA PUBLIC KEY`, or raw hex/base64 key bytes; RSA moduli must be at least 2048 bits) and hold no secret.
 
-Hook exposes the latest 10,000 events per endpoint. Account-wide results are drawn from those per-hook retained windows and have no second storage cap; one response still contains at most 10,000 items. A response also has a conservative 16 MiB serialized-size budget, so a page can contain fewer items than requested and return a continuation cursor. A single event is always returned even when it alone reaches the budget. Payload visibility follows the same Silicon-access rules as hook management, and a hook whose 45-day recovery window has expired contributes no history even if physical cleanup is delayed.
-Disabling a hook does not hide or delete its retained history.
+The presented signature value is split on whitespace and commas, and a short `label=` prefix is stripped from each token, so `sha256=<hex>`, `t=<ts>,v1=<hex>`, and `v1,<base64> v1,<base64>` all verify. Symmetric comparisons run in constant time.
 
-Physical eviction is driven by a transactional per-hook counter and fair due queue rather than a scan or rank of the complete event table. The worker drains independently bounded history, terminal-delivery, idempotency, and deleted-hook batches. Rows outside the visible 10,000 are held for a strict ten-minute minimum before eviction so an accepted request with the maximum allowed future timestamp skew cannot become replayable after its guards cascade.
+### Signature expressions
 
-Each event contains a stable ID, type, occurrence time, schema version, trace ID, payload, receive time, and delivery attempts. `source` and `subject` are present only when the sender supplied them.
-
-## Public webhook ingress
-
-### `POST https://hook.teamofsilicons.com/silicon/{silicon_id}/{endpoint_key}`
-
-Receives an event from an external or internal service.
-
-- **Authentication:** HMAC request signature.
-- **Required headers:** `X-Hook-Signature`, `X-Hook-Timestamp`, and `Idempotency-Key`.
-- **Input:** Event type, payload, and optional source, subject, occurrence time, version, and trace ID.
-- **Returns:** `202 Accepted`, stable `event_id`, and accepted status.
-
-Hook accepts raw JSON bodies up to 1 MiB. It resolves the endpoint, rejects disabled and deleted hooks, checks that the timestamp is within the replay window, verifies the signature over the timestamp and exact raw request body, and deduplicates the idempotency key. It also replay-deduplicates an identical authenticated timestamp and exact body for the same hook even when the sender changes `Idempotency-Key`, returning the original stable `event_id`. The `/api/v1/silicon/{silicon_id}/{endpoint_key}` route and optional trailing slashes are compatibility aliases; generated endpoint URLs always use the canonical root route.
-
-Before persistence, Hook normalizes the event and constructs the exact minimal DM request once. The canonical JSON bytes of the nested DM `payload` have an exact 1 MiB maximum (1,048,576 bytes), matching DM's payload contract, and the complete request must be at most 1,052,672 bytes. These normalized bounds matter because compact JSON numbers can occupy more bytes after parsing and canonical serialization. An oversized raw body, nested payload, or complete request returns `413 payload_too_large`; no event, idempotency binding, replay guard, or outbox work is committed.
-
-After validation, Hook persists the event and durable DM work before returning
-`202 Accepted` with a stable `event_id`. This is the sender-facing acknowledgment
-of local durable acceptance; it does not mean that DM or a connected client has
-received the event. Hook then delivers the event to DM asynchronously. A DM
-outage must not cause the accepted webhook event to disappear.
-
-### Signature version 1
-
-1. Decode the characters after the `whsec_` secret prefix as unpadded base64url. The result must be exactly 32 bytes.
-2. Serialize the JSON once and preserve those exact bytes for transmission.
-3. Set `X-Hook-Timestamp` to the current Unix timestamp in decimal seconds.
-4. Compute HMAC-SHA-256 over `timestamp + "." + raw_body` using the decoded secret bytes.
-5. Send `X-Hook-Signature: v1=<64 lowercase hexadecimal characters>`.
-
-Hook rejects non-canonical encodings, signatures that do not compare in constant time, and timestamps more than 300 seconds in the past or future. The freshness comparison and accepted receive time use PostgreSQL's clock sampled with endpoint resolution, so API replica clock skew cannot weaken replay protection. Whitespace and JSON key ordering matter because the exact transmitted bytes are signed.
-
-Test vector using the literal UTF-8 HMAC key `test-secret` to make independent implementations easy to verify:
+Blocks:
 
 ```text
-timestamp: 1700000000
-body: {"type":"example.created","payload":{"ok":true}}
-signed bytes: 1700000000.{"type":"example.created","payload":{"ok":true}}
-signature: v1=68f7b62fdf8b22413cfa8815fd6fdf3818cbf87ec1faffa352ca50796c38e5b5
+request.raw_body            body as UTF-8 text        request.raw_body_bytes   exact bytes
+request.body.<json path>    parsed JSON member        request.form.<key>       form field
+request.multipart.<key>     multipart part            request.method           uppercase token
+request.url  request.scheme  request.authority  request.host  request.hostname  request.port  request.path
+request.query_string        raw query                 request.query.<key>      decoded value
+request.headers.<name>      case-insensitive          request.cookies.<key>    cookie value
+hook.id  hook.url           receiving hook            secret                   decoded key bytes
+key.public                  DER SubjectPublicKeyInfo
 ```
+
+Functions: `concat(...)`, `join(separator: "" | "." | ":" | "," | ";" | "\n" | " ", ...)`, `sort(list, order: asc | desc)`, `sort_keys(object, order: asc | desc)`, `utf8`, `ascii`, `url_encode`, `url_decode`, `percent_encode`, `percent_decode`, `canonicalize_url`, `canonicalize_query`, `json_encode`, `form_encode`, `sha1`, `sha256`, `sha384`, `sha512`, `hex`, `hex_decode`, `base64`, `base64_decode`, `base64url`, `base64url_decode`, `lowercase`, `uppercase`, `trim`.
+
+Bracket syntax addresses names with hyphens or JSON members: `request.headers["x-hub-signature-256"]`, `request.body.items[0].id`. A missing header evaluates to null and makes the payload unavailable, so a partial payload is never signed. Expressions are limited to 4 KiB, 32 nesting levels, and 512 nodes.
+
+Examples:
+
+```text
+GitHub:  payload request.raw_body
+         signature request.headers["x-hub-signature-256"]    hex
+Stripe:  payload concat(request.headers["stripe-timestamp"], ".", request.raw_body)
+         signature request.headers["stripe-signature"]       hex
+Shopify: payload request.raw_body
+         signature request.headers["x-shopify-hmac-sha256"]  base64
+```
+
+## Ingress
+
+### `ANY https://hook.teamofsilicons.com/silicon/{silicon_id}/{endpoint_key}`
+
+Receives a provider request. `POST` is the common case, but every method is captured because some providers verify endpoints with `GET`. The `/api/v1/silicon/...` route and an optional trailing slash are aliases.
+
+Processing order:
+
+1. Resolve the endpoint. Unknown, disabled, and deleted endpoints return `404`; a retired key returns `410 endpoint_retired`.
+2. Check the client address against the hook's block list. A blocked address receives `403 ip_blocked` (with `Retry-After` for a temporary block) and nothing it sent is stored.
+3. Capture the exact method, URL, headers (at most 128 fields, 64 KiB), and body (at most 1 MiB). Multipart bodies are parsed for expressions.
+4. If the policy requires signatures, verify. A verified request joins the log and the Silicon's delivery stream; an unverified request goes to the blocked log and counts against the address.
+5. Respond `200 {"status":"webhook.ok","receipt_id":"..."}`. The response is identical for verified and withheld requests so it cannot be used as a signature oracle.
+
+Behind a load balancer the deployment sets `HOOK_TRUSTED_PROXY_HOPS` so the blocked address is the real sender rather than the balancer.
+
+### Safety
+
+Twenty unverified requests from one address to one endpoint block that address from the endpoint for one day. Counting restarts after each block; the tenth block is permanent. Blocks are per endpoint, so a misconfigured provider cannot lock a Silicon out of its other hooks.
+
+## History
+
+### `GET /silicons/{silicon_id}/events` and `GET /silicons/{silicon_id}/hooks/{hook_id}/events`
+
+Return the last `n` verified requests (`limit` 1–10,000, default 100) newest first, account-wide or for one hook. Each record contains the stable `id`, `hook_id`, `provider`, the `summary` line, the `delivery_sequence`, `received_at`, and the captured `request` with its method, URL, headers, `content_type`, `body` (text) or `body_base64`, and `remote_ip`. A 16 MiB page budget may shorten a page; follow `next_cursor`. Logs are kept for 14 days.
+
+### `GET /silicons/{silicon_id}/blocked-requests` and `GET /silicons/{silicon_id}/hooks/{hook_id}/blocked-requests`
+
+Return withheld requests in the same shape with a `reason_code` (for example `signature_mismatch`, `signature_missing`, `payload_unavailable`) and a short `reason_detail`. Kept for 14 days.
+
+Cursors are authenticated and bound to the organization, Silicon, collection, and filter; a cursor from the events list is rejected on the blocked list.
+
+## Deliveries
+
+Every verified request is one position in its Silicon's ordered delivery stream. Each consumer (the authenticated actor) has an acknowledged cursor per Silicon, so a Silicon's own acknowledgments and a Carbon viewer's are independent.
+
+### `GET /api/v1/ws?silicon_id=...`
+
+WebSocket delivery. Authenticate the upgrade request like a management call (`Authorization` or OBO headers plus `X-Org-ID`) and repeat `silicon_id` for every stream; an OBO proof binds one Silicon. Frames are JSON text.
+
+Server frames:
+
+```json
+{"type":"ready","protocol_version":1,"connection_id":"...","silicon_ids":["cos:tos"],
+ "acknowledged_through":{"cos:tos":41},"heartbeat_interval_seconds":30,"heartbeat_timeout_seconds":120}
+{"type":"ping","ping_id":"..."}
+{"type":"event","silicon_id":"cos:tos","delivery_sequence":42,"event":{...Event...}}
+{"type":"ack_recorded","silicon_id":"cos:tos","acknowledged_through":42}
+{"type":"error","code":"invalid_frame","message":"...","recoverable":true}
+```
+
+Client frames:
+
+```json
+{"type":"pong","ping_id":"..."}
+{"type":"ack","silicon_id":"cos:tos","through_sequence":42}
+{"type":"resume","silicon_id":"cos:tos","after_sequence":40}
+```
+
+After `ready` the server sends every event after the acknowledged cursor, then live events as they arrive. The server sends `ping` every 30 seconds; the client answers with a `pong` carrying the same `ping_id`. If no valid pong arrives for two minutes the server closes with code `4000` and reason `heartbeat-timeout`. Pings and pongs are never stored, never acknowledged, and never consume sequences. `resume` replays from a client-held position without changing the cursor.
+
+### `GET /silicons/{silicon_id}/deliveries`
+
+Polling alternative. Without `after_sequence` it returns the unacknowledged backlog, oldest first, with the consumer's `cursor` and the Silicon's `latest_sequence`.
+
+### `POST /silicons/{silicon_id}/deliveries/ack`
+
+Acknowledges everything through `through_sequence`. Cursors never move backwards.
+
+### `GET /silicons/{silicon_id}/deliveries/cursor`
+
+Reads the consumer's acknowledged position.
 
 ## IAM provisioning
 
 ### `POST /internal/iam/hooks`
 
-Creates the default IAM hook for a newly created Silicon.
-
-- **Authentication:** IAM service token; only the Silicon IAM service identity may call it.
-- **Required header:** `Idempotency-Key`.
-- **Input:** `org_id` and global `silicon_id`.
-- **Returns:** Default hook named `Silicon IAM` and its one-time signing secret.
-
-The operation is unique per organization and Silicon. IAM stores the returned endpoint and signing secret securely, then sends `iam.silicon.initialized` with the Silicon profile and current organization snapshot after activation. Only an introspected `silicon-iam` service token with the Hook audience may call this route. A deliberately deleted default hook is not recreated silently.
-An immutable private registration survives permanent hook cleanup, so that
-one-time provisioning invariant holds for the lifetime of the organization and
-Silicon identity rather than only during the 45-day recovery window.
-
-## Delivery to Silicon DM
-
-**Compatibility gate:** This section is Hook's required product contract. The
-reviewed Silicon DM `0.2.0` contract on `main` retires its internal Hook-event
-route and system-event WebSocket frame, so it is not compatible with this Hook build. A
-combined release is blocked until the cross-service product decision either
-restores DM's durable Hook-event contract or assigns Hook a different delivery
-destination. Hook keeps accepted events durable in its outbox, but DM `404`
-responses are terminal and cannot provide client acknowledgment or replay. See
-`DM_INTEGRATION.md` for the audited boundary.
-
-The worker submits the published minimal system-event body to `POST /api/v1/internal/hook-events` with Hook's dedicated IAM service token and `Idempotency-Key` set to the stable event ID. Event acceptance and durable delivery work commit atomically; only DM `202 Accepted` marks Hook's delivery as delivered. That response acknowledges durable handoff to DM, not receipt by a WebSocket client. The immutable outbox stores the already-bounded bytes constructed during ingress, and every worker configuration must accept at least that common bound.
-
-Retries reuse the stable event ID and exact body. Retryable failures use capped exponential backoff with full jitter and honor bounded `Retry-After`; the default maximum is 20 attempts and 15 minutes. Terminal or exhausted deliveries remain visible as `failed` for diagnosis while their event is retained. Pending and retrying work survives history eviction; delivered and failed receipts are removed only after their event leaves retained history. Hook provides at-least-once delivery. DM deduplicates the stable event ID so a timeout-after-commit retry does not fan out the same accepted event twice.
-
-DM owns client-session semantics after that handoff: WebSocket representation
-authorization, 30-second JSON heartbeat ping/pong, the two-minute
-`4000 heartbeat-timeout` close, client acknowledgments, sequencing, and replay
-of unacknowledged events. Heartbeats are transient and have no event sequence or
-acknowledgment. Hook does not expose or implement a WebSocket endpoint and does
-not interpret DM's client acknowledgment as Hook delivery state.
+Creates the default `Silicon IAM` hook for a new Silicon. Only the introspected `silicon-iam` service token with the Hook audience and `hook.iam.provision` scope may call it, and it is unique per organization and Silicon for the lifetime of that identity. The default hook verifies IAM's own convention (HMAC-SHA-256 over `X-Silicon-IAM-Timestamp.body`, lowercase hex in `X-Silicon-IAM-Signature`), so IAM signs deliveries with the returned secret and Hook forwards membership, logout, and organization changes to the Silicon like any other provider event. See [`IAM_INTEGRATION.md`](./IAM_INTEGRATION.md).
 
 ## Complete flows
 
-### External event
+### Provider event
 
 ```text
-Sender constructs event envelope
-  -> signs timestamp + raw body
-  -> POSTs to the Silicon endpoint
-  -> Hook verifies and persists
-  -> Hook returns 202 and stable event ID (durable local acceptance)
-  -> Hook queues delivery to DM
-  -> DM returns 202 (durable handoff)
-  -> DM delivers over WebSocket and owns client acknowledgment/replay
+Provider POSTs to the endpoint URL
+  -> Hook routes the key and checks the address
+  -> Hook captures the exact request and verifies the signature policy
+  -> Hook answers 200 webhook.ok
+  -> verified: appended to the 14-day log and the Silicon's delivery stream
+     withheld: appended to the blocked log and counted against the address
+  -> connected sessions receive {"type":"event",...} and acknowledge
+  -> unacknowledged events replay on the next connection
 ```
 
 ### New Silicon
 
 ```text
-IAM creates Silicon identity
+IAM creates the Silicon identity
   -> IAM calls internal Hook provisioning
-  -> Hook creates the default Silicon IAM endpoint
-  -> IAM stores the endpoint
-  -> IAM emits iam.silicon.initialized
+  -> Hook creates the Silicon IAM hook with IAM's signing convention
+  -> IAM stores the endpoint and secret and signs its deliveries
 ```
 
 ## Deliberately deferred operations
 
-- There is no event-detail endpoint by event ID.
-- There is no explicit event replay or redelivery operation.
-- Hook rename and description-update operations are missing.
-- Per-hook rate limits, IP restrictions, and allowlists are not represented.
-- There is no public permanent-purge operation; the worker purges deleted hooks after 45 days.
-- There is no public dead-letter replay operation yet; failed state remains visible while its event is retained and is then purged with the terminal receipt.
+- No event-detail endpoint by event ID.
+- No explicit replay of an individual event beyond `resume`.
+- No timestamp-tolerance option in signature policies; providers that need one are covered by their signed timestamp header and Hook's 14-day log.
+- No public permanent-purge operation; the worker purges deleted hooks after 45 days and logs after 14 days.
+- No unblock operation for addresses; temporary blocks expire after one day and inactive blocks are forgotten after 30 days.

@@ -1,0 +1,8 @@
+# Redocly lint exceptions. Keep this list short and explain every entry.
+#
+# A WebSocket upgrade never produces a 2XX response: success is the 101
+# protocol switch, so the generic "operation must have a 2XX response" rule
+# does not apply to the delivery stream.
+openapi.yaml:
+  operation-2xx-response:
+    - '#/paths/~1api~1v1~1ws/get/responses'

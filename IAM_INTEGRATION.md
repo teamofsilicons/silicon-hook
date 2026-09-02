@@ -1,6 +1,6 @@
 # Silicon Hook ↔ Silicon IAM integration contract
 
-**Contract version:** `silicon-hook-iam/v1`
+**Contract version:** `silicon-hook-iam/v2`
 
 **Status:** Hook implemented; the sibling IAM service requires the changes in
 the compatibility section before production end-to-end operation is possible.
@@ -8,11 +8,9 @@ the compatibility section before production end-to-end operation is possible.
 This document is the authoritative cross-service boundary for Silicon Hook.
 Opaque credentials are always checked online. Missing, stale, contradictory,
 or malformed authorization facts deny access; Hook never derives authority
-from an internal UUID, a public ID, a job-role string, or a tag name.
-
-The authenticated Silicon namespace and WebSocket acknowledgment language in
-the product understanding is additive. It does not deprecate OBO Access or the
-default IAM Hook provisioning and signed-delivery contracts below.
+from an internal UUID, a public ID, a job-role string, or a tag name. The
+client-facing IAM documentation lives at
+<https://backend.iam.teamofsilicons.com/docs/client/>.
 
 ## 1. Management authorization
 
@@ -50,9 +48,6 @@ snapshot:
 }
 ```
 
-The following fields have authorization meaning and are required for a usable
-management decision:
-
 | Field | Required meaning |
 | --- | --- |
 | `active` | `true` only after current credential, principal, session, app, membership, and authorization-epoch checks |
@@ -64,27 +59,25 @@ management decision:
 | `visible_silicon_ids` | Complete current set of global Silicon IDs visible to a Carbon; a Silicon is independently limited to its own public ID |
 | `audience` | Contains exactly the receiving application audience `silicon-hook` |
 
-`principal_id`, `membership_id`, and `expires_at` are recommended audit and
-freshness fields, but they do not independently grant authority. An inactive
-response is exactly `{"active":false}`. IAM must not return a partially active
-snapshot when membership or directory resolution fails.
+An inactive response is exactly `{"active":false}`.
 
 Hook action names are:
 
 - `hook.hooks.list`
 - `hook.hooks.read`
 - `hook.hooks.create`
+- `hook.hooks.update`
 - `hook.hooks.enabled.update`
 - `hook.hooks.delete`
 - `hook.hooks.restore`
 - `hook.hooks.secret.rotate`
-- `hook.events.read`
+- `hook.hooks.endpoint.rotate`
+- `hook.events.read` (history, blocked log, delivery pulls, acknowledgments, and the WebSocket stream)
 - `hook.administrative_override`
 
 For an organization owner, the role supplies the owner authority described by
 Hook policy. An administrator needs the action-specific capability. A normal
-Carbon receives visibility but no administrative authority. Job roles, tags,
-and internal membership IDs never map directly to Hook capabilities.
+Carbon receives visibility but no administrative authority.
 
 ### OBO proof verification
 
@@ -106,45 +99,15 @@ X-Org-ID: <public organization handle>
 ```
 
 The success response must repeat the exact proof bindings and include the same
-authorization snapshot used for bearer introspection:
+authorization snapshot used for bearer introspection, plus `issuer_app_id`,
+`action`, `resource`, and a near-term `expires_at`. Collection, history, and
+delivery operations bind `resource` to the global Silicon ID; per-hook
+operations bind it to the Hook UUID. A WebSocket upgrade authorized by an OBO
+proof therefore subscribes to exactly one Silicon.
 
-```json
-{
-  "valid": true,
-  "proof_id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91d1",
-  "issuer_app_id": "silicon-console",
-  "audience": "silicon-hook",
-  "actor": {
-    "principal_id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91c2",
-    "type": "carbon",
-    "public_id": "alice"
-  },
-  "org_id": "acme",
-  "membership_id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91c5",
-  "organization_role": "admin",
-  "capabilities": ["hook.hooks.enabled.update"],
-  "visible_silicon_ids": ["support:acme"],
-  "action": "hook.hooks.enabled.update",
-  "resource": "018eb4ce-e57a-7d2c-8f9f-a35928ef91e1",
-  "expires_at": "2026-08-31T12:01:00Z",
-  "consumed_at": "2026-08-31T12:00:01Z"
-}
-```
-
-IAM consumes the proof atomically and returns `409` on a different replay. The
-same `Idempotency-Key` and identical request may replay the original successful
-verification response. Hook additionally verifies issuer application, audience,
-organization, action, resource, and a near-term expiry before applying its own
-resource policy. Collection operations bind `resource` to the global Silicon
-ID; per-hook operations bind it to the Hook UUID. A batch enable/disable proof
-uses action `hook.hooks.enabled.update`, binds `resource` to the target Silicon
-ID, and authorizes each selected Hook before Hook commits any transition. The
-single-hook form uses the same action with the Hook UUID as `resource`.
-
-An OBO application may enable or disable only hooks created through that same
+An OBO application may mutate only hooks created through that same
 application unless the represented actor is an organization owner or has
-`hook.administrative_override`. This is the same creator-application ownership
-rule used for delete, restore, and secret rotation.
+`hook.administrative_override`.
 
 ## 2. IAM service authentication
 
@@ -161,9 +124,6 @@ introspection response must bind all three values:
 }
 ```
 
-The service identifier is not authority by itself: Hook also requires the
-audience and scope. This credential cannot call management routes as a user.
-
 ## 3. Default IAM Hook provisioning
 
 IAM sends the public organization handle and global Silicon ID:
@@ -177,93 +137,76 @@ Idempotency-Key: <stable key for this IAM silicon-hook record>
 {"org_id":"acme","silicon_id":"support:acme"}
 ```
 
-`Idempotency-Key` is an HTTP header, not a JSON member. Hook owns the default
-name and description. A successful response is the normal Hook object plus the
-one-time `signing_secret`; IAM needs only `id`, `endpoint_url`, and
+Hook owns the default name and description and configures the hook to verify
+IAM's own signing convention. A successful response is the normal Hook object
+plus the one-time `signing_secret`; IAM needs `id`, `endpoint_url`, and
 `signing_secret`:
 
 ```json
 {
   "id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91e1",
   "endpoint_url": "https://hook.teamofsilicons.com/silicon/support:acme/A1B2C3",
-  "signing_secret": "whsec_<43 base64url characters>"
+  "signing_secret": "v1.<32 alphanumeric characters>"
 }
 ```
 
 IAM must validate the expected HTTPS origin and exact Silicon path, then store
-the URL and signing secret as separately authenticated-encrypted fields. The
-secret is never placed in the URL, logged, or returned from IAM's status API.
-IAM retries the identical request with the same idempotency key during Hook's
-ten-minute secret-response replay window; after that, an indeterminate lost
-secret requires an explicit recovery workflow rather than unsigned delivery.
+the URL and signing secret as separately authenticated-encrypted fields. IAM
+retries the identical request with the same idempotency key during Hook's
+ten-minute secret-response replay window; after that, a lost secret requires
+an explicit recovery workflow. Provisioning is unique per organization and
+Silicon for the lifetime of that identity, even after a deleted default hook
+is purged.
 
 ## 4. IAM event delivery
 
-IAM posts to the returned `endpoint_url`. Every attempt includes:
+IAM posts to the returned `endpoint_url` with its existing application-webhook
+convention:
 
 ```http
 Content-Type: application/json
-Idempotency-Key: <IAM outbox event UUID>
-X-Hook-Timestamp: <canonical Unix seconds>
-X-Hook-Signature: v1=<64 lowercase hexadecimal HMAC bytes>
+X-Silicon-IAM-Event-ID: <IAM outbox event UUID>
+X-Silicon-IAM-Timestamp: <Unix seconds at signing>
+X-Silicon-IAM-Key-Version: <signing-secret version>
+X-Silicon-IAM-Signature: <lowercase hex HMAC-SHA-256>
 ```
 
-The signature is HMAC-SHA-256 using the provisioned `signing_secret` over the
-exact bytes:
+The signature is HMAC-SHA-256 with the provisioned `signing_secret` (its UTF-8
+bytes) over the exact bytes `{X-Silicon-IAM-Timestamp}.{raw body}`. The
+default hook's policy is:
 
 ```text
-{X-Hook-Timestamp}.{exact raw request body bytes}
+algorithm           HMAC-SHA256
+payload             concat(request.headers["x-silicon-iam-timestamp"], ".", request.raw_body)
+signature           request.headers["x-silicon-iam-signature"]
+signature_encoding  hex
+secret_encoding     utf8
 ```
 
-IAM serializes the Hook ingress body once and reuses those exact bytes for all
-retries under the same idempotency key. It maps its domain event into Hook's
-public envelope rather than sending IAM's application-webhook envelope:
-
-```json
-{
-  "type": "iam.silicon.initialized",
-  "source": "silicon-iam",
-  "subject": "support:acme",
-  "occurred_at": "2026-08-31T12:00:00Z",
-  "schema_version": "1",
-  "trace_id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91f1",
-  "payload": {
-    "iam_event_id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91f1",
-    "aggregate": {"type": "silicon", "id": "018eb4ce-e57a-7d2c-8f9f-a35928ef91c8", "version": 1},
-    "data": {}
-  }
-}
-```
-
-The IAM outbox UUID remains in `payload.iam_event_id` for cross-service
-correlation; Hook assigns its own retained event UUID. IAM may generate a new
-timestamp/signature for a retry, but the body and idempotency key remain exact.
+Hook does not interpret IAM's envelope. Every verified delivery reaches the
+Silicon as a raw captured request with the summary line
+`Silicon IAM triggered at HH:MM:SS DD-MM-YYYY UTC`, which is how a Silicon
+learns about logouts, removals from the organization, and other changes.
 
 ## 5. Compatibility audit of the sibling IAM implementation
 
-As audited on 2026-08-31, no safe Hook-only composition covers all required
-principals and transports:
+As audited on 2026-09-02:
 
-- IAM's Rust router implements `/api/v1/oauth/introspect`, but not the documented
-  `/api/v1/auth/tokens/introspect`. OAuth introspection returns internal UUIDs
+- IAM's router implements `/api/v1/oauth/introspect`, but not the documented
+  `/api/v1/auth/tokens/introspect`. Its introspection returns internal UUIDs
   and scopes only; it does not return public actor identity, role, Hook
   capabilities, or Silicon visibility.
-- Existing userinfo/directory endpoints can enrich some Carbon OAuth tokens,
-  but cannot safely identify a Silicon bearer, cannot verify an OBO proof, and
-  do not produce one atomic authorization snapshot. Internal UUIDs cannot be
-  treated as public IDs, and missing visibility cannot be inferred.
-- IAM's Rust router now implements OBO exchange/verify, but verification
-  serializes the represented actor's internal principal UUID and omits the
-  organization role, Hook capabilities, and Silicon visibility required by
-  the target application's resource decision. The current OpenAPI result also
-  lacks those authorization facts.
-- IAM's Hook client currently posts a legacy body to `/api/v1/hooks`, puts the
-  idempotency key in JSON, expects a `url` member, and does not retain Hook's
-  signing secret. Its Silicon delivery path sends a bearer token and different
-  header/body/signature conventions, so Hook correctly rejects it.
+- IAM's `/api/v1/obo-access/verify` now binds a proof to the downstream
+  request's method, registered path, and body digest, rejects `X-Org-ID` and
+  `Idempotency-Key`, and returns `actor`, `org_id`, `endpoint`, and `metadata`
+  but not the organization role, Hook capabilities, or Silicon visibility.
+  Hook's adapter still sends the audience/action/resource form and will be
+  aligned to the request-binding form once IAM returns the authorization
+  snapshot that the resource decision requires.
+- IAM's Hook client posts a legacy body to `/api/v1/hooks`, puts the
+  idempotency key in JSON, and expects a `url` member.
 
-The smallest secure IAM change is to implement the two documented online
-verification routes with the authorization snapshots above, then update only
-IAM's Hook provider/worker and persistence to use sections 3 and 4. Hook must
-not add an unsigned compatibility route or accept a service bearer as public
-webhook authenticity.
+The smallest secure IAM change is to implement the online verification routes
+with the authorization snapshots above, then update IAM's Hook provider to
+sections 3 and 4. IAM's outbound signing convention already matches the
+default hook policy, so no delivery-side change is needed.
