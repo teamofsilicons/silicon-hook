@@ -58,43 +58,25 @@ GRANT USAGE ON SCHEMA hook, hook_private
 GRANT SELECT ON TABLE public._sqlx_migrations
     TO :"api_role", :"worker_role";
 
+-- API: management, ingress, history, and realtime delivery.
 GRANT SELECT, INSERT, UPDATE ON TABLE hook.hooks TO :"api_role";
 GRANT SELECT, INSERT ON TABLE hook.events TO :"api_role";
-GRANT SELECT, INSERT
-    ON TABLE hook_private.ingress_idempotency
-    TO :"api_role";
-GRANT SELECT, INSERT, DELETE
-    ON TABLE hook_private.ingress_authenticated_requests
-    TO :"api_role";
-GRANT INSERT
-    ON TABLE hook_private.iam_hook_registrations
-    TO :"api_role";
-GRANT SELECT, INSERT ON TABLE hook_private.dm_outbox TO :"api_role";
+GRANT SELECT, INSERT ON TABLE hook.blocked_requests TO :"api_role";
+GRANT SELECT, INSERT ON TABLE hook_private.retired_endpoint_keys TO :"api_role";
+GRANT INSERT ON TABLE hook_private.iam_hook_registrations TO :"api_role";
+GRANT SELECT, INSERT, UPDATE ON TABLE hook_private.delivery_sequences TO :"api_role";
+GRANT SELECT, INSERT, UPDATE ON TABLE hook_private.delivery_cursors TO :"api_role";
+GRANT SELECT, INSERT, UPDATE ON TABLE hook_private.ip_blocks TO :"api_role";
 GRANT SELECT, INSERT, UPDATE, DELETE
     ON TABLE hook_private.management_idempotency
     TO :"api_role";
 GRANT INSERT ON TABLE hook_private.audit_log TO :"api_role";
 
-GRANT SELECT, DELETE ON TABLE hook.hooks, hook.events TO :"worker_role";
-GRANT SELECT, UPDATE
-    ON TABLE hook_private.event_retention_state
+-- Worker: retention maintenance only.
+GRANT SELECT, DELETE ON TABLE hook.hooks, hook.events, hook.blocked_requests
     TO :"worker_role";
-GRANT SELECT, UPDATE, DELETE
-    ON TABLE hook_private.dm_outbox
-    TO :"worker_role";
-GRANT SELECT, DELETE
-    ON TABLE hook_private.management_idempotency
-    TO :"worker_role";
+GRANT SELECT, DELETE ON TABLE hook_private.ip_blocks TO :"worker_role";
+GRANT SELECT, DELETE ON TABLE hook_private.management_idempotency TO :"worker_role";
 
--- Trigger functions are not application APIs, but explicit EXECUTE grants keep
--- runtime behavior independent of PostgreSQL's default PUBLIC function grant.
+-- Trigger functions are not application APIs; keep them off PUBLIC.
 REVOKE ALL PRIVILEGES ON FUNCTION hook_private.reject_row_mutation() FROM PUBLIC;
-REVOKE ALL PRIVILEGES ON FUNCTION hook_private.protect_dm_outbox_payload() FROM PUBLIC;
-REVOKE ALL PRIVILEGES ON FUNCTION hook_private.track_event_retention_inserts() FROM PUBLIC;
-REVOKE ALL PRIVILEGES ON FUNCTION hook_private.track_event_retention_deletes() FROM PUBLIC;
-GRANT EXECUTE ON FUNCTION hook_private.protect_dm_outbox_payload()
-    TO :"worker_role";
-GRANT EXECUTE ON FUNCTION hook_private.track_event_retention_inserts()
-    TO :"api_role";
-GRANT EXECUTE ON FUNCTION hook_private.track_event_retention_deletes()
-    TO :"worker_role";

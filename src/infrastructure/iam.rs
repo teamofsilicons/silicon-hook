@@ -518,6 +518,8 @@ fn capability_from_wire(value: &str) -> Option<Capability> {
         "restore_hook" | "hook.hooks.restore" => Some(Capability::RestoreHook),
         "set_hook_enabled" | "hook.hooks.enabled.update" => Some(Capability::SetHookEnabled),
         "rotate_secret" | "hook.hooks.secret.rotate" => Some(Capability::RotateSecret),
+        "rotate_endpoint" | "hook.hooks.endpoint.rotate" => Some(Capability::RotateEndpoint),
+        "update_hook" | "hook.hooks.update" => Some(Capability::UpdateHook),
         "read_events" | "hook.events.read" => Some(Capability::ReadEvents),
         "administrative_override" | "hook.administrative_override" => {
             Some(Capability::AdministrativeOverride)
@@ -562,6 +564,8 @@ fn local_authorize(
             Capability::RestoreHook,
             Capability::SetHookEnabled,
             Capability::RotateSecret,
+            Capability::RotateEndpoint,
+            Capability::UpdateHook,
             Capability::ReadEvents,
             Capability::AdministrativeOverride,
         ]

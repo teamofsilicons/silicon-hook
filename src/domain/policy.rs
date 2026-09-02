@@ -23,13 +23,24 @@ pub enum Action {
     SetHookEnabled,
     /// Replace a hook signing secret.
     RotateSecret,
+    /// Replace a hook's public endpoint key.
+    RotateEndpoint,
+    /// Change hook metadata or signing policy.
+    UpdateHook,
+    /// Acknowledge or pull ordered deliveries.
+    ConsumeDeliveries,
 }
 
 impl Action {
     const fn is_destructive(self) -> bool {
         matches!(
             self,
-            Self::DeleteHook | Self::RestoreHook | Self::SetHookEnabled | Self::RotateSecret
+            Self::DeleteHook
+                | Self::RestoreHook
+                | Self::SetHookEnabled
+                | Self::RotateSecret
+                | Self::RotateEndpoint
+                | Self::UpdateHook
         )
     }
 
@@ -38,11 +49,13 @@ impl Action {
             Self::ListHooks => Capability::ListHooks,
             Self::ReadHook => Capability::ReadHook,
             Self::CreateHook => Capability::CreateHook,
-            Self::ReadEvents => Capability::ReadEvents,
+            Self::ReadEvents | Self::ConsumeDeliveries => Capability::ReadEvents,
             Self::DeleteHook => Capability::DeleteHook,
             Self::RestoreHook => Capability::RestoreHook,
             Self::SetHookEnabled => Capability::SetHookEnabled,
             Self::RotateSecret => Capability::RotateSecret,
+            Self::RotateEndpoint => Capability::RotateEndpoint,
+            Self::UpdateHook => Capability::UpdateHook,
         }
     }
 }

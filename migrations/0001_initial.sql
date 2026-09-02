@@ -17,6 +17,10 @@ CREATE SCHEMA IF NOT EXISTS hook_private;
 
 REVOKE ALL ON SCHEMA hook_private FROM PUBLIC;
 
+-- ---------------------------------------------------------------------------
+-- Hooks
+-- ---------------------------------------------------------------------------
+
 CREATE TABLE hook.hooks (
     id uuid PRIMARY KEY,
     org_id text NOT NULL,
@@ -24,17 +28,24 @@ CREATE TABLE hook.hooks (
     endpoint_key text NOT NULL,
     name text NOT NULL,
     description text,
+    signature_required boolean NOT NULL DEFAULT true,
+    signature_config jsonb NOT NULL,
+    encryption_key_id text,
+    secret_nonce bytea,
+    encrypted_signing_secret bytea,
+    secret_generation integer NOT NULL DEFAULT 1,
+    time_zone text NOT NULL DEFAULT 'UTC',
+    is_iam_default boolean NOT NULL DEFAULT false,
     created_by_kind text NOT NULL,
     created_by_id text NOT NULL,
     created_via_app_id text,
-    encryption_key_id text NOT NULL,
-    secret_nonce bytea NOT NULL,
-    encrypted_signing_secret bytea NOT NULL,
-    secret_generation integer NOT NULL DEFAULT 1,
-    is_iam_default boolean NOT NULL DEFAULT false,
     created_at timestamptz NOT NULL,
     updated_at timestamptz NOT NULL,
+    disabled_at timestamptz,
     deleted_at timestamptz,
+    last_received_at timestamptz,
+    last_blocked_at timestamptz,
+    endpoint_rotated_at timestamptz,
 
     CONSTRAINT hooks_org_id_length CHECK (
         char_length(org_id) BETWEEN 1 AND 100 AND org_id ~ '^[!-~]+$'
@@ -42,10 +53,39 @@ CREATE TABLE hook.hooks (
     CONSTRAINT hooks_silicon_id_length CHECK (
         char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
     ),
-    CONSTRAINT hooks_endpoint_key_format CHECK (endpoint_key ~ '^[0-9A-F]{6}$'),
+    CONSTRAINT hooks_endpoint_key_format CHECK (endpoint_key ~ '^[0-9A-Z]{6}$'),
     CONSTRAINT hooks_name_length CHECK (char_length(name) BETWEEN 1 AND 200),
     CONSTRAINT hooks_description_length CHECK (
         description IS NULL OR char_length(description) <= 2000
+    ),
+    CONSTRAINT hooks_signature_config_object CHECK (
+        jsonb_typeof(signature_config) = 'object'
+    ),
+    CONSTRAINT hooks_secret_complete CHECK (
+        (encryption_key_id IS NULL
+            AND secret_nonce IS NULL
+            AND encrypted_signing_secret IS NULL)
+        OR (encryption_key_id IS NOT NULL
+            AND secret_nonce IS NOT NULL
+            AND encrypted_signing_secret IS NOT NULL)
+    ),
+    CONSTRAINT hooks_encryption_key_id_length CHECK (
+        encryption_key_id IS NULL OR (
+            char_length(encryption_key_id) BETWEEN 1 AND 64
+            AND encryption_key_id ~ '^[A-Za-z0-9_-]+$'
+        )
+    ),
+    CONSTRAINT hooks_secret_nonce_length CHECK (
+        secret_nonce IS NULL OR octet_length(secret_nonce) = 12
+    ),
+    -- A secret is 1..4096 bytes of text plus the 16-byte AES-GCM tag.
+    CONSTRAINT hooks_encrypted_secret_length CHECK (
+        encrypted_signing_secret IS NULL
+        OR octet_length(encrypted_signing_secret) BETWEEN 17 AND 4112
+    ),
+    CONSTRAINT hooks_secret_generation_positive CHECK (secret_generation > 0),
+    CONSTRAINT hooks_time_zone_format CHECK (
+        char_length(time_zone) BETWEEN 1 AND 64 AND time_zone ~ '^[A-Za-z0-9/_+-]+$'
     ),
     CONSTRAINT hooks_created_by_kind CHECK (
         created_by_kind IN ('carbon', 'silicon', 'application', 'service')
@@ -59,27 +99,30 @@ CREATE TABLE hook.hooks (
             AND created_via_app_id ~ '^[!-~]+$'
         )
     ),
-    CONSTRAINT hooks_encryption_key_id_length CHECK (
-        char_length(encryption_key_id) BETWEEN 1 AND 64
-        AND encryption_key_id ~ '^[A-Za-z0-9_-]+$'
-    ),
-    CONSTRAINT hooks_secret_nonce_length CHECK (octet_length(secret_nonce) = 12),
-    CONSTRAINT hooks_encrypted_secret_length CHECK (
-        octet_length(encrypted_signing_secret) = 48
-    ),
-    CONSTRAINT hooks_secret_generation_positive CHECK (secret_generation > 0),
     CONSTRAINT hooks_created_at_finite CHECK (isfinite(created_at)),
-    CONSTRAINT hooks_updated_at_finite CHECK (isfinite(updated_at)),
+    CONSTRAINT hooks_updated_at_valid CHECK (
+        isfinite(updated_at) AND updated_at >= created_at
+    ),
+    CONSTRAINT hooks_disabled_at_valid CHECK (
+        disabled_at IS NULL OR (isfinite(disabled_at) AND disabled_at >= created_at)
+    ),
     CONSTRAINT hooks_deleted_at_valid CHECK (
         deleted_at IS NULL OR (isfinite(deleted_at) AND deleted_at >= created_at)
     ),
-    CONSTRAINT hooks_updated_at_valid CHECK (updated_at >= created_at),
+    CONSTRAINT hooks_lifecycle_timestamps_mutually_exclusive CHECK (
+        disabled_at IS NULL OR deleted_at IS NULL
+    ),
+    CONSTRAINT hooks_activity_timestamps_valid CHECK (
+        (last_received_at IS NULL OR isfinite(last_received_at))
+        AND (last_blocked_at IS NULL OR isfinite(last_blocked_at))
+        AND (endpoint_rotated_at IS NULL OR (
+            isfinite(endpoint_rotated_at) AND endpoint_rotated_at >= created_at
+        ))
+    ),
     CONSTRAINT hooks_identity_unique UNIQUE (org_id, silicon_id, id),
     CONSTRAINT hooks_endpoint_key_unique UNIQUE (silicon_id, endpoint_key)
 );
 
--- This secondary invariant prevents duplicates while the recoverable row is
--- present; the lifetime ledger below remains authoritative after hard purge.
 CREATE UNIQUE INDEX hooks_one_iam_default_per_silicon
     ON hook.hooks (org_id, silicon_id)
     WHERE is_iam_default;
@@ -91,6 +134,27 @@ CREATE INDEX hooks_list_active
 CREATE INDEX hooks_deleted_retention
     ON hook.hooks (deleted_at, id)
     WHERE deleted_at IS NOT NULL;
+
+COMMENT ON COLUMN hook.hooks.signature_config IS
+    'Verification scheme: algorithm, payload and signature expressions, encodings, optional public key.';
+COMMENT ON COLUMN hook.hooks.encrypted_signing_secret IS
+    'AES-256-GCM ciphertext of the secret text; NULL when the scheme has no shared secret.';
+
+-- A rotated endpoint key is never reused for the same Silicon. This ledger has
+-- no foreign key to the hook so it survives permanent hook purge.
+CREATE TABLE hook_private.retired_endpoint_keys (
+    silicon_id text NOT NULL,
+    endpoint_key text NOT NULL,
+    hook_id uuid NOT NULL,
+    retired_at timestamptz NOT NULL,
+
+    CONSTRAINT retired_endpoint_keys_pk PRIMARY KEY (silicon_id, endpoint_key),
+    CONSTRAINT retired_endpoint_keys_silicon_id_length CHECK (
+        char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
+    ),
+    CONSTRAINT retired_endpoint_keys_format CHECK (endpoint_key ~ '^[0-9A-Z]{6}$'),
+    CONSTRAINT retired_endpoint_keys_retired_at_finite CHECK (isfinite(retired_at))
+);
 
 -- This lifetime ledger deliberately has no foreign key to the recoverable
 -- hook row. It remains after permanent purge and prevents silent recreation
@@ -111,23 +175,30 @@ CREATE TABLE hook_private.iam_hook_registrations (
     CONSTRAINT iam_hook_registrations_created_at_finite CHECK (isfinite(created_at))
 );
 
+-- ---------------------------------------------------------------------------
+-- Request logs
+-- ---------------------------------------------------------------------------
+
+-- Verified provider requests. Each row is also one position in the owning
+-- Silicon's ordered delivery stream.
 CREATE TABLE hook.events (
     id uuid PRIMARY KEY,
     hook_id uuid NOT NULL,
     org_id text NOT NULL,
     silicon_id text NOT NULL,
-    event_type text NOT NULL,
-    source text,
-    subject text,
-    occurred_at timestamptz NOT NULL,
-    schema_version text NOT NULL,
-    trace_id text NOT NULL,
-    payload jsonb NOT NULL,
-    request_digest bytea NOT NULL,
+    provider text NOT NULL,
+    summary text NOT NULL,
+    delivery_sequence bigint NOT NULL,
+    method text NOT NULL,
+    url text NOT NULL,
+    path text NOT NULL,
+    query_string text NOT NULL,
+    headers jsonb NOT NULL,
+    content_type text,
+    body bytea NOT NULL,
+    remote_ip inet NOT NULL,
     received_at timestamptz NOT NULL,
-    replay_protected_until timestamptz NOT NULL DEFAULT (
-        clock_timestamp() + INTERVAL '10 minutes'
-    ),
+    expires_at timestamptz NOT NULL,
 
     CONSTRAINT events_hook_identity_fk
         FOREIGN KEY (org_id, silicon_id, hook_id)
@@ -139,201 +210,179 @@ CREATE TABLE hook.events (
     CONSTRAINT events_silicon_id_length CHECK (
         char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
     ),
-    CONSTRAINT events_type_format CHECK (
-        char_length(event_type) BETWEEN 1 AND 200
-        AND event_type ~ '^[a-z0-9_.-]+$'
+    CONSTRAINT events_provider_length CHECK (char_length(provider) BETWEEN 1 AND 200),
+    CONSTRAINT events_summary_length CHECK (char_length(summary) BETWEEN 1 AND 400),
+    CONSTRAINT events_delivery_sequence_positive CHECK (delivery_sequence > 0),
+    CONSTRAINT events_method_token CHECK (
+        char_length(method) BETWEEN 1 AND 32 AND method ~ '^[!#$%&''*+.^_`|~0-9A-Za-z-]+$'
     ),
-    CONSTRAINT events_source_length CHECK (
-        source IS NULL OR (
-            char_length(source) <= 500 AND source !~ '[[:cntrl:]]'
-        )
+    CONSTRAINT events_url_length CHECK (char_length(url) BETWEEN 1 AND 16384),
+    CONSTRAINT events_path_length CHECK (char_length(path) BETWEEN 1 AND 4096),
+    CONSTRAINT events_query_string_length CHECK (char_length(query_string) <= 8192),
+    CONSTRAINT events_headers_array CHECK (jsonb_typeof(headers) = 'array'),
+    CONSTRAINT events_content_type_length CHECK (
+        content_type IS NULL OR char_length(content_type) <= 255
     ),
-    CONSTRAINT events_subject_length CHECK (
-        subject IS NULL OR (
-            char_length(subject) <= 500 AND subject !~ '[[:cntrl:]]'
-        )
-    ),
-    CONSTRAINT events_schema_version_length CHECK (
-        char_length(schema_version) BETWEEN 1 AND 50 AND schema_version ~ '^[!-~]+$'
-    ),
-    CONSTRAINT events_trace_id_length CHECK (
-        char_length(trace_id) <= 255 AND trace_id ~ '^[!-~]*$'
-    ),
-    CONSTRAINT events_payload_object CHECK (jsonb_typeof(payload) = 'object'),
-    CONSTRAINT events_request_digest_length CHECK (octet_length(request_digest) = 32),
-    CONSTRAINT events_occurred_at_finite CHECK (isfinite(occurred_at)),
+    CONSTRAINT events_body_length CHECK (octet_length(body) <= 1048576),
     CONSTRAINT events_received_at_finite CHECK (isfinite(received_at)),
-    CONSTRAINT events_replay_protected_until_finite CHECK (
-        isfinite(replay_protected_until)
+    CONSTRAINT events_expires_after_retention CHECK (
+        expires_at = received_at + INTERVAL '14 days'
     ),
-    CONSTRAINT events_hook_id_unique UNIQUE (hook_id, id)
+    CONSTRAINT events_delivery_stream_unique UNIQUE (silicon_id, delivery_sequence)
 );
 
 CREATE INDEX events_per_hook_history
     ON hook.events (hook_id, received_at DESC, id DESC);
 
-CREATE INDEX events_per_hook_replay_deadline
-    ON hook.events (hook_id, replay_protected_until, id);
-
 CREATE INDEX events_per_silicon_history
     ON hook.events (org_id, silicon_id, received_at DESC, id DESC);
 
-CREATE INDEX events_per_silicon_type_history
-    ON hook.events (org_id, silicon_id, event_type, received_at DESC, id DESC);
+CREATE INDEX events_expiry
+    ON hook.events (expires_at, id);
 
--- The counter makes retention discovery proportional to overfull hooks rather
--- than to the complete event table. It is maintained transactionally by the
--- statement triggers below and is never a public API record.
-CREATE TABLE hook_private.event_retention_state (
-    hook_id uuid PRIMARY KEY
-        REFERENCES hook.hooks (id)
-        ON DELETE CASCADE,
-    event_count bigint NOT NULL,
-    maintenance_due_at timestamptz,
-
-    CONSTRAINT event_retention_state_count_nonnegative CHECK (event_count >= 0),
-    CONSTRAINT event_retention_state_due_at_finite CHECK (
-        maintenance_due_at IS NULL OR isfinite(maintenance_due_at)
-    ),
-    CONSTRAINT event_retention_state_queue_consistent CHECK (
-        (event_count > 10000) = (maintenance_due_at IS NOT NULL)
-    )
-);
-
-CREATE INDEX event_retention_state_due
-    ON hook_private.event_retention_state (maintenance_due_at, hook_id)
-    WHERE maintenance_due_at IS NOT NULL;
-
-CREATE TABLE hook_private.ingress_idempotency (
+-- Requests withheld from delivery because they could not be verified.
+CREATE TABLE hook.blocked_requests (
+    id uuid PRIMARY KEY,
     hook_id uuid NOT NULL,
-    idempotency_key text NOT NULL,
-    request_digest bytea NOT NULL,
-    event_id uuid NOT NULL,
-    created_at timestamptz NOT NULL,
-
-    CONSTRAINT ingress_idempotency_pk PRIMARY KEY (hook_id, idempotency_key),
-    CONSTRAINT ingress_idempotency_event_fk
-        FOREIGN KEY (hook_id, event_id)
-        REFERENCES hook.events (hook_id, id)
-        ON DELETE CASCADE
-        DEFERRABLE INITIALLY DEFERRED,
-    CONSTRAINT ingress_idempotency_key_length CHECK (
-        char_length(idempotency_key) BETWEEN 8 AND 255
-        AND idempotency_key ~ '^[!-~]+$'
-    ),
-    CONSTRAINT ingress_idempotency_digest_length CHECK (
-        octet_length(request_digest) = 32
-    ),
-    CONSTRAINT ingress_idempotency_created_at_finite CHECK (isfinite(created_at))
-);
-
--- The replay guard is separate from caller key bindings. Multiple keys may
--- safely alias one authenticated request while every key remains permanently
--- content-bound for the lifetime of the retained event.
-CREATE TABLE hook_private.ingress_authenticated_requests (
-    hook_id uuid NOT NULL,
-    authenticated_request_digest bytea NOT NULL,
-    request_digest bytea NOT NULL,
-    event_id uuid NOT NULL,
-    created_at timestamptz NOT NULL,
-
-    CONSTRAINT ingress_authenticated_requests_pk PRIMARY KEY (
-        hook_id,
-        authenticated_request_digest
-    ),
-    CONSTRAINT ingress_authenticated_requests_event_unique UNIQUE (event_id),
-    CONSTRAINT ingress_authenticated_requests_event_fk
-        FOREIGN KEY (hook_id, event_id)
-        REFERENCES hook.events (hook_id, id)
-        ON DELETE CASCADE
-        DEFERRABLE INITIALLY DEFERRED,
-    CONSTRAINT ingress_authenticated_requests_authenticated_digest_length CHECK (
-        octet_length(authenticated_request_digest) = 32
-    ),
-    CONSTRAINT ingress_authenticated_requests_request_digest_length CHECK (
-        octet_length(request_digest) = 32
-    ),
-    CONSTRAINT ingress_authenticated_requests_created_at_finite CHECK (
-        isfinite(created_at)
-    )
-);
-
--- DM delivery deliberately has no foreign key to retained event history or to
--- hooks. Accepted work survives history eviction and permanent hook purging.
-CREATE TABLE hook_private.dm_outbox (
-    event_id uuid PRIMARY KEY,
     org_id text NOT NULL,
     silicon_id text NOT NULL,
-    request_body bytea NOT NULL,
-    status text NOT NULL DEFAULT 'pending',
-    attempts integer NOT NULL DEFAULT 0,
-    available_at timestamptz NOT NULL,
-    lease_token uuid,
-    leased_until timestamptz,
-    last_attempt_at timestamptz,
-    delivered_at timestamptz,
-    failed_at timestamptz,
-    failure_reason text,
-    last_http_status smallint,
-    created_at timestamptz NOT NULL,
-    updated_at timestamptz NOT NULL,
+    provider text NOT NULL,
+    reason_code text NOT NULL,
+    reason_detail text NOT NULL,
+    method text NOT NULL,
+    url text NOT NULL,
+    path text NOT NULL,
+    query_string text NOT NULL,
+    headers jsonb NOT NULL,
+    content_type text,
+    body bytea NOT NULL,
+    remote_ip inet NOT NULL,
+    received_at timestamptz NOT NULL,
+    expires_at timestamptz NOT NULL,
 
-    CONSTRAINT dm_outbox_org_id_length CHECK (
+    CONSTRAINT blocked_requests_hook_identity_fk
+        FOREIGN KEY (org_id, silicon_id, hook_id)
+        REFERENCES hook.hooks (org_id, silicon_id, id)
+        ON DELETE CASCADE,
+    CONSTRAINT blocked_requests_org_id_length CHECK (
         char_length(org_id) BETWEEN 1 AND 100 AND org_id ~ '^[!-~]+$'
     ),
-    CONSTRAINT dm_outbox_silicon_id_length CHECK (
+    CONSTRAINT blocked_requests_silicon_id_length CHECK (
         char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
     ),
-    CONSTRAINT dm_outbox_body_length CHECK (
-        octet_length(request_body) BETWEEN 2 AND 1114112
+    CONSTRAINT blocked_requests_provider_length CHECK (
+        char_length(provider) BETWEEN 1 AND 200
     ),
-    CONSTRAINT dm_outbox_status CHECK (
-        status IN ('pending', 'retrying', 'delivered', 'failed')
+    CONSTRAINT blocked_requests_reason_code_format CHECK (
+        char_length(reason_code) BETWEEN 1 AND 64 AND reason_code ~ '^[a-z0-9_]+$'
     ),
-    CONSTRAINT dm_outbox_attempts_nonnegative CHECK (attempts >= 0),
-    CONSTRAINT dm_outbox_failure_reason_length CHECK (
-        failure_reason IS NULL OR (
-            char_length(failure_reason) <= 2000
-            AND failure_reason !~ '[[:cntrl:]]'
-        )
+    CONSTRAINT blocked_requests_reason_detail_length CHECK (
+        char_length(reason_detail) <= 500 AND reason_detail !~ '[[:cntrl:]]'
     ),
-    CONSTRAINT dm_outbox_http_status CHECK (
-        last_http_status IS NULL OR last_http_status BETWEEN 100 AND 599
+    CONSTRAINT blocked_requests_method_token CHECK (
+        char_length(method) BETWEEN 1 AND 32 AND method ~ '^[!#$%&''*+.^_`|~0-9A-Za-z-]+$'
     ),
-    CONSTRAINT dm_outbox_timestamps_finite CHECK (
-        isfinite(available_at)
-        AND isfinite(created_at)
-        AND isfinite(updated_at)
-        AND (leased_until IS NULL OR isfinite(leased_until))
-        AND (last_attempt_at IS NULL OR isfinite(last_attempt_at))
-        AND (delivered_at IS NULL OR isfinite(delivered_at))
-        AND (failed_at IS NULL OR isfinite(failed_at))
+    CONSTRAINT blocked_requests_url_length CHECK (char_length(url) BETWEEN 1 AND 16384),
+    CONSTRAINT blocked_requests_path_length CHECK (char_length(path) BETWEEN 1 AND 4096),
+    CONSTRAINT blocked_requests_query_string_length CHECK (
+        char_length(query_string) <= 8192
     ),
-    CONSTRAINT dm_outbox_lease_consistent CHECK (
-        (lease_token IS NULL) = (leased_until IS NULL)
+    CONSTRAINT blocked_requests_headers_array CHECK (jsonb_typeof(headers) = 'array'),
+    CONSTRAINT blocked_requests_content_type_length CHECK (
+        content_type IS NULL OR char_length(content_type) <= 255
     ),
-    CONSTRAINT dm_outbox_terminal_state_consistent CHECK (
-        (status = 'delivered' AND delivered_at IS NOT NULL AND failed_at IS NULL)
-        OR (status = 'failed' AND failed_at IS NOT NULL AND delivered_at IS NULL)
-        OR (
-            status IN ('pending', 'retrying')
-            AND delivered_at IS NULL
-            AND failed_at IS NULL
-        )
-    ),
-    CONSTRAINT dm_outbox_terminal_not_leased CHECK (
-        status IN ('pending', 'retrying') OR lease_token IS NULL
-    ),
-    CONSTRAINT dm_outbox_created_updated_order CHECK (updated_at >= created_at)
+    CONSTRAINT blocked_requests_body_length CHECK (octet_length(body) <= 1048576),
+    CONSTRAINT blocked_requests_received_at_finite CHECK (isfinite(received_at)),
+    CONSTRAINT blocked_requests_expires_after_retention CHECK (
+        expires_at = received_at + INTERVAL '14 days'
+    )
 );
 
-CREATE INDEX dm_outbox_due_jobs
-    ON hook_private.dm_outbox (available_at, event_id)
-    WHERE status IN ('pending', 'retrying');
+CREATE INDEX blocked_requests_per_hook_history
+    ON hook.blocked_requests (hook_id, received_at DESC, id DESC);
 
-CREATE INDEX dm_outbox_terminal_retention
-    ON hook_private.dm_outbox (updated_at, event_id)
-    WHERE status IN ('delivered', 'failed');
+CREATE INDEX blocked_requests_per_silicon_history
+    ON hook.blocked_requests (org_id, silicon_id, received_at DESC, id DESC);
+
+CREATE INDEX blocked_requests_expiry
+    ON hook.blocked_requests (expires_at, id);
+
+-- ---------------------------------------------------------------------------
+-- Delivery coordination
+-- ---------------------------------------------------------------------------
+
+-- One monotonic counter per Silicon. The row is locked while an event is
+-- accepted so sequences are dense and never reused.
+CREATE TABLE hook_private.delivery_sequences (
+    silicon_id text PRIMARY KEY,
+    last_sequence bigint NOT NULL DEFAULT 0,
+
+    CONSTRAINT delivery_sequences_silicon_id_length CHECK (
+        char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
+    ),
+    CONSTRAINT delivery_sequences_nonnegative CHECK (last_sequence >= 0)
+);
+
+-- Highest sequence each consumer has acknowledged for a Silicon stream.
+CREATE TABLE hook_private.delivery_cursors (
+    silicon_id text NOT NULL,
+    consumer_kind text NOT NULL,
+    consumer_id text NOT NULL,
+    acknowledged_through bigint NOT NULL DEFAULT 0,
+    updated_at timestamptz NOT NULL,
+
+    CONSTRAINT delivery_cursors_pk PRIMARY KEY (silicon_id, consumer_kind, consumer_id),
+    CONSTRAINT delivery_cursors_silicon_id_length CHECK (
+        char_length(silicon_id) BETWEEN 1 AND 255 AND silicon_id ~ '^[!-~]+$'
+    ),
+    CONSTRAINT delivery_cursors_consumer_kind CHECK (
+        consumer_kind IN ('carbon', 'silicon', 'application', 'service')
+    ),
+    CONSTRAINT delivery_cursors_consumer_id_length CHECK (
+        char_length(consumer_id) BETWEEN 1 AND 255 AND consumer_id ~ '^[!-~]+$'
+    ),
+    CONSTRAINT delivery_cursors_nonnegative CHECK (acknowledged_through >= 0),
+    CONSTRAINT delivery_cursors_updated_at_finite CHECK (isfinite(updated_at))
+);
+
+-- ---------------------------------------------------------------------------
+-- Abuse control
+-- ---------------------------------------------------------------------------
+
+CREATE TABLE hook_private.ip_blocks (
+    hook_id uuid NOT NULL
+        REFERENCES hook.hooks (id)
+        ON DELETE CASCADE,
+    remote_ip inet NOT NULL,
+    strikes integer NOT NULL DEFAULT 0,
+    blocks integer NOT NULL DEFAULT 0,
+    blocked_until timestamptz,
+    permanent boolean NOT NULL DEFAULT false,
+    rejected_requests bigint NOT NULL DEFAULT 0,
+    first_seen_at timestamptz NOT NULL,
+    updated_at timestamptz NOT NULL,
+
+    CONSTRAINT ip_blocks_pk PRIMARY KEY (hook_id, remote_ip),
+    CONSTRAINT ip_blocks_counters_nonnegative CHECK (
+        strikes >= 0 AND blocks >= 0 AND rejected_requests >= 0
+    ),
+    CONSTRAINT ip_blocks_permanent_has_no_deadline CHECK (
+        NOT permanent OR blocked_until IS NULL
+    ),
+    CONSTRAINT ip_blocks_timestamps_finite CHECK (
+        isfinite(first_seen_at)
+        AND isfinite(updated_at)
+        AND (blocked_until IS NULL OR isfinite(blocked_until))
+    )
+);
+
+CREATE INDEX ip_blocks_stale
+    ON hook_private.ip_blocks (updated_at)
+    WHERE NOT permanent;
+
+-- ---------------------------------------------------------------------------
+-- Management idempotency and audit
+-- ---------------------------------------------------------------------------
 
 CREATE TABLE hook_private.management_idempotency (
     operation text NOT NULL,
@@ -425,7 +474,7 @@ CREATE TABLE hook_private.management_idempotency (
     ),
     CONSTRAINT management_idempotency_secret_ciphertext_length CHECK (
         response_encrypted_secret IS NULL
-        OR octet_length(response_encrypted_secret) = 48
+        OR octet_length(response_encrypted_secret) BETWEEN 17 AND 4112
     ),
     CONSTRAINT management_idempotency_timestamps CHECK (
         isfinite(created_at)
@@ -461,9 +510,13 @@ CREATE TABLE hook_private.audit_log (
     CONSTRAINT audit_log_action CHECK (
         action IN (
             'hook.created',
+            'hook.updated',
+            'hook.disabled',
+            'hook.enabled',
             'hook.deleted',
             'hook.restored',
             'hook.secret_rotated',
+            'hook.endpoint_rotated',
             'hook.iam_provisioned'
         )
     ),
@@ -500,6 +553,10 @@ CREATE INDEX audit_log_resource_history
 COMMENT ON TABLE hook_private.audit_log IS
     'Append-only attribution. Free-form payload, credential, and authorization data are intentionally absent.';
 
+-- ---------------------------------------------------------------------------
+-- Immutability
+-- ---------------------------------------------------------------------------
+
 CREATE OR REPLACE FUNCTION hook_private.reject_row_mutation()
 RETURNS trigger
 LANGUAGE plpgsql
@@ -510,100 +567,18 @@ BEGIN
 END;
 $$;
 
-CREATE OR REPLACE FUNCTION hook_private.protect_dm_outbox_payload()
-RETURNS trigger
-LANGUAGE plpgsql
-AS $$
-BEGIN
-    IF NEW.event_id IS DISTINCT FROM OLD.event_id
-        OR NEW.org_id IS DISTINCT FROM OLD.org_id
-        OR NEW.silicon_id IS DISTINCT FROM OLD.silicon_id
-        OR NEW.request_body IS DISTINCT FROM OLD.request_body
-        OR NEW.created_at IS DISTINCT FROM OLD.created_at
-    THEN
-        RAISE EXCEPTION 'DM outbox delivery payload is immutable'
-            USING ERRCODE = '55000';
-    END IF;
-    RETURN NEW;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION hook_private.track_event_retention_inserts()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, pg_temp
-AS $$
-BEGIN
-    INSERT INTO hook_private.event_retention_state AS retention (
-        hook_id,
-        event_count,
-        maintenance_due_at
-    )
-    SELECT inserted.hook_id,
-           count(*)::bigint,
-           CASE WHEN count(*) > 10000 THEN clock_timestamp() ELSE NULL END
-    FROM inserted_events AS inserted
-    GROUP BY inserted.hook_id
-    ON CONFLICT (hook_id) DO UPDATE
-    SET event_count = retention.event_count + EXCLUDED.event_count,
-        maintenance_due_at = CASE
-            WHEN retention.event_count + EXCLUDED.event_count > 10000
-            THEN COALESCE(retention.maintenance_due_at, clock_timestamp())
-            ELSE NULL
-        END;
-    RETURN NULL;
-END;
-$$;
-
-CREATE OR REPLACE FUNCTION hook_private.track_event_retention_deletes()
-RETURNS trigger
-LANGUAGE plpgsql
-SECURITY DEFINER
-SET search_path = pg_catalog, pg_temp
-AS $$
-BEGIN
-    UPDATE hook_private.event_retention_state AS retention
-    SET event_count = retention.event_count - removed.removed_count,
-        maintenance_due_at = CASE
-            WHEN retention.event_count - removed.removed_count > 10000
-            THEN retention.maintenance_due_at
-            ELSE NULL
-        END
-    FROM (
-        SELECT deleted.hook_id, count(*)::bigint AS removed_count
-        FROM deleted_events AS deleted
-        GROUP BY deleted.hook_id
-    ) AS removed
-    WHERE retention.hook_id = removed.hook_id;
-    RETURN NULL;
-END;
-$$;
-
 CREATE TRIGGER events_are_immutable
     BEFORE UPDATE ON hook.events
     FOR EACH ROW
     EXECUTE FUNCTION hook_private.reject_row_mutation();
 
-CREATE TRIGGER events_track_retention_inserts
-    AFTER INSERT ON hook.events
-    REFERENCING NEW TABLE AS inserted_events
-    FOR EACH STATEMENT
-    EXECUTE FUNCTION hook_private.track_event_retention_inserts();
-
-CREATE TRIGGER events_track_retention_deletes
-    AFTER DELETE ON hook.events
-    REFERENCING OLD TABLE AS deleted_events
-    FOR EACH STATEMENT
-    EXECUTE FUNCTION hook_private.track_event_retention_deletes();
-
-CREATE TRIGGER ingress_idempotency_is_immutable
-    BEFORE UPDATE ON hook_private.ingress_idempotency
+CREATE TRIGGER blocked_requests_are_immutable
+    BEFORE UPDATE ON hook.blocked_requests
     FOR EACH ROW
     EXECUTE FUNCTION hook_private.reject_row_mutation();
 
-CREATE TRIGGER ingress_authenticated_requests_are_immutable
-    BEFORE UPDATE ON hook_private.ingress_authenticated_requests
+CREATE TRIGGER retired_endpoint_keys_are_immutable
+    BEFORE UPDATE OR DELETE ON hook_private.retired_endpoint_keys
     FOR EACH ROW
     EXECUTE FUNCTION hook_private.reject_row_mutation();
 
@@ -616,8 +591,3 @@ CREATE TRIGGER audit_log_is_append_only
     BEFORE UPDATE OR DELETE ON hook_private.audit_log
     FOR EACH ROW
     EXECUTE FUNCTION hook_private.reject_row_mutation();
-
-CREATE TRIGGER dm_outbox_payload_is_immutable
-    BEFORE UPDATE ON hook_private.dm_outbox
-    FOR EACH ROW
-    EXECUTE FUNCTION hook_private.protect_dm_outbox_payload();

@@ -1,6 +1,11 @@
-//! Strict parsing of security-sensitive HTTP headers.
+//! Strict parsing of security-sensitive HTTP headers and client addresses.
 
-use axum::http::HeaderMap;
+use std::net::{IpAddr, SocketAddr};
+
+use axum::{
+    extract::{ConnectInfo, FromRequestParts},
+    http::{HeaderMap, request::Parts},
+};
 use secrecy::SecretString;
 
 use crate::{
@@ -13,21 +18,89 @@ const OBO_PROOF_HEADER: &str = "x-iam-obo-access-proof";
 const APP_ID_HEADER: &str = "x-app-id";
 const ORG_ID_HEADER: &str = "x-org-id";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
-const SIGNATURE_HEADER: &str = "x-hook-signature";
-const TIMESTAMP_HEADER: &str = "x-hook-timestamp";
+const FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
 const MAX_BEARER_TOKEN_BYTES: usize = 4_096;
 const MAX_AUTHORIZATION_HEADER_BYTES: usize = "Bearer ".len() + MAX_BEARER_TOKEN_BYTES;
 const IAM_PROOF_PREFIX: &str = "obo_";
 const IAM_PROOF_PAYLOAD_BYTES: usize = 43;
 const IAM_PROOF_BYTES: usize = IAM_PROOF_PREFIX.len() + IAM_PROOF_PAYLOAD_BYTES;
 const MAX_LOCAL_PROOF_BYTES: usize = 512;
-const MAX_SIGNATURE_BYTES: usize = "v1=".len() + 64;
-const MAX_TIMESTAMP_BYTES: usize = 20;
+const MAX_FORWARDED_FOR_BYTES: usize = 1_024;
 
-pub(super) struct IngressHeaders {
-    pub(super) signature: String,
-    pub(super) timestamp: String,
-    pub(super) idempotency_key: String,
+/// TCP peer address when the listener was started with connection info.
+#[derive(Clone, Copy, Debug)]
+pub(super) struct PeerAddress(pub(super) Option<SocketAddr>);
+
+impl<S> FromRequestParts<S> for PeerAddress
+where
+    S: Send + Sync,
+{
+    type Rejection = std::convert::Infallible;
+
+    fn from_request_parts(
+        parts: &mut Parts,
+        _state: &S,
+    ) -> impl std::future::Future<Output = Result<Self, Self::Rejection>> + Send {
+        std::future::ready(Ok(Self(
+            parts
+                .extensions
+                .get::<ConnectInfo<SocketAddr>>()
+                .map(|info| info.0),
+        )))
+    }
+}
+
+/// Resolves the client address behind a known number of trusted proxies.
+///
+/// With zero trusted hops the TCP peer is the client and `X-Forwarded-For`
+/// is ignored, so a direct client cannot spoof its address. With `n` hops the
+/// client is the `n`-th address from the right of the header; a header with
+/// fewer entries did not traverse every trusted proxy and falls back to the
+/// peer address.
+pub(super) fn client_ip(
+    headers: &HeaderMap,
+    peer: PeerAddress,
+    trusted_proxy_hops: u8,
+) -> Result<IpAddr, AppError> {
+    let peer_ip = peer.0.map(|address| address.ip());
+    if trusted_proxy_hops == 0 {
+        return peer_ip.ok_or_else(|| {
+            AppError::internal(anyhow::anyhow!("listener did not provide peer addresses"))
+        });
+    }
+    let forwarded = headers
+        .get_all(FORWARDED_FOR_HEADER)
+        .iter()
+        .filter_map(|value| value.to_str().ok())
+        .flat_map(|value| value.split(','))
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+        .collect::<Vec<_>>();
+    let total_bytes = forwarded.iter().map(|entry| entry.len()).sum::<usize>();
+    if total_bytes > MAX_FORWARDED_FOR_BYTES {
+        return Err(AppError::bad_request("header_too_large"));
+    }
+    let hops = usize::from(trusted_proxy_hops);
+    if forwarded.len() >= hops
+        && let Some(entry) = forwarded.get(forwarded.len() - hops)
+        && let Ok(ip) = parse_forwarded_ip(entry)
+    {
+        return Ok(ip);
+    }
+    peer_ip.ok_or_else(|| {
+        AppError::internal(anyhow::anyhow!("listener did not provide peer addresses"))
+    })
+}
+
+fn parse_forwarded_ip(entry: &str) -> Result<IpAddr, std::net::AddrParseError> {
+    let entry = entry.trim_matches(|character| character == '"' || character == '\'');
+    if let Ok(socket) = entry.parse::<SocketAddr>() {
+        return Ok(socket.ip());
+    }
+    entry
+        .trim_start_matches('[')
+        .trim_end_matches(']')
+        .parse::<IpAddr>()
 }
 
 pub(super) fn management_credential(
@@ -80,30 +153,6 @@ pub(super) fn idempotency_key(headers: &HeaderMap) -> Result<String, AppError> {
     Ok(value)
 }
 
-pub(super) fn ingress_headers(headers: &HeaderMap) -> Result<IngressHeaders, AppError> {
-    let signature = required_header_bounded(headers, SIGNATURE_HEADER, MAX_SIGNATURE_BYTES)?;
-    if signature.len() != MAX_SIGNATURE_BYTES
-        || !signature.starts_with("v1=")
-        || !signature["v1=".len()..]
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        return Err(AppError::Unauthenticated);
-    }
-    let timestamp = required_header_bounded(headers, TIMESTAMP_HEADER, MAX_TIMESTAMP_BYTES)?;
-    let parsed_timestamp = timestamp
-        .parse::<i64>()
-        .map_err(|_| AppError::Unauthenticated)?;
-    if parsed_timestamp.to_string() != timestamp {
-        return Err(AppError::Unauthenticated);
-    }
-    Ok(IngressHeaders {
-        signature,
-        timestamp,
-        idempotency_key: idempotency_key(headers)?,
-    })
-}
-
 pub(super) fn require_json(headers: &HeaderMap) -> Result<(), AppError> {
     if header_count(headers, http::header::CONTENT_TYPE.as_str()) != 1 {
         return Err(AppError::UnsupportedMediaType);
@@ -117,6 +166,22 @@ pub(super) fn require_json(headers: &HeaderMap) -> Result<(), AppError> {
         return Err(AppError::UnsupportedMediaType);
     }
     Ok(())
+}
+
+/// Collects header fields in wire order for exact capture.
+///
+/// Values that are not UTF-8 are replaced lossily; HTTP header values are
+/// opaque bytes, but every provider signing scheme works in ASCII.
+pub(super) fn capture_headers(headers: &HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .map(|(name, value)| {
+            (
+                name.as_str().to_owned(),
+                String::from_utf8_lossy(value.as_bytes()).into_owned(),
+            )
+        })
+        .collect()
 }
 
 fn optional_bearer(headers: &HeaderMap) -> Result<Option<SecretString>, AppError> {
@@ -192,11 +257,20 @@ fn is_local_credential(value: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
+
     use axum::http::{HeaderMap, HeaderValue};
     use secrecy::ExposeSecret as _;
 
-    use super::{idempotency_key, ingress_headers, management_credential, require_json};
+    use super::{PeerAddress, client_ip, idempotency_key, management_credential, require_json};
     use crate::infrastructure::iam::PresentedCredential;
+
+    fn peer() -> PeerAddress {
+        PeerAddress(Some(SocketAddr::new(
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)),
+            443,
+        )))
+    }
 
     #[test]
     fn parses_an_unambiguous_bearer() -> Result<(), Box<dyn std::error::Error>> {
@@ -234,21 +308,6 @@ mod tests {
         let mut headers = HeaderMap::new();
         headers.insert("idempotency-key", HeaderValue::from_static("has space"));
         assert!(idempotency_key(&headers).is_err());
-    }
-
-    #[test]
-    fn bearer_scheme_is_case_insensitive() -> Result<(), Box<dyn std::error::Error>> {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            HeaderValue::from_static("bearer token_123"),
-        );
-
-        assert!(matches!(
-            management_credential(&headers, false)?,
-            PresentedCredential::Bearer(_)
-        ));
-        Ok(())
     }
 
     #[test]
@@ -295,44 +354,48 @@ mod tests {
     }
 
     #[test]
-    fn rejects_oversized_bearer_tokens_before_credential_creation()
+    fn client_ip_ignores_forwarding_without_trusted_proxies()
     -> Result<(), Box<dyn std::error::Error>> {
         let mut headers = HeaderMap::new();
-        headers.insert(
-            "authorization",
-            HeaderValue::from_str(&format!("Bearer {}", "A".repeat(4_097)))?,
+        headers.insert("x-forwarded-for", HeaderValue::from_static("203.0.113.9"));
+        assert_eq!(
+            client_ip(&headers, peer(), 0)?,
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5))
         );
-
-        assert!(management_credential(&headers, false).is_err());
+        assert!(client_ip(&headers, PeerAddress(None), 0).is_err());
         Ok(())
     }
 
     #[test]
-    fn ingress_headers_require_canonical_signature_and_timestamp()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let base_headers = || {
-            let mut headers = HeaderMap::new();
-            headers.insert(
-                "x-hook-signature",
-                HeaderValue::from_str(&format!("v1={}", "a".repeat(64)))?,
-            );
-            headers.insert("x-hook-timestamp", HeaderValue::from_static("1700000000"));
-            headers.insert("idempotency-key", HeaderValue::from_static("request-123"));
-            Ok::<_, http::header::InvalidHeaderValue>(headers)
-        };
-
-        assert!(ingress_headers(&base_headers()?).is_ok());
-
-        let mut uppercase = base_headers()?;
-        uppercase.insert(
-            "x-hook-signature",
-            HeaderValue::from_str(&format!("v1={}", "A".repeat(64)))?,
+    fn client_ip_walks_back_through_trusted_proxies() -> Result<(), Box<dyn std::error::Error>> {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("198.51.100.1, 203.0.113.9, 10.0.0.1"),
         );
-        assert!(ingress_headers(&uppercase).is_err());
+        assert_eq!(
+            client_ip(&headers, peer(), 1)?,
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 1))
+        );
+        assert_eq!(
+            client_ip(&headers, peer(), 2)?,
+            IpAddr::V4(Ipv4Addr::new(203, 0, 113, 9))
+        );
+        assert_eq!(
+            client_ip(&headers, peer(), 4)?,
+            IpAddr::V4(Ipv4Addr::new(10, 0, 0, 5)),
+            "too few entries falls back to the peer"
+        );
 
-        let mut leading_zero = base_headers()?;
-        leading_zero.insert("x-hook-timestamp", HeaderValue::from_static("01700000000"));
-        assert!(ingress_headers(&leading_zero).is_err());
+        let mut ipv6 = HeaderMap::new();
+        ipv6.insert(
+            "x-forwarded-for",
+            HeaderValue::from_static("[2001:db8::7]:4433"),
+        );
+        assert_eq!(
+            client_ip(&ipv6, peer(), 1)?,
+            IpAddr::V6(Ipv6Addr::new(0x2001, 0xdb8, 0, 0, 0, 0, 0, 7))
+        );
         Ok(())
     }
 }

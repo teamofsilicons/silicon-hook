@@ -1,14 +1,11 @@
 //! Public persistence commands and results.
 
-use std::time::Duration;
-
 use time::OffsetDateTime;
-use uuid::Uuid;
 
-use crate::dm_contract::{DmRequestBody, DmRequestBodyError};
 use crate::domain::{
-    ActorRef, ApplicationId, EncryptedSecret, EventCursor, EventFilter, EventId, EventRecord, Hook,
-    HookId, OrganizationId, RequestDigest, SiliconId,
+    ActorRef, ApplicationId, BlockReason, BlockedRequestId, EncryptedSecret, EndpointKey, EventId,
+    HistoryCursor, HistoryFilter, Hook, HookId, HookUpdate, OrganizationId, SiliconId,
+    request::CapturedRequest,
 };
 
 /// Stable scope and content binding for a management idempotency key.
@@ -57,13 +54,22 @@ pub struct AuditContext {
     pub request_id: Option<String>,
 }
 
-/// Active ingress hook resolved together with PostgreSQL's authoritative time.
+/// Outcome of routing a public endpoint key.
 #[derive(Clone, Debug)]
-pub struct IngressHookResolution {
-    /// Active hook and encrypted signing secret.
-    pub hook: Hook,
-    /// Database timestamp sampled by the same statement that resolved the hook.
-    pub database_time: OffsetDateTime,
+pub enum EndpointResolution {
+    /// The key belongs to an active hook.
+    Active {
+        /// Hook and its signing policy.
+        hook: Box<Hook>,
+        /// Database timestamp sampled by the same statement.
+        database_time: OffsetDateTime,
+    },
+    /// The key belongs to a disabled or deleted hook.
+    Inactive,
+    /// The key was rotated away and is permanently retired for this Silicon.
+    Retired,
+    /// No hook has ever used the key for this Silicon.
+    Unknown,
 }
 
 /// Audited hook mutation.
@@ -71,9 +77,11 @@ pub struct IngressHookResolution {
 pub enum AuditAction {
     /// A non-default hook was created.
     Created,
-    /// A hook stopped accepting new ingress without entering deletion recovery.
+    /// Hook metadata or signing policy changed.
+    Updated,
+    /// A hook stopped accepting requests without entering deletion recovery.
     Disabled,
-    /// A disabled hook resumed accepting new ingress.
+    /// A disabled hook resumed accepting requests.
     Enabled,
     /// A hook was soft-deleted.
     Deleted,
@@ -81,6 +89,8 @@ pub enum AuditAction {
     Restored,
     /// A hook signing secret was replaced.
     SecretRotated,
+    /// A hook endpoint key was replaced and the old key retired.
+    EndpointRotated,
     /// IAM provisioned the default hook for a Silicon.
     IamProvisioned,
 }
@@ -89,11 +99,13 @@ impl AuditAction {
     pub(crate) const fn as_db_str(self) -> &'static str {
         match self {
             Self::Created => "hook.created",
+            Self::Updated => "hook.updated",
             Self::Disabled => "hook.disabled",
             Self::Enabled => "hook.enabled",
             Self::Deleted => "hook.deleted",
             Self::Restored => "hook.restored",
             Self::SecretRotated => "hook.secret_rotated",
+            Self::EndpointRotated => "hook.endpoint_rotated",
             Self::IamProvisioned => "hook.iam_provisioned",
         }
     }
@@ -130,9 +142,6 @@ pub enum CreateHookOutcome {
     },
 }
 
-/// IAM provisioning uses the same idempotent result semantics as creation.
-pub type ProvisionHookOutcome = CreateHookOutcome;
-
 /// Scope and attribution for a soft-delete transition.
 #[derive(Clone, Debug)]
 pub struct HookMutation {
@@ -142,6 +151,23 @@ pub struct HookMutation {
     pub silicon_id: SiliconId,
     /// Hook to mutate.
     pub hook_id: HookId,
+    /// Audit attribution.
+    pub audit: AuditContext,
+    /// Authoritative mutation time.
+    pub occurred_at: OffsetDateTime,
+}
+
+/// Non-idempotency-keyed metadata and signing-policy replacement.
+#[derive(Clone, Debug)]
+pub struct UpdateHook {
+    /// Organization owning the hook.
+    pub organization_id: OrganizationId,
+    /// Silicon owning the hook.
+    pub silicon_id: SiliconId,
+    /// Hook to update.
+    pub hook_id: HookId,
+    /// Fields to replace.
+    pub update: HookUpdate,
     /// Audit attribution.
     pub audit: AuditContext,
     /// Authoritative mutation time.
@@ -200,6 +226,41 @@ pub enum RotateSecretOutcome {
     },
 }
 
+/// Atomic endpoint-key replacement.
+#[derive(Clone, Debug)]
+pub struct RotateEndpoint {
+    /// Organization owning the hook.
+    pub organization_id: OrganizationId,
+    /// Silicon owning the hook.
+    pub silicon_id: SiliconId,
+    /// Hook whose endpoint is replaced.
+    pub hook_id: HookId,
+    /// Freshly generated replacement key.
+    pub replacement: EndpointKey,
+    /// Management idempotency scope.
+    pub idempotency: IdempotencyScope,
+    /// Non-secret result metadata.
+    pub response: PersistedResponse,
+    /// Audit attribution.
+    pub audit: AuditContext,
+    /// Authoritative rotation time.
+    pub occurred_at: OffsetDateTime,
+}
+
+/// Result of an idempotent endpoint rotation.
+#[derive(Clone, Debug)]
+pub enum RotateEndpointOutcome {
+    /// This call rotated the endpoint and retired the previous key.
+    Rotated(Hook),
+    /// A content-identical earlier call already rotated the endpoint.
+    Replayed {
+        /// Current hook metadata with the rotated key.
+        hook: Hook,
+        /// Original non-secret result status.
+        response: PersistedResponse,
+    },
+}
+
 /// Idempotent restore command.
 #[derive(Clone, Debug)]
 pub struct RestoreHook {
@@ -233,97 +294,102 @@ pub enum RestoreHookOutcome {
     },
 }
 
-/// One DM outbox row claimed under an expiring ownership token.
-#[derive(Clone, Debug, PartialEq)]
-pub struct ClaimedDelivery {
-    /// Stable event identifier used by DM for deduplication.
+/// A verified request to append to a hook's log and its Silicon's stream.
+#[derive(Clone, Debug)]
+pub struct AcceptEvent {
+    /// Preallocated stable event identifier.
     pub event_id: EventId,
-    /// Exact immutable JSON body to send to DM.
-    pub request_body: Vec<u8>,
-    /// Attempt number that will be recorded if this lease is completed.
-    pub attempt_number: u32,
-    /// Compare-and-swap token proving ownership of this claim.
-    pub lease_token: Uuid,
-    /// Time at which another worker may reclaim the row.
-    pub leased_until: OffsetDateTime,
+    /// Receiving hook as resolved for this request.
+    pub hook: Hook,
+    /// Exact captured request.
+    pub request: CapturedRequest,
 }
 
-/// Outcome of one DM HTTP attempt.
-#[derive(Clone, Debug, PartialEq)]
-pub enum DeliveryOutcome {
-    /// DM durably accepted the event with HTTP 202.
-    Delivered,
-    /// The failure is retryable after a database-clock-relative delay.
-    Retry {
-        /// Delay from PostgreSQL's completion timestamp before another claim.
-        retry_after: Duration,
-        /// Redacted bounded diagnostic detail.
-        reason: String,
-        /// HTTP status when a response was received.
-        http_status: Option<u16>,
-    },
-    /// The failure is terminal or the attempt budget was exhausted.
-    Failed {
-        /// Redacted bounded diagnostic detail.
-        reason: String,
-        /// HTTP status when a response was received.
-        http_status: Option<u16>,
-    },
+/// An unverified request to append to a hook's blocked log.
+#[derive(Clone, Debug)]
+pub struct RecordBlockedRequest {
+    /// Preallocated stable identifier.
+    pub id: BlockedRequestId,
+    /// Receiving hook as resolved for this request.
+    pub hook: Hook,
+    /// Exact captured request.
+    pub request: CapturedRequest,
+    /// Why delivery was withheld.
+    pub reason: BlockReason,
 }
 
-/// Compare-and-swap update for a claimed delivery.
-#[derive(Clone, Debug, PartialEq)]
-pub struct DeliveryAttempt {
-    /// Claimed event.
-    pub event_id: EventId,
-    /// Ownership token returned by the claim.
-    pub lease_token: Uuid,
-    /// Result to persist.
-    pub outcome: DeliveryOutcome,
+/// Authorized keyset request for retained history.
+#[derive(Clone, Debug)]
+pub struct HistoryPageRequest {
+    /// Organization boundary.
+    pub organization_id: OrganizationId,
+    /// Silicon boundary.
+    pub silicon_id: SiliconId,
+    /// Optional hook restriction.
+    pub filter: HistoryFilter,
+    /// Exclusive descending keyset boundary.
+    pub cursor: Option<HistoryCursor>,
+    /// Number of records requested, from 1 through 10,000.
+    pub limit: u32,
+}
+
+/// One retained history page and its next database boundary.
+#[derive(Clone, Debug)]
+pub struct HistoryPage<T> {
+    /// Rehydrated records, newest first.
+    pub items: Vec<T>,
+    /// Exclusive boundary for the next page, before cursor authentication.
+    pub next_cursor: Option<HistoryCursor>,
 }
 
 /// Counts returned by one bounded maintenance pass.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub struct MaintenanceResult {
-    /// Event history rows removed beyond each hook's newest 10,000.
+    /// Verified request rows removed after their 14-day retention.
     pub events_purged: u64,
-    /// Terminal outbox receipts removed after their history was evicted.
-    pub outbox_rows_purged: u64,
-    /// Expired management idempotency rows removed.
-    pub idempotency_rows_purged: u64,
+    /// Blocked request rows removed after their 14-day retention.
+    pub blocked_requests_purged: u64,
     /// Hooks permanently removed after the 45-day recovery window.
     pub hooks_purged: u64,
+    /// Expired management idempotency rows removed.
+    pub idempotency_rows_purged: u64,
+    /// Inactive, non-permanent address blocks removed.
+    pub ip_blocks_purged: u64,
 }
 
 /// One independently scheduled retention-maintenance class.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum MaintenanceTask {
-    /// Evict history outside each hook's visible window.
-    EventHistory,
+    /// Remove verified requests past retention.
+    ExpiredEvents,
+    /// Remove blocked requests past retention.
+    ExpiredBlockedRequests,
     /// Permanently remove hooks beyond their recovery period.
     ExpiredHooks,
-    /// Remove terminal delivery receipts after history eviction.
-    TerminalOutbox,
     /// Remove expired management-idempotency records.
     ExpiredIdempotency,
+    /// Remove stale temporary address blocks.
+    StaleIpBlocks,
 }
 
 impl MaintenanceTask {
     /// Fair scheduling order used for every maintenance cycle.
-    pub(crate) const ALL: [Self; 4] = [
-        Self::EventHistory,
+    pub(crate) const ALL: [Self; 5] = [
+        Self::ExpiredEvents,
+        Self::ExpiredBlockedRequests,
         Self::ExpiredHooks,
-        Self::TerminalOutbox,
         Self::ExpiredIdempotency,
+        Self::StaleIpBlocks,
     ];
 
     /// Stable, non-sensitive diagnostic name.
     pub(crate) const fn diagnostic_code(self) -> &'static str {
         match self {
-            Self::EventHistory => "event_history",
+            Self::ExpiredEvents => "expired_events",
+            Self::ExpiredBlockedRequests => "expired_blocked_requests",
             Self::ExpiredHooks => "expired_hooks",
-            Self::TerminalOutbox => "terminal_outbox",
             Self::ExpiredIdempotency => "expired_idempotency",
+            Self::StaleIpBlocks => "stale_ip_blocks",
         }
     }
 }
@@ -335,85 +401,4 @@ pub(crate) struct MaintenanceBatch {
     pub(crate) rows_affected: u64,
     /// Whether immediately eligible work remains for this task.
     pub(crate) more_work: bool,
-}
-
-/// An accepted event and its ingress idempotency key.
-#[derive(Clone, Debug)]
-pub struct NewEvent {
-    /// Validated immutable event with pending delivery state.
-    pub event: EventRecord,
-    /// Exact bounded JSON representation committed to the DM outbox.
-    pub(crate) dm_request_body: DmRequestBody,
-    /// Ciphertext that authenticated this request before the transaction.
-    /// The store compares it under the hook row lock to linearize rotation.
-    pub expected_encrypted_secret: EncryptedSecret,
-    /// Digest of the exact authenticated timestamp-and-body representation.
-    /// This closes replay attempts that substitute a new idempotency key.
-    pub authenticated_request_digest: RequestDigest,
-    /// Caller-supplied visible-ASCII idempotency key.
-    pub idempotency_key: String,
-}
-
-impl NewEvent {
-    /// Constructs an event acceptance command and freezes its exact bounded DM
-    /// representation before any persistence work starts.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when the normalized DM body cannot be serialized or
-    /// exceeds the common API/worker acceptance bound.
-    pub fn new(
-        event: EventRecord,
-        expected_encrypted_secret: EncryptedSecret,
-        authenticated_request_digest: RequestDigest,
-        idempotency_key: String,
-    ) -> Result<Self, DmRequestBodyError> {
-        let dm_request_body = DmRequestBody::from_event(&event)?;
-        Ok(Self {
-            event,
-            dm_request_body,
-            expected_encrypted_secret,
-            authenticated_request_digest,
-            idempotency_key,
-        })
-    }
-}
-
-/// Result of atomically accepting an event and its DM outbox job.
-#[derive(Clone, Debug)]
-pub enum IngressAcceptance {
-    /// This request committed a new immutable event and outbox row.
-    Accepted {
-        /// Newly committed stable event identifier.
-        event_id: EventId,
-    },
-    /// A content-identical request was accepted earlier.
-    Replayed {
-        /// Stable identifier from the original acceptance.
-        event_id: EventId,
-    },
-}
-
-/// Authorized keyset request for retained event history.
-#[derive(Clone, Debug)]
-pub struct EventPageRequest {
-    /// Organization boundary.
-    pub organization_id: OrganizationId,
-    /// Silicon boundary.
-    pub silicon_id: SiliconId,
-    /// Optional hook and event-type restrictions.
-    pub filter: EventFilter,
-    /// Exclusive descending keyset boundary.
-    pub cursor: Option<EventCursor>,
-    /// Number of records requested, from 1 through 10,000.
-    pub limit: u32,
-}
-
-/// One retained event-history page and its next database boundary.
-#[derive(Clone, Debug)]
-pub struct EventPage {
-    /// Rehydrated event history records.
-    pub items: Vec<EventRecord>,
-    /// Exclusive boundary for the next page, before cursor authentication.
-    pub next_cursor: Option<EventCursor>,
 }

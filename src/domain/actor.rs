@@ -100,6 +100,10 @@ pub enum Capability {
     SetHookEnabled,
     /// May rotate a signing secret for an organization Silicon.
     RotateSecret,
+    /// May rotate the public endpoint of an organization Silicon's hook.
+    RotateEndpoint,
+    /// May change metadata or signing policy of an organization Silicon's hook.
+    UpdateHook,
     /// May inspect retained event history for an organization Silicon.
     ReadEvents,
     /// May bypass the normal same-application ownership restriction for an OBO

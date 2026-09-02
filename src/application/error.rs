@@ -1,6 +1,7 @@
 //! Transport-independent failures produced by Hook use cases.
 
 use thiserror::Error;
+use time::OffsetDateTime;
 
 /// Stable semantic failures returned by application workflows.
 #[derive(Debug, Error)]
@@ -11,9 +12,14 @@ pub enum ApplicationError {
         /// Stable field or input category.
         field: &'static str,
     },
-    /// The request body is not syntactically valid JSON.
-    #[error("request body contains malformed JSON")]
-    MalformedJson,
+    /// A caller-controlled value violated an invariant, with a safe explanation.
+    #[error("invalid {field}: {detail}")]
+    ValidationDetailed {
+        /// Stable field or input category.
+        field: &'static str,
+        /// Human-readable, non-sensitive detail.
+        detail: String,
+    },
     /// The authenticated principal may not perform the operation.
     #[error("operation is forbidden")]
     Forbidden,
@@ -23,6 +29,15 @@ pub enum ApplicationError {
     /// A deleted resource is outside its recovery window.
     #[error("hook recovery period has expired")]
     RecoveryExpired,
+    /// The endpoint key was rotated away and is permanently retired.
+    #[error("endpoint key has been retired")]
+    EndpointRetired,
+    /// The client address is blocked for this endpoint.
+    #[error("client address is blocked for this endpoint")]
+    IpBlocked {
+        /// End of a temporary block; `None` when permanent.
+        until: Option<OffsetDateTime>,
+    },
     /// An idempotency key was reused for different content.
     #[error("idempotency key conflicts with an earlier request")]
     IdempotencyConflict,
@@ -38,11 +53,8 @@ pub enum ApplicationError {
     /// The target Silicon owns the maximum number of retained hooks.
     #[error("the retained hook limit has been reached")]
     HookLimitReached,
-    /// The public webhook signature is absent, stale, malformed, or invalid.
-    #[error("webhook signature is invalid")]
-    InvalidSignature,
-    /// The normalized representation cannot fit the durable DM contract.
-    #[error("normalized event representation is too large")]
+    /// The request body or headers exceed a capture bound.
+    #[error("request exceeds a capture bound")]
     PayloadTooLarge,
     /// A required infrastructure dependency cannot currently serve requests.
     #[error("a required dependency is unavailable")]

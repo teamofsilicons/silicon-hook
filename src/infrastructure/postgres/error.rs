@@ -49,11 +49,8 @@ pub enum StoreError {
     /// The secret from an older idempotent result has since been rotated.
     #[error("the one-time secret was superseded by a later rotation")]
     SecretSuperseded,
-    /// A worker tried to finish work after losing its lease.
-    #[error("DM delivery lease is no longer owned by this worker")]
-    LeaseLost,
-    /// A generated endpoint key collided with an existing key for the Silicon.
-    #[error("endpoint key already exists for this Silicon")]
+    /// A generated endpoint key collided with a live or retired key.
+    #[error("endpoint key already exists or was retired for this Silicon")]
     EndpointKeyConflict,
     /// IAM has already provisioned a default hook for this Silicon.
     #[error("the Silicon IAM hook already exists")]
@@ -93,7 +90,7 @@ impl StoreError {
     /// Returns a bounded diagnostic class that never includes SQL text, row
     /// values, credentials, or provider details.
     #[must_use]
-    pub(crate) const fn diagnostic_code(&self) -> &'static str {
+    pub const fn diagnostic_code(&self) -> &'static str {
         match self {
             Self::Database(_) => "database",
             Self::Migration(_) => "migration",
@@ -104,7 +101,6 @@ impl StoreError {
             Self::IdempotencyConflict => "idempotency_conflict",
             Self::SecretReplayExpired => "secret_replay_expired",
             Self::SecretSuperseded => "secret_superseded",
-            Self::LeaseLost => "lease_lost",
             Self::EndpointKeyConflict => "endpoint_key_conflict",
             Self::IamDefaultExists => "iam_default_exists",
             Self::HookLimitReached => "hook_limit_reached",

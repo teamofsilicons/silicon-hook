@@ -189,6 +189,10 @@ uuid_id!(
     /// Stable public identifier of an accepted event.
     EventId
 );
+uuid_id!(
+    /// Stable public identifier of a blocked request.
+    BlockedRequestId
+);
 
 #[cfg(test)]
 mod tests {

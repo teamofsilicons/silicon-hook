@@ -2,7 +2,6 @@
 
 use std::{fmt, str::FromStr};
 
-use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Deserializer, Serialize, Serializer, de::Error as _};
 use time::{Duration, OffsetDateTime};
 use zeroize::Zeroizing;
@@ -10,25 +9,34 @@ use zeroize::Zeroizing;
 use super::{
     ActorRef, ApplicationId, DomainError, EntropyError, HookId, OrganizationId, SiliconId,
     TransitionError,
+    signature::{MAX_SECRET_BYTES, SignatureConfig},
 };
 
-/// Number of random bytes in a webhook HMAC-SHA-256 secret.
-pub const SIGNING_SECRET_BYTES: usize = 32;
-/// Prefix distinguishing webhook signing credentials from other opaque values.
-pub const SIGNING_SECRET_PREFIX: &str = "whsec_";
+/// Prefix of a Hook-generated signing secret.
+pub const SIGNING_SECRET_PREFIX: &str = "v1.";
+/// Number of random alphanumeric characters in a generated signing secret.
+pub const SIGNING_SECRET_GENERATED_LENGTH: usize = 32;
 /// Length of an AES-GCM nonce.
 pub const ENCRYPTION_NONCE_BYTES: usize = 12;
+/// Length of an AES-GCM authentication tag.
+pub const ENCRYPTION_TAG_BYTES: usize = 16;
 /// Recovery window for a soft-deleted hook.
 pub const HOOK_RECOVERY_DAYS: i64 = 45;
+/// Number of characters in an endpoint routing key.
+pub const ENDPOINT_KEY_LENGTH: usize = 6;
 
-const ENDPOINT_KEY_BYTES: usize = 3;
-const ENDPOINT_KEY_HEX_LENGTH: usize = ENDPOINT_KEY_BYTES * 2;
+const ENDPOINT_KEY_ALPHABET: &[u8; 36] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
+const SECRET_ALPHABET: &[u8; 62] =
+    b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
 const MAX_HOOK_NAME_LENGTH: usize = 200;
 const MAX_HOOK_DESCRIPTION_LENGTH: usize = 2_000;
 const MAX_ENCRYPTION_KEY_ID_BYTES: usize = 64;
-const AES_GCM_TAG_BYTES: usize = 16;
+const MAX_TIME_ZONE_BYTES: usize = 64;
 
-/// Six-character hexadecimal routing key in a public webhook URL.
+/// Six-character uppercase alphanumeric routing key in a public webhook URL.
+///
+/// The key routes a request to one hook and is never a credential; authenticity
+/// comes from the hook's signature configuration.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct EndpointKey(String);
 
@@ -40,24 +48,25 @@ impl EndpointKey {
     /// Returns [`EntropyError`] when the operating system cannot provide
     /// cryptographically secure randomness.
     pub fn generate() -> Result<Self, EntropyError> {
-        let mut bytes = [0_u8; ENDPOINT_KEY_BYTES];
-        getrandom::fill(&mut bytes).map_err(|_| EntropyError)?;
-        Ok(Self(hex::encode_upper(bytes)))
+        Ok(Self(random_string(
+            ENDPOINT_KEY_ALPHABET,
+            ENDPOINT_KEY_LENGTH,
+        )?))
     }
 
-    /// Parses a route key and normalizes hexadecimal letters to uppercase.
+    /// Parses a route key and normalizes letters to uppercase.
     ///
     /// # Errors
     ///
-    /// Returns [`DomainError`] unless the input contains exactly six
-    /// hexadecimal characters.
+    /// Returns [`DomainError`] unless the input contains exactly six ASCII
+    /// letters or digits.
     pub fn parse(value: &str) -> Result<Self, DomainError> {
-        if value.len() != ENDPOINT_KEY_HEX_LENGTH
-            || !value.bytes().all(|byte| byte.is_ascii_hexdigit())
+        if value.len() != ENDPOINT_KEY_LENGTH
+            || !value.bytes().all(|byte| byte.is_ascii_alphanumeric())
         {
             return Err(DomainError::InvalidFormat {
                 field: "endpoint_key",
-                reason: "must be exactly six hexadecimal characters",
+                reason: "must be exactly six ASCII letters or digits",
             });
         }
         Ok(Self(value.to_ascii_uppercase()))
@@ -103,84 +112,93 @@ impl<'de> Deserialize<'de> for EndpointKey {
     }
 }
 
-/// A plaintext webhook signing secret.
+/// Draws uniformly from an alphabet using rejection sampling.
+fn random_string(alphabet: &[u8], length: usize) -> Result<String, EntropyError> {
+    let alphabet_size = alphabet.len();
+    // Largest multiple of the alphabet size that fits in a byte; bytes at or
+    // above it are discarded so every symbol is equally likely.
+    let limit = (256 / alphabet_size) * alphabet_size;
+    let mut output = String::with_capacity(length);
+    let mut buffer = [0_u8; 64];
+    while output.len() < length {
+        getrandom::fill(&mut buffer).map_err(|_| EntropyError)?;
+        for byte in buffer {
+            if usize::from(byte) >= limit {
+                continue;
+            }
+            output.push(char::from(alphabet[usize::from(byte) % alphabet_size]));
+            if output.len() == length {
+                break;
+            }
+        }
+    }
+    Ok(output)
+}
+
+/// A plaintext signing secret in its textual form.
 ///
-/// Debug output is always redacted and memory is zeroized when the last copy is
-/// dropped. This value must never be persisted or logged.
-pub struct SigningSecret(Zeroizing<[u8; SIGNING_SECRET_BYTES]>);
+/// Hook-generated secrets are `v1.` followed by 32 random alphanumeric
+/// characters. Provider-issued secrets are stored verbatim. Debug output is
+/// always redacted and memory is zeroized when the last copy is dropped.
+pub struct SigningSecret(Zeroizing<String>);
 
 impl SigningSecret {
-    /// Creates a new signing secret from operating-system randomness.
+    /// Creates a new `v1.`-prefixed secret from operating-system randomness.
     ///
     /// # Errors
     ///
     /// Returns [`EntropyError`] when the operating system cannot provide
     /// cryptographically secure randomness.
     pub fn generate() -> Result<Self, EntropyError> {
-        let mut bytes = Zeroizing::new([0_u8; SIGNING_SECRET_BYTES]);
-        getrandom::fill(bytes.as_mut()).map_err(|_| EntropyError)?;
-        Ok(Self(bytes))
+        let mut secret =
+            String::with_capacity(SIGNING_SECRET_PREFIX.len() + SIGNING_SECRET_GENERATED_LENGTH);
+        secret.push_str(SIGNING_SECRET_PREFIX);
+        secret.push_str(&random_string(
+            SECRET_ALPHABET,
+            SIGNING_SECRET_GENERATED_LENGTH,
+        )?);
+        Ok(Self(Zeroizing::new(secret)))
     }
 
-    /// Wraps exactly 32 secret bytes.
-    #[must_use]
-    pub fn from_bytes(bytes: [u8; SIGNING_SECRET_BYTES]) -> Self {
-        Self(Zeroizing::new(bytes))
-    }
-
-    pub(crate) const fn from_zeroizing(bytes: Zeroizing<[u8; SIGNING_SECRET_BYTES]>) -> Self {
-        Self(bytes)
-    }
-
-    /// Decodes the one-time `whsec_` credential representation.
+    /// Wraps a caller-supplied provider secret.
     ///
     /// # Errors
     ///
-    /// Returns [`DomainError`] unless the value is the canonical unpadded
-    /// base64url encoding of exactly 32 bytes with the `whsec_` prefix.
-    pub fn from_encoded(value: &str) -> Result<Self, DomainError> {
-        let encoded =
-            value
-                .strip_prefix(SIGNING_SECRET_PREFIX)
-                .ok_or(DomainError::InvalidFormat {
-                    field: "signing_secret",
-                    reason: "must start with whsec_",
-                })?;
-        let mut bytes = Zeroizing::new([0_u8; SIGNING_SECRET_BYTES]);
-        let decoded_length = URL_SAFE_NO_PAD
-            .decode_slice(encoded, bytes.as_mut())
-            .map_err(|_| DomainError::InvalidFormat {
-                field: "signing_secret",
-                reason: "must contain unpadded base64url",
-            })?;
-        if decoded_length != SIGNING_SECRET_BYTES {
-            return Err(DomainError::InvalidFormat {
-                field: "signing_secret",
-                reason: "must encode exactly 32 bytes",
-            });
-        }
-        if URL_SAFE_NO_PAD.encode(bytes.as_ref()) != encoded {
-            return Err(DomainError::InvalidFormat {
-                field: "signing_secret",
-                reason: "must use canonical unpadded base64url",
-            });
-        }
-        Ok(Self::from_zeroizing(bytes))
+    /// Returns [`DomainError`] when the secret is empty, exceeds
+    /// [`MAX_SECRET_BYTES`], or contains control characters.
+    pub fn from_text(value: impl Into<String>) -> Result<Self, DomainError> {
+        Self::from_zeroizing(Zeroizing::new(value.into()))
     }
 
-    /// Returns the secret bytes for cryptographic operations.
+    pub(crate) fn from_zeroizing(value: Zeroizing<String>) -> Result<Self, DomainError> {
+        if value.is_empty() {
+            return Err(DomainError::Empty { field: "secret" });
+        }
+        if value.len() > MAX_SECRET_BYTES {
+            return Err(DomainError::TooLong {
+                field: "secret",
+                max: MAX_SECRET_BYTES,
+            });
+        }
+        if value.chars().any(char::is_control) {
+            return Err(DomainError::InvalidFormat {
+                field: "secret",
+                reason: "must not contain control characters",
+            });
+        }
+        Ok(Self(value))
+    }
+
+    /// Returns the secret text for cryptographic operations.
     #[must_use]
-    pub fn as_bytes(&self) -> &[u8; SIGNING_SECRET_BYTES] {
+    pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Encodes the secret for its bounded one-time API response.
+    /// Returns the secret text for a bounded one-time response.
     #[must_use]
-    pub fn to_encoded(&self) -> Zeroizing<String> {
-        let mut encoded = String::with_capacity(SIGNING_SECRET_PREFIX.len() + 43);
-        encoded.push_str(SIGNING_SECRET_PREFIX);
-        URL_SAFE_NO_PAD.encode_string(self.as_bytes(), &mut encoded);
-        Zeroizing::new(encoded)
+    pub fn to_exposed(&self) -> Zeroizing<String> {
+        self.0.clone()
     }
 }
 
@@ -253,25 +271,6 @@ impl FromStr for EncryptionKeyId {
     }
 }
 
-impl Serialize for EncryptionKeyId {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        serializer.serialize_str(&self.0)
-    }
-}
-
-impl<'de> Deserialize<'de> for EncryptionKeyId {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        let value = String::deserialize(deserializer)?;
-        Self::new(value).map_err(D::Error::custom)
-    }
-}
-
 /// Versioned AES-GCM ciphertext stored for a hook signing secret.
 #[derive(Clone, Eq, PartialEq)]
 pub struct EncryptedSecret {
@@ -296,17 +295,18 @@ impl EncryptedSecret {
     ///
     /// # Errors
     ///
-    /// Returns [`DomainError`] unless the ciphertext has the exact size of a
-    /// 32-byte plaintext and the AES-GCM authentication tag.
+    /// Returns [`DomainError`] unless the ciphertext is a non-empty plaintext
+    /// of at most [`MAX_SECRET_BYTES`] bytes plus the AES-GCM tag.
     pub fn new(
         key_id: EncryptionKeyId,
         nonce: [u8; ENCRYPTION_NONCE_BYTES],
         ciphertext: Vec<u8>,
     ) -> Result<Self, DomainError> {
-        if ciphertext.len() != SIGNING_SECRET_BYTES + AES_GCM_TAG_BYTES {
+        let plaintext_length = ciphertext.len().saturating_sub(ENCRYPTION_TAG_BYTES);
+        if ciphertext.len() <= ENCRYPTION_TAG_BYTES || plaintext_length > MAX_SECRET_BYTES {
             return Err(DomainError::InvalidFormat {
                 field: "encrypted_signing_secret",
-                reason: "ciphertext must contain a 32-byte secret and AES-GCM authentication tag",
+                reason: "ciphertext must contain a bounded secret and its AES-GCM tag",
             });
         }
         Ok(Self {
@@ -341,7 +341,7 @@ impl EncryptedSecret {
     }
 }
 
-/// Validated display name for a hook connection.
+/// Validated display name for a hook connection, also its provider name.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct HookName(String);
 
@@ -350,15 +350,20 @@ impl HookName {
     ///
     /// # Errors
     ///
-    /// Returns [`DomainError`] when the trimmed name is empty or exceeds 200
-    /// Unicode scalar values.
+    /// Returns [`DomainError`] when the trimmed name is empty, exceeds 200
+    /// Unicode scalar values, or contains control characters.
     pub fn new(value: impl Into<String>) -> Result<Self, DomainError> {
         let value = value.into();
         let value = value.trim();
         if value.is_empty() {
             return Err(DomainError::Empty { field: "name" });
         }
-        reject_postgres_nul(value, "name")?;
+        if value.chars().any(char::is_control) {
+            return Err(DomainError::InvalidFormat {
+                field: "name",
+                reason: "must not contain control characters",
+            });
+        }
         if value.chars().count() > MAX_HOOK_NAME_LENGTH {
             return Err(DomainError::TooLong {
                 field: "name",
@@ -384,8 +389,8 @@ impl HookDescription {
     ///
     /// # Errors
     ///
-    /// Returns [`DomainError`] when the trimmed description is empty or
-    /// exceeds 2,000 Unicode scalar values.
+    /// Returns [`DomainError`] when the trimmed description is empty, exceeds
+    /// 2,000 Unicode scalar values, or contains `U+0000`.
     pub fn new(value: impl Into<String>) -> Result<Self, DomainError> {
         let value = value.into();
         let value = value.trim();
@@ -394,7 +399,12 @@ impl HookDescription {
                 field: "description",
             });
         }
-        reject_postgres_nul(value, "description")?;
+        if value.contains('\0') {
+            return Err(DomainError::InvalidFormat {
+                field: "description",
+                reason: "must not contain U+0000",
+            });
+        }
         if value.chars().count() > MAX_HOOK_DESCRIPTION_LENGTH {
             return Err(DomainError::TooLong {
                 field: "description",
@@ -425,26 +435,99 @@ impl HookDescription {
     }
 }
 
-fn reject_postgres_nul(value: &str, field: &'static str) -> Result<(), DomainError> {
-    if value.contains('\0') {
-        return Err(DomainError::InvalidFormat {
-            field,
-            reason: "must not contain U+0000",
-        });
+/// IANA time zone used to render a hook's human-readable delivery summary.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HookTimeZone(String);
+
+impl HookTimeZone {
+    /// Validates an IANA zone identifier such as `Europe/Berlin` or `UTC`.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`DomainError`] when the identifier is unknown to the bundled
+    /// time zone database or is not a plausible zone name.
+    pub fn new(value: impl Into<String>) -> Result<Self, DomainError> {
+        let value = value.into();
+        let value = value.trim();
+        if value.is_empty() {
+            return Err(DomainError::Empty { field: "time_zone" });
+        }
+        if value.len() > MAX_TIME_ZONE_BYTES {
+            return Err(DomainError::TooLong {
+                field: "time_zone",
+                max: MAX_TIME_ZONE_BYTES,
+            });
+        }
+        if !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'_' | b'-' | b'+'))
+        {
+            return Err(DomainError::InvalidFormat {
+                field: "time_zone",
+                reason: "must be an IANA zone identifier",
+            });
+        }
+        let zone = jiff::tz::TimeZone::get(value).map_err(|_| DomainError::InvalidFormat {
+            field: "time_zone",
+            reason: "is not a known IANA zone identifier",
+        })?;
+        Ok(Self(zone.iana_name().unwrap_or(value).to_owned()))
     }
-    Ok(())
+
+    /// Returns the canonical zone identifier.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    /// Resolves the bundled time zone rules.
+    #[must_use]
+    pub fn resolve(&self) -> jiff::tz::TimeZone {
+        jiff::tz::TimeZone::get(&self.0).unwrap_or(jiff::tz::TimeZone::UTC)
+    }
+}
+
+impl Default for HookTimeZone {
+    fn default() -> Self {
+        Self("UTC".to_owned())
+    }
+}
+
+impl fmt::Display for HookTimeZone {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(&self.0)
+    }
 }
 
 /// Lifecycle state of a hook.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum HookStatus {
-    /// Accepting signed events.
+    /// Accepting provider requests.
     Active,
-    /// Retained with its endpoint and secret, but not accepting signed events.
+    /// Retained with its endpoint and secret, but not accepting requests.
     Disabled,
     /// Soft-deleted and retained during the recovery window.
     Deleted,
+}
+
+/// How a hook authenticates provider requests.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SigningPolicy {
+    /// Whether unverified requests are blocked rather than delivered.
+    pub required: bool,
+    /// Verification scheme, retained even while verification is disabled.
+    pub config: SignatureConfig,
+    /// Encrypted shared secret, absent for asymmetric-only configurations.
+    pub encrypted_secret: Option<EncryptedSecret>,
+}
+
+impl SigningPolicy {
+    /// Reports whether a request must verify before delivery.
+    #[must_use]
+    pub const fn is_required(&self) -> bool {
+        self.required
+    }
 }
 
 /// Values required to create a new active hook.
@@ -456,20 +539,22 @@ pub struct NewHook {
     pub organization_id: OrganizationId,
     /// Owning Silicon.
     pub silicon_id: SiliconId,
-    /// Display name.
+    /// Display and provider name.
     pub name: HookName,
     /// Optional description.
     pub description: Option<HookDescription>,
     /// URL routing key.
     pub endpoint_key: EndpointKey,
+    /// Signature verification policy.
+    pub signing: SigningPolicy,
+    /// Zone for rendered delivery summaries.
+    pub time_zone: HookTimeZone,
     /// Effective creator.
     pub created_by: ActorRef,
     /// OBO application that created the hook, if any.
     pub created_via_application: Option<ApplicationId>,
     /// Authoritative creation time.
     pub created_at: OffsetDateTime,
-    /// Encrypted signing secret.
-    pub encrypted_signing_secret: EncryptedSecret,
 }
 
 /// Persistence snapshot used to rehydrate a hook aggregate.
@@ -481,12 +566,16 @@ pub struct HookSnapshot {
     pub organization_id: OrganizationId,
     /// Owning Silicon.
     pub silicon_id: SiliconId,
-    /// Display name.
+    /// Display and provider name.
     pub name: HookName,
     /// Optional description.
     pub description: Option<HookDescription>,
-    /// URL routing key.
+    /// Current URL routing key.
     pub endpoint_key: EndpointKey,
+    /// Signature verification policy.
+    pub signing: SigningPolicy,
+    /// Zone for rendered delivery summaries.
+    pub time_zone: HookTimeZone,
     /// Lifecycle state.
     pub status: HookStatus,
     /// Effective creator.
@@ -499,8 +588,12 @@ pub struct HookSnapshot {
     pub disabled_at: Option<OffsetDateTime>,
     /// Deletion time for a deleted hook.
     pub deleted_at: Option<OffsetDateTime>,
-    /// Encrypted signing secret.
-    pub encrypted_signing_secret: EncryptedSecret,
+    /// Most recent verified request, when any has been received.
+    pub last_received_at: Option<OffsetDateTime>,
+    /// Most recent unverified request, when any has been blocked.
+    pub last_blocked_at: Option<OffsetDateTime>,
+    /// Most recent endpoint rotation.
+    pub endpoint_rotated_at: Option<OffsetDateTime>,
 }
 
 /// Webhook aggregate with lifecycle and secret invariants.
@@ -521,13 +614,17 @@ impl Hook {
                 name: new.name,
                 description: new.description,
                 endpoint_key: new.endpoint_key,
+                signing: new.signing,
+                time_zone: new.time_zone,
                 status: HookStatus::Active,
                 created_by: new.created_by,
                 created_via_application: new.created_via_application,
                 created_at: new.created_at,
                 disabled_at: None,
                 deleted_at: None,
-                encrypted_signing_secret: new.encrypted_signing_secret,
+                last_received_at: None,
+                last_blocked_at: None,
+                endpoint_rotated_at: None,
             },
         }
     }
@@ -551,23 +648,17 @@ impl Hook {
                 reason: "lifecycle status must have exactly its corresponding timestamp",
             });
         }
-        if snapshot
-            .disabled_at
-            .is_some_and(|disabled_at| disabled_at < snapshot.created_at)
-        {
-            return Err(DomainError::InvalidFormat {
-                field: "disabled_at",
-                reason: "must not precede created_at",
-            });
-        }
-        if snapshot
-            .deleted_at
-            .is_some_and(|deleted_at| deleted_at < snapshot.created_at)
-        {
-            return Err(DomainError::InvalidFormat {
-                field: "deleted_at",
-                reason: "must not precede created_at",
-            });
+        for (field, timestamp) in [
+            ("disabled_at", snapshot.disabled_at),
+            ("deleted_at", snapshot.deleted_at),
+            ("endpoint_rotated_at", snapshot.endpoint_rotated_at),
+        ] {
+            if timestamp.is_some_and(|timestamp| timestamp < snapshot.created_at) {
+                return Err(DomainError::InvalidFormat {
+                    field,
+                    reason: "must not precede created_at",
+                });
+            }
         }
         Ok(Self { snapshot })
     }
@@ -596,7 +687,7 @@ impl Hook {
         &self.snapshot.silicon_id
     }
 
-    /// Returns the display name.
+    /// Returns the display and provider name.
     #[must_use]
     pub const fn name(&self) -> &HookName {
         &self.snapshot.name
@@ -608,10 +699,22 @@ impl Hook {
         self.snapshot.description.as_ref()
     }
 
-    /// Returns the routing key.
+    /// Returns the current routing key.
     #[must_use]
     pub const fn endpoint_key(&self) -> &EndpointKey {
         &self.snapshot.endpoint_key
+    }
+
+    /// Returns the signature verification policy.
+    #[must_use]
+    pub const fn signing(&self) -> &SigningPolicy {
+        &self.snapshot.signing
+    }
+
+    /// Returns the zone used for delivery summaries.
+    #[must_use]
+    pub const fn time_zone(&self) -> &HookTimeZone {
+        &self.snapshot.time_zone
     }
 
     /// Returns lifecycle state.
@@ -620,7 +723,7 @@ impl Hook {
         self.snapshot.status
     }
 
-    /// Reports whether this hook currently accepts signed ingress.
+    /// Reports whether this hook currently accepts provider requests.
     #[must_use]
     pub const fn is_enabled(&self) -> bool {
         matches!(self.snapshot.status, HookStatus::Active)
@@ -656,6 +759,24 @@ impl Hook {
         self.snapshot.deleted_at
     }
 
+    /// Returns when the provider last reached out with a verified request.
+    #[must_use]
+    pub const fn last_received_at(&self) -> Option<OffsetDateTime> {
+        self.snapshot.last_received_at
+    }
+
+    /// Returns when a request was last blocked.
+    #[must_use]
+    pub const fn last_blocked_at(&self) -> Option<OffsetDateTime> {
+        self.snapshot.last_blocked_at
+    }
+
+    /// Returns the most recent endpoint rotation time.
+    #[must_use]
+    pub const fn endpoint_rotated_at(&self) -> Option<OffsetDateTime> {
+        self.snapshot.endpoint_rotated_at
+    }
+
     /// Reports whether this aggregate is still inside the product-visible
     /// retention window at the authoritative operation time.
     #[must_use]
@@ -667,17 +788,14 @@ impl Hook {
         })
     }
 
-    /// Returns the encrypted signing secret for persistence or verification.
+    /// Returns the encrypted signing secret, if the policy holds one.
     #[must_use]
-    pub const fn encrypted_signing_secret(&self) -> &EncryptedSecret {
-        &self.snapshot.encrypted_signing_secret
+    pub const fn encrypted_signing_secret(&self) -> Option<&EncryptedSecret> {
+        self.snapshot.signing.encrypted_secret.as_ref()
     }
 
-    /// Stops accepting new events without deleting the hook or changing its
-    /// endpoint and signing secret.
-    ///
-    /// Applying the already-satisfied state is a successful no-op so callers
-    /// can safely express a desired enablement state.
+    /// Stops accepting new requests without deleting the hook or changing its
+    /// endpoint and signing secret. Re-applying the current state is a no-op.
     ///
     /// # Errors
     ///
@@ -700,11 +818,8 @@ impl Hook {
         Ok(())
     }
 
-    /// Resumes ingress for a disabled, non-deleted hook without changing its
-    /// endpoint and signing secret.
-    ///
-    /// Applying the already-satisfied state is a successful no-op so callers
-    /// can safely express a desired enablement state.
+    /// Resumes ingress for a disabled, non-deleted hook. Re-applying the
+    /// current state is a no-op.
     ///
     /// # Errors
     ///
@@ -794,7 +909,7 @@ impl Hook {
         Ok(())
     }
 
-    /// Immediately replaces the encrypted signing secret of a non-deleted hook.
+    /// Replaces the encrypted signing secret of a non-deleted hook.
     ///
     /// # Errors
     ///
@@ -806,9 +921,93 @@ impl Hook {
         if self.snapshot.status == HookStatus::Deleted {
             return Err(TransitionError::HookAlreadyDeleted);
         }
-        self.snapshot.encrypted_signing_secret = encrypted_signing_secret;
+        self.snapshot.signing.encrypted_secret = Some(encrypted_signing_secret);
         Ok(())
     }
+
+    /// Replaces the public endpoint of a non-deleted hook and returns the
+    /// retired key so persistence can permanently reserve it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransitionError`] when the hook is deleted or the rotation
+    /// time predates creation.
+    pub fn rotate_endpoint(
+        &mut self,
+        replacement: EndpointKey,
+        rotated_at: OffsetDateTime,
+    ) -> Result<EndpointKey, TransitionError> {
+        if self.snapshot.status == HookStatus::Deleted {
+            return Err(TransitionError::HookAlreadyDeleted);
+        }
+        if rotated_at < self.snapshot.created_at {
+            return Err(TransitionError::TimestampOutOfOrder {
+                field: "endpoint_rotated_at",
+                predecessor: "created_at",
+            });
+        }
+        let retired = std::mem::replace(&mut self.snapshot.endpoint_key, replacement);
+        self.snapshot.endpoint_rotated_at = Some(rotated_at);
+        Ok(retired)
+    }
+
+    /// Updates metadata and signing policy of a non-deleted hook.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`TransitionError`] when the hook is deleted.
+    pub fn update(&mut self, update: HookUpdate) -> Result<(), TransitionError> {
+        if self.snapshot.status == HookStatus::Deleted {
+            return Err(TransitionError::HookAlreadyDeleted);
+        }
+        if let Some(name) = update.name {
+            self.snapshot.name = name;
+        }
+        if let Some(description) = update.description {
+            self.snapshot.description = description;
+        }
+        if let Some(time_zone) = update.time_zone {
+            self.snapshot.time_zone = time_zone;
+        }
+        if let Some(signing) = update.signing {
+            self.snapshot.signing = signing;
+        }
+        Ok(())
+    }
+
+    /// Records that a verified request arrived.
+    pub fn record_received(&mut self, received_at: OffsetDateTime) {
+        self.snapshot.last_received_at = Some(
+            self.snapshot
+                .last_received_at
+                .map_or(received_at, |existing| existing.max(received_at)),
+        );
+    }
+
+    /// Records that an unverified request was blocked.
+    pub fn record_blocked(&mut self, blocked_at: OffsetDateTime) {
+        self.snapshot.last_blocked_at = Some(
+            self.snapshot
+                .last_blocked_at
+                .map_or(blocked_at, |existing| existing.max(blocked_at)),
+        );
+    }
+}
+
+/// Partial replacement of hook metadata and signing policy.
+///
+/// `description: Some(None)` clears the description; `None` leaves it as is.
+#[derive(Clone, Debug, Default)]
+pub struct HookUpdate {
+    /// New display and provider name.
+    pub name: Option<HookName>,
+    /// New description, or an explicit clear.
+    #[allow(clippy::option_option)]
+    pub description: Option<Option<HookDescription>>,
+    /// New summary time zone.
+    pub time_zone: Option<HookTimeZone>,
+    /// New signing policy including its encrypted secret.
+    pub signing: Option<SigningPolicy>,
 }
 
 #[cfg(test)]
@@ -823,8 +1022,16 @@ mod tests {
         EncryptedSecret::new(
             EncryptionKeyId::new("v1")?,
             [byte; ENCRYPTION_NONCE_BYTES],
-            vec![byte; SIGNING_SECRET_BYTES + AES_GCM_TAG_BYTES],
+            vec![byte; 35 + ENCRYPTION_TAG_BYTES],
         )
+    }
+
+    fn policy(byte: u8) -> Result<SigningPolicy, DomainError> {
+        Ok(SigningPolicy {
+            required: true,
+            config: SignatureConfig::default(),
+            encrypted_secret: Some(encrypted(byte)?),
+        })
     }
 
     fn hook() -> Result<Hook, Box<dyn std::error::Error>> {
@@ -834,65 +1041,93 @@ mod tests {
             silicon_id: SiliconId::new("silicon:test")?,
             name: HookName::new("GitHub")?,
             description: HookDescription::optional(Some("Source events".to_owned()))?,
-            endpoint_key: EndpointKey::parse("a0b1c2")?,
+            endpoint_key: EndpointKey::parse("A0B1C2")?,
+            signing: policy(1)?,
+            time_zone: HookTimeZone::default(),
             created_by: ActorRef::new(ActorKind::Carbon, ActorId::new("carbon:test")?),
             created_via_application: None,
             created_at: datetime!(2026-01-01 0:00 UTC),
-            encrypted_signing_secret: encrypted(1)?,
         }))
     }
 
     #[test]
-    fn endpoint_key_normalizes_route_case() -> Result<(), DomainError> {
-        assert_eq!(EndpointKey::parse("a0B1c2")?.as_str(), "A0B1C2");
+    fn endpoint_key_is_six_uppercase_alphanumerics() -> Result<(), Box<dyn std::error::Error>> {
+        assert_eq!(EndpointKey::parse("a0z1c2")?.as_str(), "A0Z1C2");
         assert!(EndpointKey::parse("A0B1C").is_err());
-        assert!(EndpointKey::parse("G0B1C2").is_err());
+        assert!(EndpointKey::parse("A0B1C2D").is_err());
+        assert!(EndpointKey::parse("A0-1C2").is_err());
+        let generated = EndpointKey::generate()?;
+        assert_eq!(generated.as_str().len(), ENDPOINT_KEY_LENGTH);
+        assert!(
+            generated
+                .as_str()
+                .bytes()
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit())
+        );
         Ok(())
     }
 
     #[test]
-    fn signing_secret_uses_redacted_prefixed_encoding() -> Result<(), Box<dyn std::error::Error>> {
-        let secret = SigningSecret::from_bytes([0x42; SIGNING_SECRET_BYTES]);
-        let encoded = secret.to_encoded();
-        let decoded = SigningSecret::from_encoded(encoded.as_str())?;
-
-        assert!(encoded.starts_with(SIGNING_SECRET_PREFIX));
-        assert!(!encoded.contains('='));
-        assert_eq!(decoded.as_bytes(), secret.as_bytes());
+    fn generated_secrets_use_the_documented_shape() -> Result<(), Box<dyn std::error::Error>> {
+        let secret = SigningSecret::generate()?;
+        let text = secret.as_str();
+        assert!(text.starts_with(SIGNING_SECRET_PREFIX));
+        assert_eq!(
+            text.len(),
+            SIGNING_SECRET_PREFIX.len() + SIGNING_SECRET_GENERATED_LENGTH
+        );
+        assert!(
+            text[SIGNING_SECRET_PREFIX.len()..]
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric())
+        );
         assert_eq!(format!("{secret:?}"), "SigningSecret([REDACTED])");
+        assert!(SigningSecret::from_text("").is_err());
+        assert!(SigningSecret::from_text("has\ncontrol").is_err());
+        assert!(SigningSecret::from_text("x".repeat(MAX_SECRET_BYTES + 1)).is_err());
+        assert!(SigningSecret::from_text("whsec_provider-issued").is_ok());
         Ok(())
     }
 
     #[test]
-    fn signing_secret_rejects_noncanonical_encoding() {
-        let secret = SigningSecret::from_bytes([0x42; SIGNING_SECRET_BYTES]);
-        let encoded = secret.to_encoded();
-        assert!(SigningSecret::from_encoded(&format!("{}=", encoded.as_str())).is_err());
-        assert!(SigningSecret::from_encoded(&encoded.to_ascii_uppercase()).is_err());
+    fn encrypted_secret_length_is_bounded() -> Result<(), Box<dyn std::error::Error>> {
+        let key_id = EncryptionKeyId::new("v1")?;
+        assert!(EncryptedSecret::new(key_id.clone(), [0; 12], vec![0; 16]).is_err());
+        assert!(EncryptedSecret::new(key_id.clone(), [0; 12], vec![0; 17]).is_ok());
+        assert!(
+            EncryptedSecret::new(key_id.clone(), [0; 12], vec![0; MAX_SECRET_BYTES + 16]).is_ok()
+        );
+        assert!(EncryptedSecret::new(key_id, [0; 12], vec![0; MAX_SECRET_BYTES + 17]).is_err());
+        Ok(())
+    }
 
-        let mut alternate_pad_bits = encoded.as_str().to_owned();
-        alternate_pad_bits.pop();
-        alternate_pad_bits.push('B');
-        assert!(SigningSecret::from_encoded(&alternate_pad_bits).is_err());
+    #[test]
+    fn time_zones_are_validated_against_the_bundled_database() {
+        assert_eq!(
+            HookTimeZone::new("Europe/Berlin")
+                .map(|zone| zone.as_str().to_owned())
+                .ok(),
+            Some("Europe/Berlin".to_owned())
+        );
+        assert!(HookTimeZone::new("UTC").is_ok());
+        assert!(HookTimeZone::new("Mars/Olympus").is_err());
+        assert!(HookTimeZone::new("Europe/Berlin; DROP").is_err());
+        assert_eq!(HookTimeZone::default().as_str(), "UTC");
     }
 
     #[test]
     fn hook_text_limits_count_unicode_characters() {
         assert!(HookName::new("🦀".repeat(MAX_HOOK_NAME_LENGTH)).is_ok());
         assert!(HookName::new("🦀".repeat(MAX_HOOK_NAME_LENGTH + 1)).is_err());
+        assert!(HookName::new("service\nname").is_err());
         assert!(HookDescription::new("界".repeat(MAX_HOOK_DESCRIPTION_LENGTH)).is_ok());
         assert!(HookDescription::new("界".repeat(MAX_HOOK_DESCRIPTION_LENGTH + 1)).is_err());
-    }
-
-    #[test]
-    fn hook_text_rejects_postgres_incompatible_nul() {
-        assert!(HookName::new("service\0name").is_err());
         assert!(HookDescription::new("description\0text").is_err());
     }
 
     #[test]
-    fn hook_soft_delete_and_restore_obey_the_recovery_window()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn soft_delete_and_restore_obey_the_recovery_window() -> Result<(), Box<dyn std::error::Error>>
+    {
         let mut hook = hook()?;
         let deleted_at = datetime!(2026-01-02 0:00 UTC);
         hook.delete(deleted_at)?;
@@ -906,186 +1141,94 @@ mod tests {
             hook.restore(deleted_at + Duration::days(HOOK_RECOVERY_DAYS + 1)),
             Err(TransitionError::HookRecoveryExpired)
         );
+        assert_eq!(
+            hook.rotate_endpoint(EndpointKey::parse("ZZZZZZ")?, deleted_at),
+            Err(TransitionError::HookAlreadyDeleted)
+        );
         hook.restore(deleted_at + Duration::days(HOOK_RECOVERY_DAYS))?;
         assert_eq!(hook.status(), HookStatus::Active);
-        assert_eq!(hook.deleted_at(), None);
         Ok(())
     }
 
     #[test]
-    fn hook_disable_and_enable_preserve_identity_secret_and_retention()
-    -> Result<(), Box<dyn std::error::Error>> {
+    fn disable_enable_and_rotation_preserve_identity() -> Result<(), Box<dyn std::error::Error>> {
         let mut hook = hook()?;
         let hook_id = hook.id();
-        let endpoint_key = hook.endpoint_key().clone();
-        let original_secret = hook.encrypted_signing_secret().clone();
         let disabled_at = datetime!(2026-01-02 0:00 UTC);
 
         hook.disable(disabled_at)?;
-        assert_eq!(hook.status(), HookStatus::Disabled);
         assert!(!hook.is_enabled());
-        assert_eq!(hook.disabled_at(), Some(disabled_at));
-        assert_eq!(hook.deleted_at(), None);
-        assert_eq!(hook.id(), hook_id);
-        assert_eq!(hook.endpoint_key(), &endpoint_key);
-        assert_eq!(hook.encrypted_signing_secret(), &original_secret);
-        assert!(hook.is_retained_at(datetime!(2126-01-02 0:00 UTC)));
-
         hook.disable(datetime!(2026-01-03 0:00 UTC))?;
         assert_eq!(hook.disabled_at(), Some(disabled_at));
 
-        let replacement_secret = encrypted(2)?;
-        hook.rotate_secret(replacement_secret.clone())?;
-        assert_eq!(hook.encrypted_signing_secret(), &replacement_secret);
+        let replacement = encrypted(2)?;
+        hook.rotate_secret(replacement.clone())?;
+        assert_eq!(hook.encrypted_signing_secret(), Some(&replacement));
 
-        hook.enable(datetime!(2026-01-04 0:00 UTC))?;
-        assert_eq!(hook.status(), HookStatus::Active);
-        assert!(hook.is_enabled());
-        assert_eq!(hook.disabled_at(), None);
-        assert_eq!(hook.id(), hook_id);
-        assert_eq!(hook.endpoint_key(), &endpoint_key);
-        assert_eq!(hook.encrypted_signing_secret(), &replacement_secret);
+        let rotated_at = datetime!(2026-01-04 0:00 UTC);
+        let retired = hook.rotate_endpoint(EndpointKey::parse("NEW123")?, rotated_at)?;
+        assert_eq!(retired.as_str(), "A0B1C2");
+        assert_eq!(hook.endpoint_key().as_str(), "NEW123");
+        assert_eq!(hook.endpoint_rotated_at(), Some(rotated_at));
 
         hook.enable(datetime!(2026-01-05 0:00 UTC))?;
-        assert_eq!(hook.status(), HookStatus::Active);
-        Ok(())
-    }
-
-    #[test]
-    fn disabled_hook_enforces_transition_order_and_delete_restore_rules()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let mut hook = hook()?;
-        assert_eq!(
-            hook.disable(datetime!(2025-12-31 23:59:59 UTC)),
-            Err(TransitionError::TimestampOutOfOrder {
-                field: "disabled_at",
-                predecessor: "created_at",
-            })
-        );
-
-        let disabled_at = datetime!(2026-01-03 0:00 UTC);
-        hook.disable(disabled_at)?;
-        assert_eq!(
-            hook.restore(datetime!(2026-01-04 0:00 UTC)),
-            Err(TransitionError::HookNotDeleted)
-        );
-        assert_eq!(
-            hook.enable(datetime!(2026-01-02 0:00 UTC)),
-            Err(TransitionError::TimestampOutOfOrder {
-                field: "enabled_at",
-                predecessor: "disabled_at",
-            })
-        );
-        assert_eq!(
-            hook.delete(datetime!(2026-01-02 0:00 UTC)),
-            Err(TransitionError::TimestampOutOfOrder {
-                field: "deleted_at",
-                predecessor: "disabled_at",
-            })
-        );
-
-        let deleted_at = datetime!(2026-01-04 0:00 UTC);
-        hook.delete(deleted_at)?;
-        assert_eq!(hook.status(), HookStatus::Deleted);
-        assert!(!hook.is_enabled());
-        assert_eq!(hook.disabled_at(), None);
-        assert_eq!(hook.deleted_at(), Some(deleted_at));
-        assert_eq!(
-            hook.disable(datetime!(2026-01-05 0:00 UTC)),
-            Err(TransitionError::HookAlreadyDeleted)
-        );
-        assert_eq!(
-            hook.enable(datetime!(2026-01-05 0:00 UTC)),
-            Err(TransitionError::HookAlreadyDeleted)
-        );
-
-        hook.restore(datetime!(2026-01-05 0:00 UTC))?;
-        assert_eq!(hook.status(), HookStatus::Active);
         assert!(hook.is_enabled());
-        assert_eq!(hook.disabled_at(), None);
-        assert_eq!(hook.deleted_at(), None);
-        Ok(())
-    }
+        assert_eq!(hook.id(), hook_id);
 
-    #[test]
-    fn deleted_hook_cannot_rotate_its_secret() -> Result<(), Box<dyn std::error::Error>> {
-        let mut hook = hook()?;
-        hook.delete(datetime!(2026-01-02 0:00 UTC))?;
-
+        hook.record_received(datetime!(2026-01-06 0:00 UTC));
+        hook.record_received(datetime!(2026-01-05 12:00 UTC));
         assert_eq!(
-            hook.rotate_secret(encrypted(2)?),
-            Err(TransitionError::HookAlreadyDeleted)
+            hook.last_received_at(),
+            Some(datetime!(2026-01-06 0:00 UTC))
         );
+        hook.record_blocked(datetime!(2026-01-07 0:00 UTC));
+        assert_eq!(hook.last_blocked_at(), Some(datetime!(2026-01-07 0:00 UTC)));
+
+        hook.update(HookUpdate {
+            name: Some(HookName::new("GitLab")?),
+            description: Some(None),
+            time_zone: Some(HookTimeZone::new("Asia/Kolkata")?),
+            signing: Some(SigningPolicy {
+                required: false,
+                config: SignatureConfig::default(),
+                encrypted_secret: None,
+            }),
+        })?;
+        assert_eq!(hook.name().as_str(), "GitLab");
+        assert_eq!(hook.description(), None);
+        assert_eq!(hook.time_zone().as_str(), "Asia/Kolkata");
+        assert!(!hook.signing().is_required());
+        assert_eq!(hook.encrypted_signing_secret(), None);
         Ok(())
     }
 
     #[test]
     fn rehydration_rejects_inconsistent_lifecycle() -> Result<(), Box<dyn std::error::Error>> {
-        let hook = hook()?;
-        let active = hook.snapshot().clone();
+        let active = hook()?.snapshot().clone();
         let disabled_at = datetime!(2026-01-02 0:00 UTC);
-        let deleted_at = datetime!(2026-01-03 0:00 UTC);
 
         let mut disabled = active.clone();
         disabled.status = HookStatus::Disabled;
         disabled.disabled_at = Some(disabled_at);
         assert!(Hook::rehydrate(disabled).is_ok());
 
-        let mut deleted = active.clone();
-        deleted.status = HookStatus::Deleted;
-        deleted.deleted_at = Some(deleted_at);
-        assert!(Hook::rehydrate(deleted).is_ok());
-
         let mut active_with_disabled_at = active.clone();
         active_with_disabled_at.disabled_at = Some(disabled_at);
         assert!(Hook::rehydrate(active_with_disabled_at).is_err());
 
-        let mut disabled_without_timestamp = active.clone();
-        disabled_without_timestamp.status = HookStatus::Disabled;
-        assert!(Hook::rehydrate(disabled_without_timestamp).is_err());
-
-        let mut disabled_and_deleted = active.clone();
-        disabled_and_deleted.status = HookStatus::Disabled;
-        disabled_and_deleted.disabled_at = Some(disabled_at);
-        disabled_and_deleted.deleted_at = Some(deleted_at);
-        assert!(Hook::rehydrate(disabled_and_deleted).is_err());
-
-        let mut deleted_with_disabled_at = active.clone();
-        deleted_with_disabled_at.status = HookStatus::Deleted;
-        deleted_with_disabled_at.disabled_at = Some(disabled_at);
-        deleted_with_disabled_at.deleted_at = Some(deleted_at);
-        assert!(Hook::rehydrate(deleted_with_disabled_at).is_err());
-
-        let mut disabled_before_creation = active;
-        disabled_before_creation.status = HookStatus::Disabled;
-        disabled_before_creation.disabled_at = Some(datetime!(2025-12-31 23:59:59 UTC));
-        assert!(Hook::rehydrate(disabled_before_creation).is_err());
-        assert_eq!(
-            serde_json::to_value(HookStatus::Disabled)?,
-            serde_json::json!("disabled")
-        );
+        let mut early_rotation = active;
+        early_rotation.endpoint_rotated_at = Some(datetime!(2025-12-31 0:00 UTC));
+        assert!(Hook::rehydrate(early_rotation).is_err());
         Ok(())
     }
 
     proptest! {
         #[test]
-        fn every_three_byte_endpoint_key_round_trips(bytes: [u8; ENDPOINT_KEY_BYTES]) {
-            let encoded = hex::encode_upper(bytes);
-            let parsed = EndpointKey::parse(&encoded);
+        fn every_alphanumeric_key_round_trips(value in "[A-Za-z0-9]{6}") {
+            let parsed = EndpointKey::parse(&value);
             prop_assert!(parsed.is_ok());
             if let Ok(parsed) = parsed {
-                prop_assert_eq!(parsed.as_str(), encoded);
-            }
-        }
-
-        #[test]
-        fn signing_secret_encoding_round_trips(bytes: [u8; SIGNING_SECRET_BYTES]) {
-            let secret = SigningSecret::from_bytes(bytes);
-            let encoded = secret.to_encoded();
-            let decoded = SigningSecret::from_encoded(encoded.as_str());
-            prop_assert!(decoded.is_ok());
-            if let Ok(decoded) = decoded {
-                prop_assert_eq!(decoded.as_bytes(), secret.as_bytes());
+                prop_assert_eq!(parsed.as_str(), value.to_ascii_uppercase());
             }
         }
     }

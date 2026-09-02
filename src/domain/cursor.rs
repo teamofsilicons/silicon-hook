@@ -2,24 +2,31 @@
 
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
+use uuid::Uuid;
 
-use super::{EventId, EventType, HookId, OrganizationId, SiliconId};
+use super::{HookId, OrganizationId, SiliconId};
 
-/// Filters that affect an event-history keyset.
-#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
-pub struct EventFilter {
-    hook_id: Option<HookId>,
-    event_type: Option<EventType>,
+/// Which retained log a cursor pages through.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HistoryCollection {
+    /// Verified requests.
+    Events,
+    /// Withheld requests.
+    BlockedRequests,
 }
 
-impl EventFilter {
-    /// Constructs event-history filters.
+/// Filters that affect a history keyset.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct HistoryFilter {
+    hook_id: Option<HookId>,
+}
+
+impl HistoryFilter {
+    /// Constructs history filters.
     #[must_use]
-    pub const fn new(hook_id: Option<HookId>, event_type: Option<EventType>) -> Self {
-        Self {
-            hook_id,
-            event_type,
-        }
+    pub const fn new(hook_id: Option<HookId>) -> Self {
+        Self { hook_id }
     }
 
     /// Returns the optional hook restriction.
@@ -27,33 +34,30 @@ impl EventFilter {
     pub const fn hook_id(&self) -> Option<HookId> {
         self.hook_id
     }
-
-    /// Returns the optional exact event-type restriction.
-    #[must_use]
-    pub const fn event_type(&self) -> Option<&EventType> {
-        self.event_type.as_ref()
-    }
 }
 
-/// Tenant and filter identity to which a cursor is bound.
+/// Tenant, collection, and filter identity to which a cursor is bound.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct EventCursorScope {
+pub struct HistoryCursorScope {
     organization_id: OrganizationId,
     silicon_id: SiliconId,
-    filter: EventFilter,
+    collection: HistoryCollection,
+    filter: HistoryFilter,
 }
 
-impl EventCursorScope {
+impl HistoryCursorScope {
     /// Constructs a cursor scope from the authorized query.
     #[must_use]
     pub const fn new(
         organization_id: OrganizationId,
         silicon_id: SiliconId,
-        filter: EventFilter,
+        collection: HistoryCollection,
+        filter: HistoryFilter,
     ) -> Self {
         Self {
             organization_id,
             silicon_id,
+            collection,
             filter,
         }
     }
@@ -70,28 +74,31 @@ impl EventCursorScope {
         &self.silicon_id
     }
 
+    /// Returns the collection being paged.
+    #[must_use]
+    pub const fn collection(&self) -> HistoryCollection {
+        self.collection
+    }
+
     /// Returns query filters bound into the cursor.
     #[must_use]
-    pub const fn filter(&self) -> &EventFilter {
+    pub const fn filter(&self) -> &HistoryFilter {
         &self.filter
     }
 }
 
-/// Exclusive `(received_at, id)` boundary for descending event history.
+/// Exclusive `(received_at, id)` boundary for descending history.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct EventCursor {
+pub struct HistoryCursor {
     received_at: OffsetDateTime,
-    event_id: EventId,
+    id: Uuid,
 }
 
-impl EventCursor {
+impl HistoryCursor {
     /// Constructs an exclusive keyset boundary.
     #[must_use]
-    pub const fn new(received_at: OffsetDateTime, event_id: EventId) -> Self {
-        Self {
-            received_at,
-            event_id,
-        }
+    pub const fn new(received_at: OffsetDateTime, id: Uuid) -> Self {
+        Self { received_at, id }
     }
 
     /// Returns the receive-time portion of the descending keyset.
@@ -100,21 +107,19 @@ impl EventCursor {
         self.received_at
     }
 
-    /// Returns the event-ID tiebreaker of the descending keyset.
+    /// Returns the identifier tiebreaker of the descending keyset.
     #[must_use]
-    pub const fn event_id(self) -> EventId {
-        self.event_id
+    pub const fn id(self) -> Uuid {
+        self.id
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::HistoryFilter;
 
     #[test]
     fn filters_default_to_account_wide_history() {
-        let filter = EventFilter::default();
-        assert_eq!(filter.hook_id(), None);
-        assert_eq!(filter.event_type(), None);
+        assert_eq!(HistoryFilter::default().hook_id(), None);
     }
 }

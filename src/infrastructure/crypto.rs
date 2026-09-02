@@ -1,14 +1,15 @@
-//! Cryptographic boundary for webhook signatures, cursors, and stored secrets.
+//! Cryptographic boundary for stored secrets and history cursors.
 //!
 //! Key material and plaintext signing secrets have redacted debug output and
 //! zeroize their owned memory on drop. Authentication failures deliberately do
-//! not expose computed values.
+//! not expose computed values. Provider signature verification lives in the
+//! domain's `signature` module; this module protects what Hook itself stores.
 
-use std::{collections::BTreeMap, fmt, time::Duration};
+use std::{collections::BTreeMap, fmt};
 
 use aes_gcm::{
-    Aes256Gcm, Nonce, Tag,
-    aead::{Aead as _, AeadInPlace as _, KeyInit as _, Payload},
+    Aes256Gcm, Nonce,
+    aead::{Aead as _, KeyInit as _, Payload},
 };
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use hmac::{Hmac, Mac as _};
@@ -20,19 +21,15 @@ use uuid::Uuid;
 use zeroize::Zeroizing;
 
 use crate::domain::{
-    DomainError, ENCRYPTION_NONCE_BYTES, EncryptedSecret, EncryptionKeyId, EventCursor,
-    EventCursorScope, EventId, HookId, SigningSecret,
+    DomainError, ENCRYPTION_NONCE_BYTES, EncryptedSecret, EncryptionKeyId, HistoryCursor,
+    HistoryCursorScope, HookId, SigningSecret,
 };
 
 const KEY_BYTES: usize = 32;
-const AES_GCM_TAG_BYTES: usize = 16;
 const HMAC_TAG_BYTES: usize = 32;
-const CURSOR_VERSION: u8 = 1;
+const CURSOR_VERSION: u8 = 2;
 const MAX_CURSOR_BYTES: usize = 2_048;
-const WEBHOOK_SIGNATURE_PREFIX: &str = "v1=";
-const WEBHOOK_SIGNATURE_HEX_BYTES: usize = HMAC_TAG_BYTES * 2;
-const DEFAULT_SIGNATURE_SKEW: Duration = Duration::from_secs(300);
-const SECRET_AAD_DOMAIN: &[u8] = b"silicon-hook/signing-secret/v1\0";
+const SECRET_AAD_DOMAIN: &[u8] = b"silicon-hook/signing-secret/v2\0";
 
 type HmacSha256 = Hmac<Sha256>;
 
@@ -218,7 +215,21 @@ impl SecretCipher {
     ) -> Result<EncryptedSecret, SecretCipherError> {
         let mut nonce = [0_u8; ENCRYPTION_NONCE_BYTES];
         getrandom::fill(&mut nonce).map_err(|_| SecretCipherError::Randomness)?;
-        self.encrypt_with_nonce(hook_id, secret, nonce)
+        let key = self.keyring.current_key()?;
+        let cipher =
+            Aes256Gcm::new_from_slice(key.as_bytes()).map_err(|_| SecretCipherError::Encryption)?;
+        let aad = signing_secret_aad(hook_id);
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: secret.as_str().as_bytes(),
+                    aad: &aad,
+                },
+            )
+            .map_err(|_| SecretCipherError::Encryption)?;
+        EncryptedSecret::new(self.keyring.current_key_id().clone(), nonce, ciphertext)
+            .map_err(SecretCipherError::from)
     }
 
     /// Decrypts and authenticates a stored signing secret for one hook.
@@ -226,7 +237,8 @@ impl SecretCipher {
     /// # Errors
     ///
     /// Returns [`SecretCipherError`] for an unknown key version, modified
-    /// ciphertext, mismatched hook identity, or invalid plaintext size.
+    /// ciphertext, mismatched hook identity, or a plaintext that is no longer
+    /// a valid secret.
     pub fn decrypt(
         &self,
         hook_id: HookId,
@@ -236,22 +248,20 @@ impl SecretCipher {
         let cipher = Aes256Gcm::new_from_slice(key.as_bytes())
             .map_err(|_| SecretCipherError::Authentication)?;
         let aad = signing_secret_aad(hook_id);
-        let ciphertext = encrypted.ciphertext();
-        if ciphertext.len() != KEY_BYTES + AES_GCM_TAG_BYTES {
-            return Err(SecretCipherError::Authentication);
-        }
-        let (encrypted_plaintext, tag) = ciphertext.split_at(KEY_BYTES);
-        let mut plaintext = Zeroizing::new([0_u8; KEY_BYTES]);
-        plaintext.copy_from_slice(encrypted_plaintext);
-        cipher
-            .decrypt_in_place_detached(
+        let plaintext = cipher
+            .decrypt(
                 Nonce::from_slice(encrypted.nonce()),
-                &aad,
-                plaintext.as_mut(),
-                Tag::from_slice(tag),
+                Payload {
+                    msg: encrypted.ciphertext(),
+                    aad: &aad,
+                },
             )
+            .map(Zeroizing::new)
             .map_err(|_| SecretCipherError::Authentication)?;
-        Ok(SigningSecret::from_zeroizing(plaintext))
+        let text = Zeroizing::new(
+            String::from_utf8(plaintext.to_vec()).map_err(|_| SecretCipherError::Authentication)?,
+        );
+        SigningSecret::from_zeroizing(text).map_err(SecretCipherError::from)
     }
 
     /// Re-encrypts a value under the active version and a fresh nonce.
@@ -274,29 +284,6 @@ impl SecretCipher {
     pub fn needs_reencryption(&self, encrypted: &EncryptedSecret) -> bool {
         encrypted.key_id() != self.keyring.current_key_id()
     }
-
-    fn encrypt_with_nonce(
-        &self,
-        hook_id: HookId,
-        secret: &SigningSecret,
-        nonce: [u8; ENCRYPTION_NONCE_BYTES],
-    ) -> Result<EncryptedSecret, SecretCipherError> {
-        let key = self.keyring.current_key()?;
-        let cipher =
-            Aes256Gcm::new_from_slice(key.as_bytes()).map_err(|_| SecretCipherError::Encryption)?;
-        let aad = signing_secret_aad(hook_id);
-        let ciphertext = cipher
-            .encrypt(
-                Nonce::from_slice(&nonce),
-                Payload {
-                    msg: secret.as_bytes(),
-                    aad: &aad,
-                },
-            )
-            .map_err(|_| SecretCipherError::Encryption)?;
-        EncryptedSecret::new(self.keyring.current_key_id().clone(), nonce, ciphertext)
-            .map_err(SecretCipherError::from)
-    }
 }
 
 impl fmt::Debug for SecretCipher {
@@ -315,133 +302,7 @@ fn signing_secret_aad(hook_id: HookId) -> Vec<u8> {
     aad
 }
 
-/// Webhook signature or replay-window validation failure.
-#[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
-pub enum SignatureVerificationError {
-    /// Timestamp was not a canonical base-10 Unix integer.
-    #[error("X-Hook-Timestamp must be a canonical Unix timestamp")]
-    InvalidTimestamp,
-    /// Signature was not exactly `v1=` plus 64 lowercase hexadecimal digits.
-    #[error("X-Hook-Signature has an invalid format")]
-    InvalidSignatureFormat,
-    /// Timestamp is outside the accepted replay window.
-    #[error("webhook timestamp is outside the replay window")]
-    TimestampOutsideWindow,
-    /// HMAC did not authenticate the timestamp and exact body.
-    #[error("webhook signature is invalid")]
-    InvalidSignature,
-}
-
-/// HMAC-SHA-256 webhook signer and freshness verifier.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub struct WebhookSignatureVerifier {
-    max_clock_skew: Duration,
-}
-
-impl WebhookSignatureVerifier {
-    /// Creates a verifier with a caller-supplied symmetric replay window.
-    #[must_use]
-    pub const fn new(max_clock_skew: Duration) -> Self {
-        Self { max_clock_skew }
-    }
-
-    /// Signs `timestamp + "." + exact_body` in the normative v1 format.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignatureVerificationError`] if the HMAC implementation
-    /// rejects the configured key.
-    pub fn sign(
-        secret: &SigningSecret,
-        timestamp: i64,
-        exact_body: &[u8],
-    ) -> Result<String, SignatureVerificationError> {
-        let timestamp = timestamp.to_string();
-        format_signature(secret.as_bytes(), &timestamp, exact_body)
-    }
-
-    /// Verifies a canonical timestamp header, freshness, and the exact raw body.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`SignatureVerificationError`] for malformed headers, a
-    /// timestamp outside the replay window, or an HMAC mismatch.
-    pub fn verify(
-        &self,
-        secret: &SigningSecret,
-        timestamp_header: &str,
-        exact_body: &[u8],
-        signature_header: &str,
-        now: OffsetDateTime,
-    ) -> Result<(), SignatureVerificationError> {
-        let timestamp = parse_canonical_timestamp(timestamp_header)?;
-        let max_skew_seconds = self.max_clock_skew.as_secs();
-        if now.unix_timestamp().abs_diff(timestamp) > max_skew_seconds {
-            return Err(SignatureVerificationError::TimestampOutsideWindow);
-        }
-        let expected_tag = parse_signature(signature_header)?;
-        let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(secret.as_bytes())
-            .map_err(|_| SignatureVerificationError::InvalidSignature)?;
-        mac.update(timestamp_header.as_bytes());
-        mac.update(b".");
-        mac.update(exact_body);
-        mac.verify_slice(&expected_tag)
-            .map_err(|_| SignatureVerificationError::InvalidSignature)
-    }
-}
-
-fn format_signature(
-    key: &[u8],
-    timestamp: &str,
-    exact_body: &[u8],
-) -> Result<String, SignatureVerificationError> {
-    let mut mac = <HmacSha256 as hmac::Mac>::new_from_slice(key)
-        .map_err(|_| SignatureVerificationError::InvalidSignature)?;
-    mac.update(timestamp.as_bytes());
-    mac.update(b".");
-    mac.update(exact_body);
-    let tag = mac.finalize().into_bytes();
-    let mut signature =
-        String::with_capacity(WEBHOOK_SIGNATURE_PREFIX.len() + WEBHOOK_SIGNATURE_HEX_BYTES);
-    signature.push_str(WEBHOOK_SIGNATURE_PREFIX);
-    signature.push_str(&hex::encode(tag));
-    Ok(signature)
-}
-
-impl Default for WebhookSignatureVerifier {
-    fn default() -> Self {
-        Self::new(DEFAULT_SIGNATURE_SKEW)
-    }
-}
-
-fn parse_canonical_timestamp(value: &str) -> Result<i64, SignatureVerificationError> {
-    let timestamp = value
-        .parse::<i64>()
-        .map_err(|_| SignatureVerificationError::InvalidTimestamp)?;
-    if timestamp.to_string() != value {
-        return Err(SignatureVerificationError::InvalidTimestamp);
-    }
-    Ok(timestamp)
-}
-
-fn parse_signature(value: &str) -> Result<[u8; HMAC_TAG_BYTES], SignatureVerificationError> {
-    let hex_tag = value
-        .strip_prefix(WEBHOOK_SIGNATURE_PREFIX)
-        .ok_or(SignatureVerificationError::InvalidSignatureFormat)?;
-    if hex_tag.len() != WEBHOOK_SIGNATURE_HEX_BYTES
-        || !hex_tag
-            .bytes()
-            .all(|byte| byte.is_ascii_digit() || matches!(byte, b'a'..=b'f'))
-    {
-        return Err(SignatureVerificationError::InvalidSignatureFormat);
-    }
-    let mut tag = [0_u8; HMAC_TAG_BYTES];
-    hex::decode_to_slice(hex_tag, &mut tag)
-        .map_err(|_| SignatureVerificationError::InvalidSignatureFormat)?;
-    Ok(tag)
-}
-
-/// Failure to decode or authenticate an event-history cursor.
+/// Failure to decode or authenticate a history cursor.
 #[derive(Clone, Copy, Debug, Error, Eq, PartialEq)]
 pub enum CursorError {
     /// Cursor is too large to process.
@@ -459,7 +320,7 @@ pub enum CursorError {
     /// Cursor was issued by an unsupported schema version.
     #[error("cursor version is unsupported")]
     UnsupportedVersion,
-    /// Cursor belongs to a different tenant, Silicon, or filter set.
+    /// Cursor belongs to a different tenant, Silicon, collection, or filter set.
     #[error("cursor does not match the current query")]
     ScopeMismatch,
 }
@@ -467,12 +328,12 @@ pub enum CursorError {
 #[derive(Deserialize, Serialize)]
 struct CursorClaims {
     version: u8,
-    scope: EventCursorScope,
+    scope: HistoryCursorScope,
     received_at_unix_nanos: i128,
-    event_id: Uuid,
+    id: Uuid,
 }
 
-/// Stateless authenticated codec for event-history keyset cursors.
+/// Stateless authenticated codec for history keyset cursors.
 pub struct CursorCodec {
     key: SecretKey,
 }
@@ -492,14 +353,14 @@ impl CursorCodec {
     /// implementation rejects its dedicated key.
     pub fn encode(
         &self,
-        scope: &EventCursorScope,
-        cursor: EventCursor,
+        scope: &HistoryCursorScope,
+        cursor: HistoryCursor,
     ) -> Result<String, CursorError> {
         let claims = CursorClaims {
             version: CURSOR_VERSION,
             scope: scope.clone(),
             received_at_unix_nanos: cursor.received_at().unix_timestamp_nanos(),
-            event_id: cursor.event_id().as_uuid(),
+            id: cursor.id(),
         };
         let payload = serde_json::to_vec(&claims).map_err(|_| CursorError::InvalidPayload)?;
         let tag = self.authenticate(&payload)?;
@@ -518,9 +379,9 @@ impl CursorCodec {
     /// mismatch.
     pub fn decode(
         &self,
-        expected_scope: &EventCursorScope,
+        expected_scope: &HistoryCursorScope,
         encoded: &str,
-    ) -> Result<EventCursor, CursorError> {
+    ) -> Result<HistoryCursor, CursorError> {
         if encoded.len() > MAX_CURSOR_BYTES {
             return Err(CursorError::TooLong);
         }
@@ -551,10 +412,7 @@ impl CursorCodec {
         }
         let received_at = OffsetDateTime::from_unix_timestamp_nanos(claims.received_at_unix_nanos)
             .map_err(|_| CursorError::InvalidPayload)?;
-        Ok(EventCursor::new(
-            received_at,
-            EventId::from_uuid(claims.event_id),
-        ))
+        Ok(HistoryCursor::new(received_at, claims.id))
     }
 
     fn authenticate(&self, payload: &[u8]) -> Result<[u8; HMAC_TAG_BYTES], CursorError> {
@@ -577,7 +435,7 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
-    use crate::domain::{EventFilter, EventType, OrganizationId, SiliconId};
+    use crate::domain::{HistoryCollection, HistoryFilter, OrganizationId, SiliconId};
 
     fn key(byte: u8) -> SecretKey {
         SecretKey::from_bytes([byte; KEY_BYTES])
@@ -594,11 +452,12 @@ mod tests {
         )?))
     }
 
-    fn scope() -> Result<EventCursorScope, DomainError> {
-        Ok(EventCursorScope::new(
+    fn scope() -> Result<HistoryCursorScope, DomainError> {
+        Ok(HistoryCursorScope::new(
             OrganizationId::new("org:test")?,
             SiliconId::new("silicon:test")?,
-            EventFilter::new(None, Some(EventType::new("github.push")?)),
+            HistoryCollection::Events,
+            HistoryFilter::new(None),
         ))
     }
 
@@ -631,18 +490,22 @@ mod tests {
         let cipher = cipher()?;
         let hook_id = HookId::new();
         let other_hook = HookId::new();
-        let secret = SigningSecret::from_bytes([9; KEY_BYTES]);
+        let secret = SigningSecret::from_text("whsec_provider-issued-value")?;
         let encrypted = cipher.encrypt(hook_id, &secret)?;
 
         assert_eq!(
-            cipher.decrypt(hook_id, &encrypted)?.as_bytes(),
-            secret.as_bytes()
+            cipher.decrypt(hook_id, &encrypted)?.as_str(),
+            secret.as_str()
         );
         assert!(matches!(
             cipher.decrypt(other_hook, &encrypted),
             Err(SecretCipherError::Authentication)
         ));
         assert_eq!(encrypted.key_id().as_str(), "v2");
+        assert_eq!(
+            encrypted.ciphertext().len(),
+            secret.as_str().len() + crate::domain::ENCRYPTION_TAG_BYTES
+        );
         Ok(())
     }
 
@@ -650,7 +513,7 @@ mod tests {
     fn ciphertext_tampering_is_rejected() -> Result<(), Box<dyn std::error::Error>> {
         let cipher = cipher()?;
         let hook_id = HookId::new();
-        let encrypted = cipher.encrypt(hook_id, &SigningSecret::from_bytes([4; KEY_BYTES]))?;
+        let encrypted = cipher.encrypt(hook_id, &SigningSecret::generate()?)?;
         let (key_id, nonce, mut ciphertext) = encrypted.into_parts();
         if let Some(first) = ciphertext.first_mut() {
             *first ^= 1;
@@ -673,86 +536,15 @@ mod tests {
         )?);
         let rotating_cipher = cipher()?;
         let hook_id = HookId::new();
-        let secret = SigningSecret::from_bytes([3; KEY_BYTES]);
+        let secret = SigningSecret::generate()?;
         let old = old_cipher.encrypt(hook_id, &secret)?;
 
         assert!(rotating_cipher.needs_reencryption(&old));
         let current = rotating_cipher.reencrypt(hook_id, &old)?;
         assert_eq!(current.key_id().as_str(), "v2");
         assert_eq!(
-            rotating_cipher.decrypt(hook_id, &current)?.as_bytes(),
-            secret.as_bytes()
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn webhook_signature_matches_a_stable_vector() -> Result<(), Box<dyn std::error::Error>> {
-        let secret = SigningSecret::from_bytes([0x42; KEY_BYTES]);
-        let body = br#"{"type":"test.event","payload":{}}"#;
-        let signature = WebhookSignatureVerifier::sign(&secret, 1_700_000_000, body)?;
-
-        assert_eq!(
-            signature,
-            "v1=b9da4685ef42ef9503261b18c3966b1f6f5d20e5a15a3dcbcfd6628690af48b2"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn webhook_algorithm_matches_the_documented_interoperability_vector()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let body = br#"{"type":"example.created","payload":{"ok":true}}"#;
-        let signature = format_signature(b"test-secret", "1700000000", body)?;
-
-        assert_eq!(
-            signature,
-            "v1=68f7b62fdf8b22413cfa8815fd6fdf3818cbf87ec1faffa352ca50796c38e5b5"
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn webhook_verification_checks_exact_body_and_window() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let secret = SigningSecret::from_bytes([0x42; KEY_BYTES]);
-        let timestamp = 1_700_000_000_i64;
-        let body = br#"{"type":"test.event","payload":{}}"#;
-        let signature = WebhookSignatureVerifier::sign(&secret, timestamp, body)?;
-        let verifier = WebhookSignatureVerifier::default();
-        let now = OffsetDateTime::from_unix_timestamp(timestamp + 300)?;
-
-        verifier.verify(&secret, &timestamp.to_string(), body, &signature, now)?;
-        assert_eq!(
-            verifier.verify(&secret, &timestamp.to_string(), b"{}", &signature, now),
-            Err(SignatureVerificationError::InvalidSignature)
-        );
-        let late = OffsetDateTime::from_unix_timestamp(timestamp + 301)?;
-        assert_eq!(
-            verifier.verify(&secret, &timestamp.to_string(), body, &signature, late),
-            Err(SignatureVerificationError::TimestampOutsideWindow)
-        );
-        Ok(())
-    }
-
-    #[test]
-    fn signature_format_and_timestamp_are_canonical() -> Result<(), Box<dyn std::error::Error>> {
-        let secret = SigningSecret::from_bytes([0x42; KEY_BYTES]);
-        let now = OffsetDateTime::from_unix_timestamp(1_700_000_000)?;
-
-        assert_eq!(
-            WebhookSignatureVerifier::default().verify(
-                &secret,
-                "01700000000",
-                b"{}",
-                &format!("v1={}", "a".repeat(64)),
-                now,
-            ),
-            Err(SignatureVerificationError::InvalidTimestamp)
-        );
-        assert_eq!(
-            parse_signature(&format!("v1={}", "A".repeat(64))),
-            Err(SignatureVerificationError::InvalidSignatureFormat)
+            rotating_cipher.decrypt(hook_id, &current)?.as_str(),
+            secret.as_str()
         );
         Ok(())
     }
@@ -761,7 +553,8 @@ mod tests {
     fn cursor_round_trip_preserves_nanosecond_boundary() -> Result<(), Box<dyn std::error::Error>> {
         let codec = CursorCodec::new(key(7));
         let scope = scope()?;
-        let cursor = EventCursor::new(datetime!(2026-08-31 12:34:56.123456789 UTC), EventId::new());
+        let cursor =
+            HistoryCursor::new(datetime!(2026-08-31 12:34:56.123456789 UTC), Uuid::now_v7());
         let encoded = codec.encode(&scope, cursor)?;
 
         assert!(!encoded.contains('='));
@@ -773,16 +566,17 @@ mod tests {
     fn cursor_is_bound_to_scope_and_authenticated() -> Result<(), Box<dyn std::error::Error>> {
         let codec = CursorCodec::new(key(7));
         let scope = scope()?;
-        let cursor = EventCursor::new(datetime!(2026-08-31 12:00 UTC), EventId::new());
+        let cursor = HistoryCursor::new(datetime!(2026-08-31 12:00 UTC), Uuid::now_v7());
         let encoded = codec.encode(&scope, cursor)?;
-        let other_scope = EventCursorScope::new(
-            OrganizationId::new("org:other")?,
+        let other_collection = HistoryCursorScope::new(
+            scope.organization_id().clone(),
             scope.silicon_id().clone(),
+            HistoryCollection::BlockedRequests,
             scope.filter().clone(),
         );
 
         assert_eq!(
-            codec.decode(&other_scope, &encoded),
+            codec.decode(&other_collection, &encoded),
             Err(CursorError::ScopeMismatch)
         );
 
@@ -800,37 +594,23 @@ mod tests {
 
     proptest! {
         #[test]
-        fn encrypted_secrets_round_trip(secret_bytes: [u8; KEY_BYTES]) {
+        fn encrypted_secrets_round_trip(secret_text in "[!-~]{1,256}") {
             let cipher = cipher();
             prop_assert!(cipher.is_ok());
             if let Ok(cipher) = cipher {
                 let hook_id = HookId::new();
-                let secret = SigningSecret::from_bytes(secret_bytes);
-                let encrypted = cipher.encrypt(hook_id, &secret);
-                prop_assert!(encrypted.is_ok());
-                if let Ok(encrypted) = encrypted {
-                    let decrypted = cipher.decrypt(hook_id, &encrypted);
-                    prop_assert!(decrypted.is_ok());
-                    if let Ok(decrypted) = decrypted {
-                        prop_assert_eq!(decrypted.as_bytes(), secret.as_bytes());
+                let secret = SigningSecret::from_text(secret_text.clone());
+                prop_assert!(secret.is_ok());
+                if let Ok(secret) = secret {
+                    let encrypted = cipher.encrypt(hook_id, &secret);
+                    prop_assert!(encrypted.is_ok());
+                    if let Ok(encrypted) = encrypted {
+                        let decrypted = cipher.decrypt(hook_id, &encrypted);
+                        prop_assert!(decrypted.is_ok());
+                        if let Ok(decrypted) = decrypted {
+                            prop_assert_eq!(decrypted.as_str(), secret_text);
+                        }
                     }
-                }
-            }
-        }
-
-        #[test]
-        fn signature_round_trip_for_arbitrary_body(body: Vec<u8>, timestamp: i32) {
-            let secret = SigningSecret::from_bytes([11; KEY_BYTES]);
-            let timestamp = i64::from(timestamp);
-            let signature = WebhookSignatureVerifier::sign(&secret, timestamp, &body);
-            prop_assert!(signature.is_ok());
-            if let Ok(signature) = signature {
-                let now = OffsetDateTime::from_unix_timestamp(timestamp);
-                prop_assert!(now.is_ok());
-                if let Ok(now) = now {
-                    prop_assert!(WebhookSignatureVerifier::default()
-                        .verify(&secret, &timestamp.to_string(), &body, &signature, now)
-                        .is_ok());
                 }
             }
         }

@@ -13,7 +13,6 @@
 pub mod api;
 pub mod application;
 pub mod config;
-pub mod dm_contract;
 pub mod domain;
 pub mod error;
 pub mod infrastructure;

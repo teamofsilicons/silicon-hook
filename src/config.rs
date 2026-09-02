@@ -15,15 +15,14 @@ use thiserror::Error;
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::dm_contract::MAX_DM_REQUEST_BODY_BYTES;
-
 const MAX_INGRESS_BODY_BYTES: usize = 1024 * 1024;
 const MAX_MANAGEMENT_BODY_BYTES: usize = 64 * 1024;
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_KEYRING_ENTRIES: usize = 16;
-const MAX_WORKER_DELIVERY_CONCURRENCY: usize = 1_000;
 const MAX_MAINTENANCE_BATCH_SIZE: usize = 10_000;
 const MAX_MAINTENANCE_BATCHES_PER_CYCLE: u16 = 1_000;
+const MAX_TRUSTED_PROXY_HOPS: u8 = 8;
+const MAX_SILICONS_PER_CONNECTION: usize = 256;
 
 /// Fully validated settings required by the HTTP API process.
 #[derive(Clone, Debug)]
@@ -40,11 +39,13 @@ pub struct ApiSettings {
     pub crypto: CryptoSettings,
     /// Silicon IAM integration settings.
     pub iam: IamSettings,
-    /// Ingress, retention, replay, and idempotency policy.
+    /// Retention, replay, and idempotency policy.
     pub policy: PolicySettings,
+    /// WebSocket delivery policy.
+    pub realtime: RealtimeSettings,
 }
 
-/// Fully validated settings required by the asynchronous worker process.
+/// Fully validated settings required by the maintenance worker process.
 #[derive(Clone, Debug)]
 pub struct WorkerProcessSettings {
     /// Process environment and observability policy.
@@ -53,10 +54,8 @@ pub struct WorkerProcessSettings {
     pub shutdown: ShutdownSettings,
     /// Runtime PostgreSQL pool settings.
     pub database: DatabaseSettings,
-    /// Silicon DM integration settings.
-    pub dm: DmSettings,
-    /// Delivery and maintenance worker policy.
-    pub worker: WorkerSettings,
+    /// Retention maintenance policy.
+    pub maintenance: MaintenanceSettings,
 }
 
 /// Minimal settings accepted by the privileged migration command.
@@ -118,6 +117,11 @@ pub struct ServerSettings {
     pub max_management_body_bytes: usize,
     /// Maximum concurrent in-flight requests per replica.
     pub concurrency_limit: usize,
+    /// Number of trusted reverse proxies that append `X-Forwarded-For`.
+    ///
+    /// Zero means the TCP peer address is the client. With `n` trusted hops,
+    /// the client is the `n`-th address from the right of the header.
+    pub trusted_proxy_hops: u8,
 }
 
 /// PostgreSQL connection-pool policy.
@@ -182,55 +186,53 @@ pub struct LocalAuthSettings {
     pub iam_service_token: SecretString,
 }
 
-/// Silicon DM delivery adapter settings.
-#[derive(Clone, Debug)]
-pub struct DmSettings {
-    /// DM API base URL.
-    pub base_url: Url,
-    /// IAM-issued Hook service token used for DM delivery.
-    pub service_token: SecretString,
-    /// Outbound connection establishment deadline.
-    pub connect_timeout: Duration,
-    /// Complete DM request deadline.
-    pub request_timeout: Duration,
-    /// Maximum serialized event body sent to DM.
-    pub max_request_bytes: usize,
-}
-
 /// Security and lifecycle durations enforced by the API process.
+///
+/// Every value is a fixed product contract; configuration may restate it but
+/// cannot change it.
 #[derive(Clone, Debug)]
 pub struct PolicySettings {
-    /// Allowed absolute difference between signed and server timestamps.
-    pub signature_tolerance: Duration,
     /// Management idempotency record retention.
     pub idempotency_ttl: Duration,
     /// Maximum replay window for a one-time secret response.
     pub secret_replay_ttl: Duration,
     /// Soft-deleted hook recovery period.
     pub deletion_retention: Duration,
+    /// Retention of verified and blocked request logs.
+    pub log_retention: Duration,
 }
 
-/// Durable outbox processing policy.
-#[derive(Clone, Debug)]
-pub struct WorkerSettings {
-    /// Maximum outbox records claimed in one transaction.
-    pub batch_size: NonZeroUsize,
-    /// Maximum DM requests processed concurrently by one worker replica.
-    pub delivery_concurrency: NonZeroUsize,
-    /// Delay between empty outbox polls.
+/// WebSocket delivery policy.
+#[derive(Clone, Copy, Debug)]
+pub struct RealtimeSettings {
+    /// Interval between application-level `ping` frames.
+    pub heartbeat_interval: Duration,
+    /// Longest gap without a valid `pong` before the server closes.
+    pub heartbeat_timeout: Duration,
+    /// Events fetched per replay batch for one Silicon stream.
+    pub replay_batch_size: NonZeroU32,
+    /// Fallback poll interval when no notification arrives.
     pub poll_interval: Duration,
-    /// Exclusive outbox claim duration.
-    pub lease_duration: Duration,
-    /// Maximum delivery attempts before durable failure.
-    pub max_attempts: NonZeroU16,
-    /// Maximum retry delay, including a provider `Retry-After` value.
-    pub max_retry_delay: Duration,
+    /// Maximum Silicon streams one connection may subscribe to.
+    pub max_silicons_per_connection: NonZeroUsize,
+}
+
+impl RealtimeSettings {
+    /// Contract heartbeat: a ping every 30 seconds, closed after two minutes.
+    pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
+    /// Contract heartbeat timeout.
+    pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(120);
+}
+
+/// Retention maintenance policy.
+#[derive(Clone, Debug)]
+pub struct MaintenanceSettings {
     /// Maximum rows considered by one independently committed cleanup task.
-    pub maintenance_batch_size: NonZeroUsize,
+    pub batch_size: NonZeroUsize,
     /// Maximum drain rounds performed before yielding to the interval timer.
-    pub maintenance_batches_per_cycle: NonZeroU16,
+    pub batches_per_cycle: NonZeroU16,
     /// Delay between retention-maintenance runs.
-    pub maintenance_interval: Duration,
+    pub interval: Duration,
 }
 
 /// Redacted configuration loading failure.
@@ -270,6 +272,7 @@ impl ApiSettings {
         let crypto = CryptoSettings::load(source)?;
         let iam = IamSettings::load(source, environment)?;
         let policy = PolicySettings::load(source)?;
+        let realtime = RealtimeSettings::load(source)?;
 
         Ok(Self {
             process,
@@ -279,6 +282,7 @@ impl ApiSettings {
             crypto,
             iam,
             policy,
+            realtime,
         })
     }
 }
@@ -300,15 +304,13 @@ impl WorkerProcessSettings {
         let environment = process.environment;
         let shutdown = ShutdownSettings::load(source)?;
         let database = DatabaseSettings::runtime(source, environment)?;
-        let dm = DmSettings::load(source, environment)?;
-        let worker = WorkerSettings::load(source, &dm)?;
+        let maintenance = MaintenanceSettings::load(source)?;
 
         Ok(Self {
             process,
             shutdown,
             database,
-            dm,
-            worker,
+            maintenance,
         })
     }
 }
@@ -397,6 +399,13 @@ impl ServerSettings {
         )?;
         let concurrency_limit = source.parse_or("HOOK_CONCURRENCY_LIMIT", "1024")?;
         validate_positive_at_most("HOOK_CONCURRENCY_LIMIT", concurrency_limit, 65_536)?;
+        let trusted_proxy_hops: u8 = source.parse_or("HOOK_TRUSTED_PROXY_HOPS", "0")?;
+        if trusted_proxy_hops > MAX_TRUSTED_PROXY_HOPS {
+            return Err(invalid(
+                "HOOK_TRUSTED_PROXY_HOPS",
+                format!("must be between 0 and {MAX_TRUSTED_PROXY_HOPS}"),
+            ));
+        }
 
         Ok(Self {
             bind_addr: source.parse_or("HOOK_BIND_ADDR", "127.0.0.1:8080")?,
@@ -410,6 +419,7 @@ impl ServerSettings {
             max_ingress_body_bytes,
             max_management_body_bytes,
             concurrency_limit,
+            trusted_proxy_hops,
         })
     }
 }
@@ -558,70 +568,8 @@ impl IamSettings {
     }
 }
 
-impl DmSettings {
-    fn load(
-        source: &impl ConfigurationSource,
-        environment: RuntimeEnvironment,
-    ) -> Result<Self, SettingsError> {
-        let base_url = if environment.is_production() {
-            source.required_url("HOOK_DM_BASE_URL")?
-        } else {
-            source.url_or("HOOK_DM_BASE_URL", "http://127.0.0.1:8082/api/v1")?
-        };
-        validate_http_url(environment, &base_url, "HOOK_DM_BASE_URL")?;
-        if base_url.path().trim_end_matches('/') != "/api/v1"
-            || base_url.query().is_some()
-            || base_url.fragment().is_some()
-        {
-            return Err(invalid(
-                "HOOK_DM_BASE_URL",
-                "must identify the /api/v1 base path without a query or fragment",
-            ));
-        }
-        let service_token = source.required_secret("HOOK_DM_SERVICE_TOKEN")?;
-        if !service_token
-            .expose_secret()
-            .bytes()
-            .all(|byte| byte.is_ascii_graphic())
-        {
-            return Err(invalid(
-                "HOOK_DM_SERVICE_TOKEN",
-                "must contain only visible ASCII bytes",
-            ));
-        }
-        if environment.is_production() {
-            validate_secret_minimum("HOOK_DM_SERVICE_TOKEN", Some(&service_token), 16)?;
-        }
-
-        Ok(Self {
-            base_url,
-            service_token,
-            connect_timeout: source.bounded_duration_millis(
-                "HOOK_PROVIDER_CONNECT_TIMEOUT_MS",
-                1_000,
-                50,
-                30_000,
-            )?,
-            request_timeout: source.bounded_duration_seconds(
-                "HOOK_DM_REQUEST_TIMEOUT_SECONDS",
-                10,
-                1,
-                60,
-            )?,
-            max_request_bytes: source.bounded_usize(
-                "HOOK_DM_MAX_REQUEST_BYTES",
-                MAX_DM_REQUEST_BODY_BYTES,
-                MAX_DM_REQUEST_BODY_BYTES,
-                MAX_INGRESS_BODY_BYTES + 65_536,
-            )?,
-        })
-    }
-}
-
 impl PolicySettings {
     fn load(source: &impl ConfigurationSource) -> Result<Self, SettingsError> {
-        let signature_tolerance =
-            source.bounded_duration_seconds("HOOK_SIGNATURE_TOLERANCE_SECONDS", 300, 300, 300)?;
         let idempotency_ttl = source.bounded_duration_seconds(
             "HOOK_IDEMPOTENCY_TTL_SECONDS",
             86_400,
@@ -630,64 +578,85 @@ impl PolicySettings {
         )?;
         let secret_replay_ttl =
             source.bounded_duration_seconds("HOOK_SECRET_REPLAY_TTL_SECONDS", 600, 600, 600)?;
-        if secret_replay_ttl > idempotency_ttl {
-            return Err(invalid(
-                "HOOK_SECRET_REPLAY_TTL_SECONDS",
-                "must not exceed HOOK_IDEMPOTENCY_TTL_SECONDS",
-            ));
-        }
         let deletion_retention = source.bounded_duration_seconds(
             "HOOK_DELETION_RETENTION_SECONDS",
             45 * 86_400,
             45 * 86_400,
             45 * 86_400,
         )?;
+        let log_retention = source.bounded_duration_seconds(
+            "HOOK_LOG_RETENTION_SECONDS",
+            14 * 86_400,
+            14 * 86_400,
+            14 * 86_400,
+        )?;
 
         Ok(Self {
-            signature_tolerance,
             idempotency_ttl,
             secret_replay_ttl,
             deletion_retention,
+            log_retention,
         })
     }
 }
 
-impl WorkerSettings {
-    fn load(source: &impl ConfigurationSource, dm: &DmSettings) -> Result<Self, SettingsError> {
-        let lease_duration =
-            source.bounded_duration_seconds("HOOK_WORKER_LEASE_SECONDS", 60, 1, 3600)?;
-        if lease_duration <= dm.request_timeout {
+impl RealtimeSettings {
+    fn load(source: &impl ConfigurationSource) -> Result<Self, SettingsError> {
+        let heartbeat_interval = source.bounded_duration_seconds(
+            "HOOK_REALTIME_HEARTBEAT_INTERVAL_SECONDS",
+            30,
+            30,
+            30,
+        )?;
+        let heartbeat_timeout = source.bounded_duration_seconds(
+            "HOOK_REALTIME_HEARTBEAT_TIMEOUT_SECONDS",
+            120,
+            120,
+            120,
+        )?;
+        let replay_batch_size: NonZeroU32 =
+            source.parse_or("HOOK_REALTIME_REPLAY_BATCH_SIZE", "100")?;
+        if replay_batch_size.get() > 1_000 {
             return Err(invalid(
-                "HOOK_WORKER_LEASE_SECONDS",
-                "must exceed HOOK_DM_REQUEST_TIMEOUT_SECONDS",
-            ));
-        }
-        let batch_size: NonZeroUsize = source.parse_or("HOOK_WORKER_BATCH_SIZE", "100")?;
-        if batch_size.get() > 1_000 {
-            return Err(invalid(
-                "HOOK_WORKER_BATCH_SIZE",
+                "HOOK_REALTIME_REPLAY_BATCH_SIZE",
                 "must be between 1 and 1000",
             ));
         }
-        let delivery_concurrency: NonZeroUsize =
-            source.parse_or("HOOK_WORKER_DELIVERY_CONCURRENCY", "16")?;
-        if delivery_concurrency.get() > MAX_WORKER_DELIVERY_CONCURRENCY {
+        let max_silicons_per_connection: NonZeroUsize =
+            source.parse_or("HOOK_REALTIME_MAX_SILICONS_PER_CONNECTION", "64")?;
+        if max_silicons_per_connection.get() > MAX_SILICONS_PER_CONNECTION {
             return Err(invalid(
-                "HOOK_WORKER_DELIVERY_CONCURRENCY",
-                format!("must be between 1 and {MAX_WORKER_DELIVERY_CONCURRENCY}"),
+                "HOOK_REALTIME_MAX_SILICONS_PER_CONNECTION",
+                format!("must be between 1 and {MAX_SILICONS_PER_CONNECTION}"),
             ));
         }
-        let maintenance_batch_size: NonZeroUsize =
-            source.parse_or("HOOK_MAINTENANCE_BATCH_SIZE", "1000")?;
-        if maintenance_batch_size.get() > MAX_MAINTENANCE_BATCH_SIZE {
+        Ok(Self {
+            heartbeat_interval,
+            heartbeat_timeout,
+            replay_batch_size,
+            poll_interval: source.bounded_duration_millis(
+                "HOOK_REALTIME_POLL_INTERVAL_MS",
+                1_000,
+                100,
+                60_000,
+            )?,
+            max_silicons_per_connection,
+        })
+    }
+}
+
+impl MaintenanceSettings {
+    fn load(source: &impl ConfigurationSource) -> Result<Self, SettingsError> {
+        let batch_size: NonZeroUsize = source.parse_or("HOOK_MAINTENANCE_BATCH_SIZE", "1000")?;
+        if batch_size.get() > MAX_MAINTENANCE_BATCH_SIZE {
             return Err(invalid(
                 "HOOK_MAINTENANCE_BATCH_SIZE",
                 format!("must be between 1 and {MAX_MAINTENANCE_BATCH_SIZE}"),
             ));
         }
-        let maintenance_batches_per_cycle: NonZeroU16 =
+        let batches_per_cycle: NonZeroU16 =
             source.parse_or("HOOK_MAINTENANCE_BATCHES_PER_CYCLE", "32")?;
-        if maintenance_batches_per_cycle.get() > MAX_MAINTENANCE_BATCHES_PER_CYCLE {
+        if batches_per_cycle.get() > MAX_MAINTENANCE_BATCHES_PER_CYCLE {
             return Err(invalid(
                 "HOOK_MAINTENANCE_BATCHES_PER_CYCLE",
                 format!("must be between 1 and {MAX_MAINTENANCE_BATCHES_PER_CYCLE}"),
@@ -695,24 +664,8 @@ impl WorkerSettings {
         }
         Ok(Self {
             batch_size,
-            delivery_concurrency,
-            poll_interval: source.bounded_duration_millis(
-                "HOOK_WORKER_POLL_INTERVAL_MS",
-                500,
-                10,
-                60_000,
-            )?,
-            lease_duration,
-            max_attempts: source.parse_or("HOOK_WORKER_MAX_ATTEMPTS", "20")?,
-            max_retry_delay: source.bounded_duration_seconds(
-                "HOOK_WORKER_MAX_RETRY_DELAY_SECONDS",
-                900,
-                1,
-                900,
-            )?,
-            maintenance_batch_size,
-            maintenance_batches_per_cycle,
-            maintenance_interval: source.bounded_duration_seconds(
+            batches_per_cycle,
+            interval: source.bounded_duration_seconds(
                 "HOOK_MAINTENANCE_INTERVAL_SECONDS",
                 5,
                 1,
@@ -1055,12 +1008,10 @@ mod tests {
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use pretty_assertions::assert_eq;
 
-    use crate::dm_contract::MAX_DM_REQUEST_BODY_BYTES;
-
     use super::{
         ApiSettings, ConfigurationSource, MAX_MAINTENANCE_BATCH_SIZE,
-        MAX_MAINTENANCE_BATCHES_PER_CYCLE, MAX_WORKER_DELIVERY_CONCURRENCY, MigrationSettings,
-        RuntimeEnvironment, SettingsError, WorkerProcessSettings,
+        MAX_MAINTENANCE_BATCHES_PER_CYCLE, MigrationSettings, RuntimeEnvironment, SettingsError,
+        WorkerProcessSettings,
     };
 
     struct TestEnvironment(BTreeMap<&'static str, String>);
@@ -1107,18 +1058,7 @@ mod tests {
     }
 
     fn valid_worker_environment(environment: &str) -> TestEnvironment {
-        let mut values = base_environment(environment);
-        values.extend([
-            (
-                "HOOK_DM_BASE_URL",
-                "https://dm.teamofsilicons.com/api/v1".to_owned(),
-            ),
-            (
-                "HOOK_DM_SERVICE_TOKEN",
-                "a-production-length-service-token".to_owned(),
-            ),
-        ]);
-        TestEnvironment(values)
+        TestEnvironment(base_environment(environment))
     }
 
     fn valid_migration_environment(environment: &str) -> TestEnvironment {
@@ -1138,6 +1078,10 @@ mod tests {
         assert_eq!(settings.process.environment, RuntimeEnvironment::Production);
         assert_eq!(settings.crypto.encryption_keys.len(), 1);
         assert!(!settings.iam.local_auth_enabled());
+        assert_eq!(settings.server.trusted_proxy_hops, 0);
+        assert_eq!(settings.realtime.heartbeat_interval.as_secs(), 30);
+        assert_eq!(settings.realtime.heartbeat_timeout.as_secs(), 120);
+        assert_eq!(settings.policy.log_retention.as_secs(), 14 * 86_400);
         let debug = format!("{settings:?}");
         assert!(!debug.contains("a-production-length-iam-secret"));
         assert!(!debug.contains("hook:secret"));
@@ -1149,25 +1093,11 @@ mod tests {
         let settings = WorkerProcessSettings::load(&valid_worker_environment("production"))?;
 
         assert_eq!(settings.process.environment, RuntimeEnvironment::Production);
+        assert_eq!(settings.maintenance.batch_size.get(), 1_000);
+        assert_eq!(settings.maintenance.batches_per_cycle.get(), 32);
+        assert_eq!(settings.maintenance.interval.as_secs(), 5);
         let debug = format!("{settings:?}");
-        assert!(!debug.contains("a-production-length-service-token"));
         assert!(!debug.contains("hook:secret"));
-        Ok(())
-    }
-
-    #[test]
-    fn api_does_not_load_worker_credentials_or_policy() -> Result<(), SettingsError> {
-        let mut environment = valid_api_environment("production");
-        environment
-            .0
-            .insert("HOOK_DM_BASE_URL", "not a URL".to_owned());
-        environment.0.insert("HOOK_DM_SERVICE_TOKEN", String::new());
-        environment
-            .0
-            .insert("HOOK_WORKER_BATCH_SIZE", "0".to_owned());
-
-        let settings = ApiSettings::load(&environment)?;
-        assert_eq!(settings.process.environment, RuntimeEnvironment::Production);
         Ok(())
     }
 
@@ -1191,12 +1121,11 @@ mod tests {
     }
 
     #[test]
-    fn migration_does_not_load_runtime_or_provider_credentials() -> Result<(), SettingsError> {
+    fn migration_does_not_load_runtime_credentials() -> Result<(), SettingsError> {
         let mut environment = valid_migration_environment("production");
         environment
             .0
             .insert("HOOK_DATABASE_URL", "not a URL".to_owned());
-        environment.0.insert("HOOK_DM_SERVICE_TOKEN", String::new());
         environment
             .0
             .insert("HOOK_ENCRYPTION_KEYS", "not-a-keyring".to_owned());
@@ -1221,13 +1150,6 @@ mod tests {
             ));
         }
 
-        let mut worker = valid_worker_environment("production");
-        worker.0.remove("HOOK_DM_SERVICE_TOKEN");
-        assert!(matches!(
-            WorkerProcessSettings::load(&worker),
-            Err(SettingsError::Missing("HOOK_DM_SERVICE_TOKEN"))
-        ));
-
         let mut migration = valid_migration_environment("production");
         migration.0.remove("HOOK_MIGRATOR_DATABASE_URL");
         assert!(matches!(
@@ -1251,23 +1173,6 @@ mod tests {
             ApiSettings::load(&environment),
             Err(SettingsError::Invalid {
                 name: "HOOK_ALLOW_LOCAL_AUTH",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn production_worker_rejects_insecure_dm_url() {
-        let mut environment = valid_worker_environment("production");
-        environment.0.insert(
-            "HOOK_DM_BASE_URL",
-            "http://dm.teamofsilicons.com/api/v1".to_owned(),
-        );
-
-        assert!(matches!(
-            WorkerProcessSettings::load(&environment),
-            Err(SettingsError::Invalid {
-                name: "HOOK_DM_BASE_URL",
                 ..
             })
         ));
@@ -1349,43 +1254,28 @@ mod tests {
         for (name, value) in [
             ("HOOK_MAX_INGRESS_BODY_BYTES", "1048575"),
             ("HOOK_MAX_MANAGEMENT_BODY_BYTES", "65535"),
-            ("HOOK_SIGNATURE_TOLERANCE_SECONDS", "299"),
             ("HOOK_IDEMPOTENCY_TTL_SECONDS", "86401"),
             ("HOOK_SECRET_REPLAY_TTL_SECONDS", "599"),
             ("HOOK_DELETION_RETENTION_SECONDS", "3888001"),
+            ("HOOK_LOG_RETENTION_SECONDS", "1209599"),
+            ("HOOK_REALTIME_HEARTBEAT_INTERVAL_SECONDS", "31"),
+            ("HOOK_REALTIME_HEARTBEAT_TIMEOUT_SECONDS", "119"),
+            ("HOOK_TRUSTED_PROXY_HOPS", "9"),
         ] {
             let mut environment = valid_api_environment("production");
             environment.0.insert(name, value.to_owned());
-            assert!(matches!(
-                ApiSettings::load(&environment),
-                Err(SettingsError::Invalid { name: rejected, .. }) if rejected == name
-            ));
+            assert!(
+                matches!(
+                    ApiSettings::load(&environment),
+                    Err(SettingsError::Invalid { name: rejected, .. }) if rejected == name
+                ),
+                "{name} accepted {value}"
+            );
         }
     }
 
     #[test]
-    fn worker_batch_size_is_bounded_by_the_store_contract() {
-        let mut environment = valid_worker_environment("production");
-        environment
-            .0
-            .insert("HOOK_WORKER_BATCH_SIZE", "1001".to_owned());
-
-        assert!(matches!(
-            WorkerProcessSettings::load(&environment),
-            Err(SettingsError::Invalid {
-                name: "HOOK_WORKER_BATCH_SIZE",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn maintenance_capacity_is_independent_and_bounded() -> Result<(), SettingsError> {
-        let defaults = WorkerProcessSettings::load(&valid_worker_environment("production"))?;
-        assert_eq!(defaults.worker.maintenance_batch_size.get(), 1_000);
-        assert_eq!(defaults.worker.maintenance_batches_per_cycle.get(), 32);
-        assert_eq!(defaults.worker.maintenance_interval.as_secs(), 5);
-
+    fn maintenance_capacity_is_bounded() {
         for (name, value) in [
             (
                 "HOOK_MAINTENANCE_BATCH_SIZE",
@@ -1403,51 +1293,21 @@ mod tests {
                 Err(SettingsError::Invalid { name: rejected, .. }) if rejected == name
             ));
         }
-        Ok(())
     }
 
     #[test]
-    fn dm_request_limit_covers_every_valid_ingress_delivery() {
-        let mut environment = valid_worker_environment("production");
-        environment.0.insert(
-            "HOOK_DM_MAX_REQUEST_BYTES",
-            (MAX_DM_REQUEST_BODY_BYTES - 1).to_string(),
-        );
-
-        assert!(matches!(
-            WorkerProcessSettings::load(&environment),
-            Err(SettingsError::Invalid {
-                name: "HOOK_DM_MAX_REQUEST_BYTES",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn delivery_concurrency_is_independent_and_bounded() -> Result<(), SettingsError> {
-        let mut environment = valid_worker_environment("production");
-        environment
-            .0
-            .insert("HOOK_WORKER_BATCH_SIZE", "4".to_owned());
-        environment
-            .0
-            .insert("HOOK_WORKER_DELIVERY_CONCURRENCY", "8".to_owned());
-
-        let settings = WorkerProcessSettings::load(&environment)?;
-        assert_eq!(settings.worker.batch_size.get(), 4);
-        assert_eq!(settings.worker.delivery_concurrency.get(), 8);
-
-        environment.0.insert(
-            "HOOK_WORKER_DELIVERY_CONCURRENCY",
-            (MAX_WORKER_DELIVERY_CONCURRENCY + 1).to_string(),
-        );
-        assert!(matches!(
-            WorkerProcessSettings::load(&environment),
-            Err(SettingsError::Invalid {
-                name: "HOOK_WORKER_DELIVERY_CONCURRENCY",
-                ..
-            })
-        ));
-        Ok(())
+    fn realtime_batch_and_subscription_bounds_are_enforced() {
+        for (name, value) in [
+            ("HOOK_REALTIME_REPLAY_BATCH_SIZE", "1001"),
+            ("HOOK_REALTIME_MAX_SILICONS_PER_CONNECTION", "257"),
+            ("HOOK_REALTIME_POLL_INTERVAL_MS", "50"),
+        ] {
+            let mut environment = valid_api_environment("production");
+            environment.0.insert(name, value.to_owned());
+            assert!(matches!(
+                ApiSettings::load(&environment),
+                Err(SettingsError::Invalid { name: rejected, .. }) if rejected == name
+            ));
+        }
     }
 }

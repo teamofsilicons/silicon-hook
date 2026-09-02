@@ -22,6 +22,8 @@ pub enum AppError {
     Validation {
         /// Stable, machine-readable validation reason.
         code: Cow<'static, str>,
+        /// Optional safe explanation for the caller.
+        details: Option<String>,
     },
     /// Credential is absent, invalid, expired, or revoked.
     #[error("authentication is required")]
@@ -29,6 +31,12 @@ pub enum AppError {
     /// Authenticated actor lacks authority for this action.
     #[error("the actor is not authorized for this action")]
     Forbidden,
+    /// The client address is blocked for the endpoint.
+    #[error("the client address is blocked for this endpoint")]
+    Blocked {
+        /// Remaining block duration, or `None` when permanent.
+        retry_after: Option<std::time::Duration>,
+    },
     /// Resource does not exist in the caller-visible organization scope.
     #[error("resource was not found")]
     NotFound,
@@ -82,6 +90,8 @@ struct PublicError {
     code: Cow<'static, str>,
     message: Cow<'static, str>,
     request_id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    details: Option<String>,
 }
 
 impl AppError {
@@ -94,7 +104,22 @@ impl AppError {
     /// Creates a domain validation error with a stable code.
     #[must_use]
     pub fn validation(code: impl Into<Cow<'static, str>>) -> Self {
-        Self::Validation { code: code.into() }
+        Self::Validation {
+            code: code.into(),
+            details: None,
+        }
+    }
+
+    /// Creates a domain validation error with a safe explanation.
+    #[must_use]
+    pub fn validation_with_details(
+        code: impl Into<Cow<'static, str>>,
+        details: impl Into<String>,
+    ) -> Self {
+        Self::Validation {
+            code: code.into(),
+            details: Some(details.into()),
+        }
     }
 
     /// Creates a conflict error with a stable code.
@@ -122,7 +147,7 @@ impl AppError {
             Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
             Self::Validation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
-            Self::Forbidden => StatusCode::FORBIDDEN,
+            Self::Forbidden | Self::Blocked { .. } => StatusCode::FORBIDDEN,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Gone { .. } => StatusCode::GONE,
             Self::Conflict { .. } => StatusCode::CONFLICT,
@@ -136,61 +161,80 @@ impl AppError {
         }
     }
 
-    fn public_parts(self) -> (Cow<'static, str>, Cow<'static, str>) {
+    fn public_parts(self) -> (Cow<'static, str>, Cow<'static, str>, Option<String>) {
         match self {
-            Self::BadRequest { code } => (code, Cow::Borrowed("The request is malformed.")),
-            Self::Validation { code } => {
-                (code, Cow::Borrowed("The request contains invalid data."))
-            }
+            Self::BadRequest { code } => (code, Cow::Borrowed("The request is malformed."), None),
+            Self::Validation { code, details } => (
+                code,
+                Cow::Borrowed("The request contains invalid data."),
+                details,
+            ),
             Self::Unauthenticated => (
                 Cow::Borrowed("unauthenticated"),
                 Cow::Borrowed("Authentication is required."),
+                None,
             ),
             Self::Forbidden => (
                 Cow::Borrowed("forbidden"),
                 Cow::Borrowed("The actor is not authorized for this action."),
+                None,
+            ),
+            Self::Blocked { .. } => (
+                Cow::Borrowed("ip_blocked"),
+                Cow::Borrowed("The client address is blocked for this endpoint."),
+                None,
             ),
             Self::NotFound => (
                 Cow::Borrowed("not_found"),
                 Cow::Borrowed("The requested resource was not found."),
+                None,
             ),
             Self::Gone { code } => (
                 code,
                 Cow::Borrowed("The requested resource is no longer available."),
+                None,
             ),
             Self::Conflict { code } => (
                 code,
                 Cow::Borrowed("The request conflicts with the current resource state."),
+                None,
             ),
             Self::RateLimited { .. } => (
                 Cow::Borrowed("rate_limited"),
                 Cow::Borrowed("Too many requests. Retry later."),
+                None,
             ),
             Self::Timeout => (
                 Cow::Borrowed("request_timeout"),
                 Cow::Borrowed("The request exceeded its processing deadline."),
+                None,
             ),
             Self::PayloadTooLarge => (
                 Cow::Borrowed("payload_too_large"),
                 Cow::Borrowed("The request body exceeds the allowed size."),
+                None,
             ),
             Self::UnsupportedMediaType => (
                 Cow::Borrowed("unsupported_media_type"),
                 Cow::Borrowed("The request media type is not supported."),
+                None,
             ),
             Self::MethodNotAllowed => (
                 Cow::Borrowed("method_not_allowed"),
                 Cow::Borrowed("The HTTP method is not allowed for this route."),
+                None,
             ),
             Self::ProviderUnavailable => (
                 Cow::Borrowed("provider_unavailable"),
                 Cow::Borrowed("A required dependency is temporarily unavailable."),
+                None,
             ),
             Self::Internal(_source) => {
                 error!("unhandled internal application error");
                 (
                     Cow::Borrowed("internal_error"),
                     Cow::Borrowed("An internal service error occurred."),
+                    None,
                 )
             }
         }
@@ -202,9 +246,10 @@ impl IntoResponse for AppError {
         let status = self.status();
         let retry_after = match &self {
             Self::RateLimited { retry_after } => Some(*retry_after),
+            Self::Blocked { retry_after } => *retry_after,
             _ => None,
         };
-        let (code, message) = self.public_parts();
+        let (code, message, details) = self.public_parts();
         let mut response = (
             status,
             Json(ErrorEnvelope {
@@ -212,6 +257,7 @@ impl IntoResponse for AppError {
                     code,
                     message,
                     request_id: request_id(),
+                    details,
                 },
             }),
         )
@@ -224,7 +270,7 @@ impl IntoResponse for AppError {
             );
         }
         if let Some(retry_after) = retry_after
-            && let Ok(value) = HeaderValue::from_str(&retry_after.as_secs().to_string())
+            && let Ok(value) = HeaderValue::from_str(&retry_after.as_secs().max(1).to_string())
         {
             response.headers_mut().insert(header::RETRY_AFTER, value);
         }
@@ -262,6 +308,7 @@ mod tests {
         assert_eq!(body["error"]["code"], "not_found");
         assert_eq!(body["error"]["request_id"], "req_01");
         assert!(body.get("request_id").is_none());
+        assert!(body["error"].get("details").is_none());
         Ok(())
     }
 
@@ -275,6 +322,30 @@ mod tests {
         assert!(!encoded.contains("database-password"));
         assert!(!encoded.contains("secret"));
         assert!(encoded.contains("internal_error"));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn blocked_addresses_receive_retry_after_and_validation_details()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let blocked = AppError::Blocked {
+            retry_after: Some(std::time::Duration::from_secs(90)),
+        }
+        .into_response();
+        assert_eq!(blocked.status(), StatusCode::FORBIDDEN);
+        assert_eq!(
+            blocked
+                .headers()
+                .get(http::header::RETRY_AFTER)
+                .and_then(|value| value.to_str().ok()),
+            Some("90")
+        );
+
+        let detailed =
+            AppError::validation_with_details("invalid_signature", "unknown function md5")
+                .into_response();
+        let body: Value = serde_json::from_slice(&to_bytes(detailed.into_body(), 4096).await?)?;
+        assert_eq!(body["error"]["details"], "unknown function md5");
         Ok(())
     }
 }

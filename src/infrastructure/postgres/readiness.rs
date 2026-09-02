@@ -5,15 +5,16 @@ use std::collections::BTreeMap;
 use super::{MIGRATOR, PostgresStore, StoreError, schema_contract};
 
 const REQUIRED_RELATIONS: &[&str] = &[
+    "hook.blocked_requests",
     "hook.events",
     "hook.hooks",
     "hook_private.audit_log",
-    "hook_private.dm_outbox",
-    "hook_private.event_retention_state",
+    "hook_private.delivery_cursors",
+    "hook_private.delivery_sequences",
     "hook_private.iam_hook_registrations",
-    "hook_private.ingress_authenticated_requests",
-    "hook_private.ingress_idempotency",
+    "hook_private.ip_blocks",
     "hook_private.management_idempotency",
+    "hook_private.retired_endpoint_keys",
 ];
 
 const REQUIRED_SCHEMAS: &[&str] = &["hook|USAGE", "hook_private|USAGE"];
@@ -25,14 +26,20 @@ const API_TABLE_PRIVILEGES: &[&str] = &[
     "hook.hooks|UPDATE",
     "hook.events|SELECT",
     "hook.events|INSERT",
-    "hook_private.ingress_idempotency|SELECT",
-    "hook_private.ingress_idempotency|INSERT",
-    "hook_private.ingress_authenticated_requests|SELECT",
-    "hook_private.ingress_authenticated_requests|INSERT",
-    "hook_private.ingress_authenticated_requests|DELETE",
+    "hook.blocked_requests|SELECT",
+    "hook.blocked_requests|INSERT",
+    "hook_private.retired_endpoint_keys|SELECT",
+    "hook_private.retired_endpoint_keys|INSERT",
     "hook_private.iam_hook_registrations|INSERT",
-    "hook_private.dm_outbox|SELECT",
-    "hook_private.dm_outbox|INSERT",
+    "hook_private.delivery_sequences|SELECT",
+    "hook_private.delivery_sequences|INSERT",
+    "hook_private.delivery_sequences|UPDATE",
+    "hook_private.delivery_cursors|SELECT",
+    "hook_private.delivery_cursors|INSERT",
+    "hook_private.delivery_cursors|UPDATE",
+    "hook_private.ip_blocks|SELECT",
+    "hook_private.ip_blocks|INSERT",
+    "hook_private.ip_blocks|UPDATE",
     "hook_private.management_idempotency|SELECT",
     "hook_private.management_idempotency|INSERT",
     "hook_private.management_idempotency|UPDATE",
@@ -46,28 +53,20 @@ const WORKER_TABLE_PRIVILEGES: &[&str] = &[
     "hook.hooks|DELETE",
     "hook.events|SELECT",
     "hook.events|DELETE",
-    "hook_private.event_retention_state|SELECT",
-    "hook_private.event_retention_state|UPDATE",
-    "hook_private.dm_outbox|SELECT",
-    "hook_private.dm_outbox|UPDATE",
-    "hook_private.dm_outbox|DELETE",
+    "hook.blocked_requests|SELECT",
+    "hook.blocked_requests|DELETE",
+    "hook_private.ip_blocks|SELECT",
+    "hook_private.ip_blocks|DELETE",
     "hook_private.management_idempotency|SELECT",
     "hook_private.management_idempotency|DELETE",
-];
-
-const API_FUNCTION_PRIVILEGES: &[&str] = &["hook_private.track_event_retention_inserts()|EXECUTE"];
-
-const WORKER_FUNCTION_PRIVILEGES: &[&str] = &[
-    "hook_private.protect_dm_outbox_payload()|EXECUTE",
-    "hook_private.track_event_retention_deletes()|EXECUTE",
 ];
 
 /// Runtime process whose exact PostgreSQL grants must be available.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeDatabaseRole {
-    /// HTTP management and ingress process.
+    /// HTTP management, ingress, and realtime delivery process.
     Api,
-    /// Delivery and retention process.
+    /// Retention maintenance process.
     Worker,
 }
 
@@ -102,23 +101,17 @@ impl PostgresStore {
         }
 
         let applied = sqlx::query_as::<_, AppliedMigration>(
-            r"
-            SELECT version, checksum, success
-            FROM _sqlx_migrations
-            ORDER BY version
-            ",
+            "SELECT version, checksum, success FROM _sqlx_migrations ORDER BY version",
         )
         .fetch_all(&self.pool)
         .await?;
         validate_migrations(&applied)?;
 
         let missing_relations = sqlx::query_scalar::<_, String>(
-            r"
-            SELECT relation_name
-            FROM unnest($1::text[]) AS required(relation_name)
-            WHERE to_regclass(relation_name) IS NULL
-            ORDER BY relation_name
-            ",
+            "SELECT relation_name
+             FROM unnest($1::text[]) AS required(relation_name)
+             WHERE to_regclass(relation_name) IS NULL
+             ORDER BY relation_name",
         )
         .bind(REQUIRED_RELATIONS)
         .fetch_all(&self.pool)
@@ -162,22 +155,11 @@ impl PostgresStore {
             MISSING_TABLE_PRIVILEGES_SQL,
         )
         .await?;
-        let function_privileges = match role {
-            RuntimeDatabaseRole::Api => API_FUNCTION_PRIVILEGES,
-            RuntimeDatabaseRole::Worker => WORKER_FUNCTION_PRIVILEGES,
-        };
-        ensure_privileges(
-            &self.pool,
-            "function",
-            function_privileges,
-            MISSING_FUNCTION_PRIVILEGES_SQL,
-        )
-        .await?;
         Ok(())
     }
 }
 
-const MISSING_SCHEMA_PRIVILEGES_SQL: &str = r"
+const MISSING_SCHEMA_PRIVILEGES_SQL: &str = "
     WITH required(descriptor) AS (SELECT unnest($1::text[]))
     SELECT descriptor
     FROM required
@@ -187,9 +169,9 @@ const MISSING_SCHEMA_PRIVILEGES_SQL: &str = r"
         split_part(descriptor, '|', 2)
     )
     ORDER BY descriptor
-    ";
+";
 
-const MISSING_TABLE_PRIVILEGES_SQL: &str = r"
+const MISSING_TABLE_PRIVILEGES_SQL: &str = "
     WITH required(descriptor) AS (SELECT unnest($1::text[]))
     SELECT descriptor
     FROM required
@@ -199,19 +181,7 @@ const MISSING_TABLE_PRIVILEGES_SQL: &str = r"
         split_part(descriptor, '|', 2)
     )
     ORDER BY descriptor
-    ";
-
-const MISSING_FUNCTION_PRIVILEGES_SQL: &str = r"
-    WITH required(descriptor) AS (SELECT unnest($1::text[]))
-    SELECT descriptor
-    FROM required
-    WHERE NOT has_function_privilege(
-        current_user,
-        split_part(descriptor, '|', 1),
-        split_part(descriptor, '|', 2)
-    )
-    ORDER BY descriptor
-    ";
+";
 
 async fn ensure_privileges(
     pool: &sqlx::PgPool,

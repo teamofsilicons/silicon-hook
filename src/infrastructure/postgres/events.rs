@@ -1,665 +1,333 @@
-//! Immutable event acceptance, ingress deduplication, and keyset history.
-
-use std::io;
+//! Verified and blocked request logs with keyset history.
 
 use futures::TryStreamExt as _;
-use serde_json::Value;
 use sqlx::{PgPool, Postgres, postgres::PgArguments, query::QueryAs};
+use time::OffsetDateTime;
+use uuid::Uuid;
 
 use crate::domain::{
-    DeliveryState, DeliveryStatus, EventCursor, EventEnvelope, EventRecord, EventRecordSnapshot,
-    EventType, OrganizationId, RequestDigest, SchemaVersion, SiliconId, TraceId,
+    BlockedRequest, DeliverySequence, EventRecord, HOOK_RECOVERY_DAYS, HistoryCursor, HookId,
+    request::CapturedRequest,
 };
 
 use super::{
-    EVENT_HISTORY_PAGE_BYTE_BUDGET, PostgresStore, StoreError,
-    models::{EventRow, IngressIdempotencyRow},
-    types::{EventPage, EventPageRequest, IngressAcceptance, NewEvent},
+    HISTORY_PAGE_BYTE_BUDGET, MAX_HISTORY_LIMIT, PostgresStore, StoreError,
+    listener::DELIVERY_CHANNEL,
+    models::{BlockedRequestRow, EventRow, capture_columns, encode_headers},
+    types::{AcceptEvent, HistoryPage, HistoryPageRequest, RecordBlockedRequest},
 };
 
 impl PostgresStore {
-    /// Atomically persists an immutable event, ingress key, and DM delivery job.
+    /// Appends a verified request to its hook's log and its Silicon's ordered
+    /// delivery stream, then wakes listening delivery sessions.
     ///
-    /// The hook row is share-locked until commit, allowing concurrent ingress
-    /// while preventing a disable, soft delete, or secret rotation from racing
-    /// a successful acceptance. The deferred ingress foreign key lets the
-    /// idempotency reservation serialize identical keys before the new event
-    /// row exists.
+    /// The hook row is exclusively locked for the duration so a concurrent
+    /// disable or delete cannot race a successful acceptance, and the
+    /// Silicon's sequence counter is locked so positions are dense.
     ///
     /// # Errors
     ///
-    /// Returns a not-found error for a disabled, deleted, or unknown hook, an
-    /// idempotency conflict for changed content, or a database failure.
-    pub async fn accept_event(&self, command: &NewEvent) -> Result<IngressAcceptance, StoreError> {
-        if command.event.delivery().status() != DeliveryStatus::Pending
-            || command.event.delivery().attempts() != 0
-        {
-            return Err(StoreError::InvalidArgument {
-                field: "event.delivery",
-                reason: "new events must have a pending, unattempted delivery",
-            });
-        }
-
+    /// Returns [`StoreError::NotFound`] when the hook is no longer active or a
+    /// PostgreSQL failure.
+    pub async fn accept_event(&self, command: AcceptEvent) -> Result<EventRecord, StoreError> {
+        let received_at = command.request.received_at();
         let mut transaction = self.pool.begin().await?;
-        lock_hook_for_acceptance(&mut transaction, command).await?;
-        if let Some(event_id) = reserve_ingress(&mut transaction, command).await? {
-            transaction.commit().await?;
-            return Ok(IngressAcceptance::Replayed { event_id });
+        let still_active = sqlx::query(
+            "UPDATE hook.hooks
+             SET last_received_at = GREATEST(COALESCE(last_received_at, $2), $2),
+                 updated_at = GREATEST(updated_at, $2)
+             WHERE id = $1 AND disabled_at IS NULL AND deleted_at IS NULL",
+        )
+        .bind(command.hook.id().as_uuid())
+        .bind(received_at)
+        .execute(&mut *transaction)
+        .await?;
+        if still_active.rows_affected() != 1 {
+            return Err(StoreError::NotFound { entity: "hook" });
         }
-
-        insert_event(&mut transaction, &command.event).await?;
-        insert_outbox_job(&mut transaction, command).await?;
+        let sequence = sqlx::query_scalar::<_, i64>(
+            "INSERT INTO hook_private.delivery_sequences (silicon_id, last_sequence)
+             VALUES ($1, 1)
+             ON CONFLICT (silicon_id) DO UPDATE
+             SET last_sequence = hook_private.delivery_sequences.last_sequence + 1
+             RETURNING last_sequence",
+        )
+        .bind(command.hook.silicon_id().as_str())
+        .fetch_one(&mut *transaction)
+        .await?;
+        let sequence =
+            DeliverySequence::new(sequence).map_err(|error| StoreError::corrupt("event", error))?;
+        let event = EventRecord::accept(command.event_id, &command.hook, command.request, sequence);
+        insert_event(&mut transaction, &event).await?;
+        sqlx::query("SELECT pg_notify($1, $2)")
+            .bind(DELIVERY_CHANNEL)
+            .bind(event.silicon_id().as_str())
+            .execute(&mut *transaction)
+            .await?;
         transaction.commit().await?;
-        Ok(IngressAcceptance::Accepted {
-            event_id: command.event.id(),
-        })
+        Ok(event)
     }
 
-    /// Reads an authenticated descending keyset over the retained event window.
+    /// Appends an unverified request to its hook's blocked log.
     ///
-    /// The query applies the 10,000-row window per hook before event-type and
-    /// cursor filtering, so API visibility remains exact even between
-    /// asynchronous purge passes.
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] when the hook is no longer active or a
+    /// PostgreSQL failure.
+    pub async fn record_blocked_request(
+        &self,
+        command: RecordBlockedRequest,
+    ) -> Result<BlockedRequest, StoreError> {
+        let received_at = command.request.received_at();
+        let mut transaction = self.pool.begin().await?;
+        let still_active = sqlx::query(
+            "UPDATE hook.hooks
+             SET last_blocked_at = GREATEST(COALESCE(last_blocked_at, $2), $2),
+                 updated_at = GREATEST(updated_at, $2)
+             WHERE id = $1 AND disabled_at IS NULL AND deleted_at IS NULL",
+        )
+        .bind(command.hook.id().as_uuid())
+        .bind(received_at)
+        .execute(&mut *transaction)
+        .await?;
+        if still_active.rows_affected() != 1 {
+            return Err(StoreError::NotFound { entity: "hook" });
+        }
+        let blocked =
+            BlockedRequest::record(command.id, &command.hook, command.request, command.reason);
+        insert_blocked_request(&mut transaction, &blocked).await?;
+        transaction.commit().await?;
+        Ok(blocked)
+    }
+
+    /// Reads an authenticated descending keyset over retained verified requests.
     ///
     /// # Errors
     ///
     /// Returns an error for a limit outside `1..=10_000`, a PostgreSQL failure,
     /// or persisted rows that no longer satisfy domain invariants.
-    pub async fn list_events(&self, request: &EventPageRequest) -> Result<EventPage, StoreError> {
-        if request.limit == 0 || request.limit > 10_000 {
-            return Err(StoreError::InvalidArgument {
-                field: "limit",
-                reason: "must be between 1 and 10000",
-            });
-        }
+    pub async fn list_events(
+        &self,
+        request: &HistoryPageRequest,
+    ) -> Result<HistoryPage<EventRecord>, StoreError> {
+        validate_limit(request.limit)?;
+        let query = history_query::<EventRow>(EVENT_HISTORY_SQL, request);
+        collect_page(&self.pool, query, request.limit, |row: &EventRow| {
+            (
+                row.capture.estimated_response_bytes(),
+                row.capture.received_at,
+                row.id,
+            )
+        })
+        .await
+    }
 
-        let fetch_limit = i64::from(request.limit) + 1;
-        let query = event_history_query(request, fetch_limit);
-        collect_event_page(&self.pool, query, request.limit).await
+    /// Reads an authenticated descending keyset over retained blocked requests.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error for a limit outside `1..=10_000`, a PostgreSQL failure,
+    /// or persisted rows that no longer satisfy domain invariants.
+    pub async fn list_blocked_requests(
+        &self,
+        request: &HistoryPageRequest,
+    ) -> Result<HistoryPage<BlockedRequest>, StoreError> {
+        validate_limit(request.limit)?;
+        let query = history_query::<BlockedRequestRow>(BLOCKED_HISTORY_SQL, request);
+        collect_page(
+            &self.pool,
+            query,
+            request.limit,
+            |row: &BlockedRequestRow| {
+                (
+                    row.capture.estimated_response_bytes(),
+                    row.capture.received_at,
+                    row.id,
+                )
+            },
+        )
+        .await
     }
 }
 
-type EventHistoryQuery<'query> = QueryAs<'query, Postgres, EventRow, PgArguments>;
-
-fn event_history_query(request: &EventPageRequest, fetch_limit: i64) -> EventHistoryQuery<'_> {
-    let event_type = request.filter.event_type().map(EventType::as_str);
-    let cursor_time = request.cursor.map(EventCursor::received_at);
-    let cursor_id = request
-        .cursor
-        .map(EventCursor::event_id)
-        .map(crate::domain::EventId::as_uuid);
-
-    if let Some(hook_id) = request.filter.hook_id() {
-        sqlx::query_as::<_, EventRow>(HOOK_EVENT_HISTORY_SQL)
-            .bind(request.organization_id.as_str())
-            .bind(request.silicon_id.as_str())
-            .bind(hook_id.as_uuid())
-            .bind(event_type)
-            .bind(cursor_time)
-            .bind(cursor_id)
-            .bind(fetch_limit)
-    } else {
-        sqlx::query_as::<_, EventRow>(SILICON_EVENT_HISTORY_SQL)
-            .bind(request.organization_id.as_str())
-            .bind(request.silicon_id.as_str())
-            .bind(event_type)
-            .bind(cursor_time)
-            .bind(cursor_id)
-            .bind(fetch_limit)
+fn validate_limit(limit: u32) -> Result<(), StoreError> {
+    if limit == 0 || limit > MAX_HISTORY_LIMIT {
+        return Err(StoreError::InvalidArgument {
+            field: "limit",
+            reason: "must be between 1 and 10000",
+        });
     }
+    Ok(())
 }
 
-async fn collect_event_page(
+type HistoryQuery<'query, Row> = QueryAs<'query, Postgres, Row, PgArguments>;
+
+fn history_query<'request, Row>(
+    sql: &'static str,
+    request: &'request HistoryPageRequest,
+) -> HistoryQuery<'request, Row>
+where
+    Row: for<'row> sqlx::FromRow<'row, sqlx::postgres::PgRow> + Send + Unpin,
+{
+    let hook_id = request.filter.hook_id().map(HookId::as_uuid);
+    sqlx::query_as::<_, Row>(sql)
+        .bind(request.organization_id.as_str())
+        .bind(request.silicon_id.as_str())
+        .bind(hook_id)
+        .bind(request.cursor.map(HistoryCursor::received_at))
+        .bind(request.cursor.map(HistoryCursor::id))
+        .bind(i64::from(request.limit) + 1)
+        .bind(HOOK_RECOVERY_DAYS)
+}
+
+async fn collect_page<Row, Record>(
     pool: &PgPool,
-    query: EventHistoryQuery<'_>,
+    query: HistoryQuery<'_, Row>,
     limit: u32,
-) -> Result<EventPage, StoreError> {
+    describe: impl Fn(&Row) -> (usize, OffsetDateTime, Uuid),
+) -> Result<HistoryPage<Record>, StoreError>
+where
+    Row: for<'row> sqlx::FromRow<'row, sqlx::postgres::PgRow> + Send + Unpin,
+    Record: TryFrom<Row, Error = StoreError>,
+{
     let mut stream = query.fetch(pool);
-    let mut rows = Vec::with_capacity(limit.min(128) as usize);
+    let mut items = Vec::with_capacity(limit.min(128) as usize);
     let mut estimated_bytes = 0_usize;
+    let mut last_boundary = None;
     let mut has_more = false;
     while let Some(row) = stream.try_next().await? {
-        if rows.len() == limit as usize {
+        if items.len() == limit as usize {
             has_more = true;
             break;
         }
-
-        let row_bytes = row.estimated_response_bytes()?;
-        if !rows.is_empty()
-            && estimated_bytes.saturating_add(row_bytes) > EVENT_HISTORY_PAGE_BYTE_BUDGET
+        let (row_bytes, received_at, id) = describe(&row);
+        if !items.is_empty() && estimated_bytes.saturating_add(row_bytes) > HISTORY_PAGE_BYTE_BUDGET
         {
             has_more = true;
             break;
         }
         estimated_bytes = estimated_bytes.saturating_add(row_bytes);
-        rows.push(EventRecord::try_from(row)?);
+        items.push(Record::try_from(row)?);
+        last_boundary = Some(HistoryCursor::new(received_at, id));
     }
-
-    let next_cursor = if has_more {
-        rows.last()
-            .map(|last| EventCursor::new(last.received_at(), last.id()))
-    } else {
-        None
-    };
-    Ok(EventPage {
-        items: rows,
-        next_cursor,
+    Ok(HistoryPage {
+        items,
+        next_cursor: if has_more { last_boundary } else { None },
     })
 }
 
-const HOOK_EVENT_HISTORY_SQL: &str = r"
-    WITH history_clock AS MATERIALIZED (
-        SELECT clock_timestamp() AS now
-    ), retained AS MATERIALIZED (
-        SELECT event.id,
-               event.received_at,
-               event.event_type
-        FROM hook.events AS event
-        JOIN hook.hooks AS hook
-          ON hook.id = event.hook_id
-         AND hook.org_id = event.org_id
-         AND hook.silicon_id = event.silicon_id
-        CROSS JOIN history_clock
-        WHERE event.org_id = $1
-          AND event.silicon_id = $2
-          AND event.hook_id = $3
-          AND (
-              hook.deleted_at IS NULL
-              OR hook.deleted_at >= history_clock.now - INTERVAL '45 days'
-          )
-        ORDER BY event.received_at DESC, event.id DESC
-        LIMIT 10000
-    ), eligible AS MATERIALIZED (
-        SELECT retained.id,
-               retained.received_at
-        FROM retained
-        WHERE ($4::text IS NULL OR retained.event_type = $4)
-          AND (
-              $5::timestamptz IS NULL
-              OR (retained.received_at, retained.id) < ($5, $6)
-          )
-        ORDER BY retained.received_at DESC, retained.id DESC
-        LIMIT $7
-    )
-    SELECT event.id,
-           event.hook_id,
-           event.org_id,
-           event.silicon_id,
-           event.event_type,
-           event.source,
-           event.subject,
-           event.occurred_at,
-           event.schema_version,
-           event.trace_id,
-           event.payload,
-           event.request_digest,
-           event.received_at,
-           delivery.status AS delivery_status,
-           delivery.attempts AS delivery_attempts,
-           delivery.last_attempt_at,
-           delivery.failure_reason
-    FROM eligible
-    JOIN hook.events AS event
-      ON event.id = eligible.id
-    JOIN hook_private.dm_outbox AS delivery
-      ON delivery.event_id = event.id
-    ORDER BY eligible.received_at DESC, eligible.id DESC
-    ";
+const EVENT_HISTORY_SQL: &str = "
+    WITH history_clock AS MATERIALIZED (SELECT clock_timestamp() AS now)
+    SELECT event.id, event.hook_id, event.org_id, event.silicon_id, event.provider,
+           event.summary, event.delivery_sequence,
+           event.method, event.url, event.path, event.query_string, event.headers,
+           event.body, event.remote_ip, event.received_at
+    FROM hook.events AS event
+    JOIN hook.hooks AS hook
+      ON hook.id = event.hook_id
+     AND hook.org_id = event.org_id
+     AND hook.silicon_id = event.silicon_id
+    CROSS JOIN history_clock
+    WHERE event.org_id = $1
+      AND event.silicon_id = $2
+      AND ($3::uuid IS NULL OR event.hook_id = $3)
+      AND event.expires_at > history_clock.now
+      AND (hook.deleted_at IS NULL
+           OR hook.deleted_at >= history_clock.now - ($7 * INTERVAL '1 day'))
+      AND ($4::timestamptz IS NULL OR (event.received_at, event.id) < ($4, $5))
+    ORDER BY event.received_at DESC, event.id DESC
+    LIMIT $6
+";
 
-const SILICON_EVENT_HISTORY_SQL: &str = r"
-    WITH history_clock AS MATERIALIZED (
-        SELECT clock_timestamp() AS now
-    ), retained AS MATERIALIZED (
-        SELECT retained_event.id,
-               retained_event.received_at
-        FROM hook.hooks AS hook
-        CROSS JOIN history_clock
-        CROSS JOIN LATERAL (
-            SELECT visible.id,
-                   visible.received_at
-            FROM (
-                SELECT event.id,
-                       event.received_at,
-                       event.event_type
-                FROM hook.events AS event
-                WHERE event.hook_id = hook.id
-                ORDER BY event.received_at DESC, event.id DESC
-                LIMIT 10000
-            ) AS visible
-            WHERE ($3::text IS NULL OR visible.event_type = $3)
-              AND (
-                  $4::timestamptz IS NULL
-                  OR (visible.received_at, visible.id) < ($4, $5)
-              )
-            ORDER BY visible.received_at DESC, visible.id DESC
-            LIMIT $6
-        ) AS retained_event
-        WHERE hook.org_id = $1
-          AND hook.silicon_id = $2
-          AND (
-              hook.deleted_at IS NULL
-              OR hook.deleted_at >= history_clock.now - INTERVAL '45 days'
-          )
-    ), eligible AS MATERIALIZED (
-        SELECT retained.id,
-               retained.received_at
-        FROM retained
-        ORDER BY retained.received_at DESC, retained.id DESC
-        LIMIT $6
-    )
-    SELECT event.id,
-           event.hook_id,
-           event.org_id,
-           event.silicon_id,
-           event.event_type,
-           event.source,
-           event.subject,
-           event.occurred_at,
-           event.schema_version,
-           event.trace_id,
-           event.payload,
-           event.request_digest,
-           event.received_at,
-           delivery.status AS delivery_status,
-           delivery.attempts AS delivery_attempts,
-           delivery.last_attempt_at,
-           delivery.failure_reason
-    FROM eligible
-    JOIN hook.events AS event
-      ON event.id = eligible.id
-    JOIN hook_private.dm_outbox AS delivery
-      ON delivery.event_id = event.id
-    ORDER BY eligible.received_at DESC, eligible.id DESC
-    ";
-
-const EVENT_RESPONSE_FIXED_OVERHEAD_BYTES: usize = 1_024;
-
-impl EventRow {
-    fn estimated_response_bytes(&self) -> Result<usize, StoreError> {
-        let mut payload_size = ByteCounter::default();
-        serde_json::to_writer(&mut payload_size, &self.payload)
-            .map_err(|error| StoreError::corrupt("event", error))?;
-        let string_bytes = [
-            Some(self.org_id.as_str()),
-            Some(self.silicon_id.as_str()),
-            Some(self.event_type.as_str()),
-            self.source.as_deref(),
-            self.subject.as_deref(),
-            Some(self.schema_version.as_str()),
-            Some(self.trace_id.as_str()),
-            Some(self.delivery_status.as_str()),
-            self.failure_reason.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        .fold(0_usize, |size, value| {
-            // Every input byte can require at most one extra byte for JSON
-            // quoting under the validated text contracts.
-            size.saturating_add(value.len().saturating_mul(2))
-        });
-
-        Ok(payload_size
-            .bytes
-            .saturating_add(string_bytes)
-            .saturating_add(EVENT_RESPONSE_FIXED_OVERHEAD_BYTES))
-    }
-}
-
-#[derive(Default)]
-struct ByteCounter {
-    bytes: usize,
-}
-
-impl io::Write for ByteCounter {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        self.bytes = self.bytes.saturating_add(buffer.len());
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
-async fn lock_hook_for_acceptance(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    command: &NewEvent,
-) -> Result<(), StoreError> {
-    let hook_state = sqlx::query_as::<_, (bool, bool)>(
-        r"
-        SELECT disabled_at IS NULL AND deleted_at IS NULL AS is_active,
-               encryption_key_id = $4
-                   AND secret_nonce = $5
-                   AND encrypted_signing_secret = $6 AS secret_is_current
-        FROM hook.hooks
-        WHERE id = $1
-          AND org_id = $2
-          AND silicon_id = $3
-        FOR SHARE
-        ",
-    )
-    .bind(command.event.hook_id().as_uuid())
-    .bind(command.event.organization_id().as_str())
-    .bind(command.event.silicon_id().as_str())
-    .bind(command.expected_encrypted_secret.key_id().as_str())
-    .bind(command.expected_encrypted_secret.nonce().as_slice())
-    .bind(command.expected_encrypted_secret.ciphertext())
-    .fetch_optional(&mut **transaction)
-    .await?;
-
-    match hook_state {
-        Some((true, true)) => Ok(()),
-        Some((true, false)) => Err(StoreError::SecretSuperseded),
-        Some((false, _)) | None => Err(StoreError::NotFound { entity: "hook" }),
-    }
-}
-
-async fn reserve_ingress(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    command: &NewEvent,
-) -> Result<Option<crate::domain::EventId>, StoreError> {
-    let authenticated = reserve_authenticated_request(transaction, command).await?;
-    let event_id = match authenticated {
-        AuthenticatedReservation::Reserved => command.event.id(),
-        AuthenticatedReservation::Replayed(event_id) => event_id,
-    };
-    let inserted_key = insert_ingress_key(transaction, command, event_id).await?;
-    if inserted_key {
-        return Ok(match authenticated {
-            AuthenticatedReservation::Reserved => None,
-            AuthenticatedReservation::Replayed(event_id) => Some(event_id),
-        });
-    }
-
-    if matches!(authenticated, AuthenticatedReservation::Reserved) {
-        release_authenticated_request(transaction, command).await?;
-    }
-    find_ingress_by_key(transaction, command)
-        .await?
-        .map(Some)
-        .ok_or_else(|| StoreError::corrupt("ingress idempotency", "conflict row disappeared"))
-}
-
-#[derive(Clone, Copy)]
-enum AuthenticatedReservation {
-    Reserved,
-    Replayed(crate::domain::EventId),
-}
-
-async fn insert_ingress_key(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    command: &NewEvent,
-    event_id: crate::domain::EventId,
-) -> Result<bool, StoreError> {
-    let inserted = sqlx::query(
-        r"
-        INSERT INTO hook_private.ingress_idempotency (
-            hook_id,
-            idempotency_key,
-            request_digest,
-            event_id,
-            created_at
-        )
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT DO NOTHING
-        ",
-    )
-    .bind(command.event.hook_id().as_uuid())
-    .bind(&command.idempotency_key)
-    .bind(command.event.request_digest().as_bytes().as_slice())
-    .bind(event_id.as_uuid())
-    .bind(command.event.received_at())
-    .execute(&mut **transaction)
-    .await?;
-    Ok(inserted.rows_affected() == 1)
-}
-
-async fn reserve_authenticated_request(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    command: &NewEvent,
-) -> Result<AuthenticatedReservation, StoreError> {
-    let inserted = sqlx::query(
-        r"
-        INSERT INTO hook_private.ingress_authenticated_requests (
-            hook_id,
-            authenticated_request_digest,
-            request_digest,
-            event_id,
-            created_at
-        )
-        VALUES ($1, $2, $3, $4, $5)
-        ON CONFLICT DO NOTHING
-        ",
-    )
-    .bind(command.event.hook_id().as_uuid())
-    .bind(command.authenticated_request_digest.as_bytes().as_slice())
-    .bind(command.event.request_digest().as_bytes().as_slice())
-    .bind(command.event.id().as_uuid())
-    .bind(command.event.received_at())
-    .execute(&mut **transaction)
-    .await?;
-    if inserted.rows_affected() == 1 {
-        return Ok(AuthenticatedReservation::Reserved);
-    }
-
-    let (request_digest, event_id) = find_ingress_by_authenticated_request(transaction, command)
-        .await?
-        .ok_or_else(|| {
-            StoreError::corrupt(
-                "authenticated ingress request",
-                "conflict row disappeared or event identifier collided",
-            )
-        })?;
-    if request_digest.as_slice() != command.event.request_digest().as_bytes().as_slice() {
-        return Err(StoreError::IdempotencyConflict);
-    }
-    Ok(AuthenticatedReservation::Replayed(event_id.into()))
-}
-
-async fn release_authenticated_request(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    command: &NewEvent,
-) -> Result<(), StoreError> {
-    let deleted = sqlx::query(
-        r"
-        DELETE FROM hook_private.ingress_authenticated_requests
-        WHERE hook_id = $1
-          AND authenticated_request_digest = $2
-          AND event_id = $3
-        ",
-    )
-    .bind(command.event.hook_id().as_uuid())
-    .bind(command.authenticated_request_digest.as_bytes().as_slice())
-    .bind(command.event.id().as_uuid())
-    .execute(&mut **transaction)
-    .await?;
-    if deleted.rows_affected() != 1 {
-        return Err(StoreError::corrupt(
-            "authenticated ingress request",
-            "new reservation disappeared",
-        ));
-    }
-    Ok(())
-}
-
-async fn find_ingress_by_key(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    command: &NewEvent,
-) -> Result<Option<crate::domain::EventId>, StoreError> {
-    let existing = sqlx::query_as::<_, IngressIdempotencyRow>(
-        r"
-        SELECT request_digest, event_id
-        FROM hook_private.ingress_idempotency
-        WHERE hook_id = $1 AND idempotency_key = $2
-        ",
-    )
-    .bind(command.event.hook_id().as_uuid())
-    .bind(&command.idempotency_key)
-    .fetch_optional(&mut **transaction)
-    .await?;
-    let Some(existing) = existing else {
-        return Ok(None);
-    };
-    let digest: [u8; 32] = existing
-        .request_digest
-        .as_slice()
-        .try_into()
-        .map_err(|_| StoreError::corrupt("ingress idempotency", "invalid digest"))?;
-    if RequestDigest::from_bytes(digest) != command.event.request_digest() {
-        return Err(StoreError::IdempotencyConflict);
-    }
-    Ok(Some(existing.event_id.into()))
-}
-
-async fn find_ingress_by_authenticated_request(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    command: &NewEvent,
-) -> Result<Option<(Vec<u8>, uuid::Uuid)>, StoreError> {
-    sqlx::query_as::<_, (Vec<u8>, uuid::Uuid)>(
-        r"
-        SELECT request_digest, event_id
-        FROM hook_private.ingress_authenticated_requests
-        WHERE hook_id = $1 AND authenticated_request_digest = $2
-        ",
-    )
-    .bind(command.event.hook_id().as_uuid())
-    .bind(command.authenticated_request_digest.as_bytes().as_slice())
-    .fetch_optional(&mut **transaction)
-    .await
-    .map_err(StoreError::from)
-}
-
-impl TryFrom<EventRow> for EventRecord {
-    type Error = StoreError;
-
-    fn try_from(row: EventRow) -> Result<Self, Self::Error> {
-        let Value::Object(payload) = row.payload else {
-            return Err(StoreError::corrupt("event", "payload is not a JSON object"));
-        };
-        let event_type =
-            EventType::new(row.event_type).map_err(|error| StoreError::corrupt("event", error))?;
-        let schema_version = SchemaVersion::new(row.schema_version)
-            .map_err(|error| StoreError::corrupt("event", error))?;
-        let trace_id =
-            TraceId::new(row.trace_id).map_err(|error| StoreError::corrupt("event", error))?;
-        let envelope = EventEnvelope::rehydrate(
-            event_type,
-            row.source,
-            row.subject,
-            row.occurred_at,
-            schema_version,
-            trace_id,
-            payload,
-        )
-        .map_err(|error| StoreError::corrupt("event", error))?;
-        let status = parse_delivery_status(&row.delivery_status)?;
-        let attempts = u32::try_from(row.delivery_attempts)
-            .map_err(|error| StoreError::corrupt("event delivery", error))?;
-        let delivery =
-            DeliveryState::rehydrate(status, attempts, row.last_attempt_at, row.failure_reason)
-                .map_err(|error| StoreError::corrupt("event delivery", error))?;
-        let digest: [u8; 32] = row
-            .request_digest
-            .as_slice()
-            .try_into()
-            .map_err(|_| StoreError::corrupt("event", "invalid request digest length"))?;
-
-        Ok(EventRecord::rehydrate(EventRecordSnapshot {
-            id: row.id.into(),
-            organization_id: OrganizationId::new(row.org_id)
-                .map_err(|error| StoreError::corrupt("event", error))?,
-            silicon_id: SiliconId::new(row.silicon_id)
-                .map_err(|error| StoreError::corrupt("event", error))?,
-            hook_id: row.hook_id.into(),
-            envelope,
-            request_digest: RequestDigest::from_bytes(digest),
-            received_at: row.received_at,
-            delivery,
-        }))
-    }
-}
+const BLOCKED_HISTORY_SQL: &str = "
+    WITH history_clock AS MATERIALIZED (SELECT clock_timestamp() AS now)
+    SELECT blocked.id, blocked.hook_id, blocked.org_id, blocked.silicon_id, blocked.provider,
+           blocked.reason_code, blocked.reason_detail,
+           blocked.method, blocked.url, blocked.path, blocked.query_string, blocked.headers,
+           blocked.body, blocked.remote_ip, blocked.received_at
+    FROM hook.blocked_requests AS blocked
+    JOIN hook.hooks AS hook
+      ON hook.id = blocked.hook_id
+     AND hook.org_id = blocked.org_id
+     AND hook.silicon_id = blocked.silicon_id
+    CROSS JOIN history_clock
+    WHERE blocked.org_id = $1
+      AND blocked.silicon_id = $2
+      AND ($3::uuid IS NULL OR blocked.hook_id = $3)
+      AND blocked.expires_at > history_clock.now
+      AND (hook.deleted_at IS NULL
+           OR hook.deleted_at >= history_clock.now - ($7 * INTERVAL '1 day'))
+      AND ($4::timestamptz IS NULL OR (blocked.received_at, blocked.id) < ($4, $5))
+    ORDER BY blocked.received_at DESC, blocked.id DESC
+    LIMIT $6
+";
 
 async fn insert_event(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    transaction: &mut sqlx::Transaction<'_, Postgres>,
     event: &EventRecord,
 ) -> Result<(), StoreError> {
-    let envelope = event.envelope();
-    sqlx::query(
-        r"
-        INSERT INTO hook.events (
-            id,
-            hook_id,
-            org_id,
-            silicon_id,
-            event_type,
-            source,
-            subject,
-            occurred_at,
-            schema_version,
-            trace_id,
-            payload,
-            request_digest,
-            received_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
-        ",
+    let request = event.request();
+    bind_capture(
+        sqlx::query(concat!(
+            "INSERT INTO hook.events (id, hook_id, org_id, silicon_id, provider, summary, ",
+            "delivery_sequence, ",
+            capture_columns!(),
+            ", expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, ",
+            "$14, $15, $16, $16 + INTERVAL '14 days')"
+        ))
+        .bind(event.id().as_uuid())
+        .bind(event.hook_id().as_uuid())
+        .bind(event.organization_id().as_str())
+        .bind(event.silicon_id().as_str())
+        .bind(event.provider().as_str())
+        .bind(event.summary())
+        .bind(event.delivery_sequence().get()),
+        request,
     )
-    .bind(event.id().as_uuid())
-    .bind(event.hook_id().as_uuid())
-    .bind(event.organization_id().as_str())
-    .bind(event.silicon_id().as_str())
-    .bind(envelope.event_type().as_str())
-    .bind(envelope.source())
-    .bind(envelope.subject())
-    .bind(envelope.occurred_at())
-    .bind(envelope.schema_version().as_str())
-    .bind(envelope.trace_id().as_str())
-    .bind(Value::Object(envelope.payload().clone()))
-    .bind(event.request_digest().as_bytes().as_slice())
-    .bind(event.received_at())
     .execute(&mut **transaction)
     .await?;
     Ok(())
 }
 
-async fn insert_outbox_job(
-    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    command: &NewEvent,
+async fn insert_blocked_request(
+    transaction: &mut sqlx::Transaction<'_, Postgres>,
+    blocked: &BlockedRequest,
 ) -> Result<(), StoreError> {
-    let event = &command.event;
-    sqlx::query(
-        r"
-        INSERT INTO hook_private.dm_outbox (
-            event_id,
-            org_id,
-            silicon_id,
-            request_body,
-            available_at,
-            created_at,
-            updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $5, $5)
-        ",
+    let snapshot = blocked.snapshot();
+    bind_capture(
+        sqlx::query(concat!(
+            "INSERT INTO hook.blocked_requests (id, hook_id, org_id, silicon_id, provider, ",
+            "reason_code, reason_detail, ",
+            capture_columns!(),
+            ", expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, ",
+            "$14, $15, $16, $16 + INTERVAL '14 days')"
+        ))
+        .bind(snapshot.id.as_uuid())
+        .bind(snapshot.hook_id.as_uuid())
+        .bind(snapshot.organization_id.as_str())
+        .bind(snapshot.silicon_id.as_str())
+        .bind(snapshot.provider.as_str())
+        .bind(snapshot.reason.code())
+        .bind(snapshot.reason.detail()),
+        blocked.request(),
     )
-    .bind(event.id().as_uuid())
-    .bind(event.organization_id().as_str())
-    .bind(event.silicon_id().as_str())
-    .bind(command.dm_request_body.as_bytes())
-    .bind(event.received_at())
     .execute(&mut **transaction)
     .await?;
     Ok(())
 }
 
-fn parse_delivery_status(value: &str) -> Result<DeliveryStatus, StoreError> {
-    match value {
-        "pending" => Ok(DeliveryStatus::Pending),
-        "delivered" => Ok(DeliveryStatus::Delivered),
-        "retrying" => Ok(DeliveryStatus::Retrying),
-        "failed" => Ok(DeliveryStatus::Failed),
-        _ => Err(StoreError::corrupt(
-            "event delivery",
-            "unknown delivery status",
-        )),
-    }
+fn bind_capture<'q>(
+    query: sqlx::query::Query<'q, Postgres, PgArguments>,
+    request: &'q CapturedRequest,
+) -> sqlx::query::Query<'q, Postgres, PgArguments> {
+    query
+        .bind(request.method())
+        .bind(request.url().as_str())
+        .bind(request.path())
+        .bind(request.query_string())
+        .bind(encode_headers(request.headers()))
+        .bind(request.content_type())
+        .bind(request.body().as_ref())
+        .bind(request.remote_ip())
+        .bind(request.received_at())
 }

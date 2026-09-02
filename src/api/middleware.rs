@@ -61,7 +61,9 @@ pub(super) async fn request_scope(mut request: Request, next: Next) -> Response 
 }
 
 fn is_management_path(path: &str) -> bool {
-    path.starts_with("/api/v1/silicons/") || path == "/api/v1/internal/iam/hooks"
+    path.starts_with("/api/v1/silicons/")
+        || path == "/api/v1/internal/iam/hooks"
+        || path == "/api/v1/ws"
 }
 
 fn prevent_shared_caching(response: &mut Response) {

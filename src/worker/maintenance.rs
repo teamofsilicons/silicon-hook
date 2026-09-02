@@ -1,14 +1,14 @@
 //! Periodic bounded and fair retention maintenance.
 
 use crate::{
-    config::WorkerSettings,
+    config::MaintenanceSettings,
     infrastructure::postgres::{
         MaintenanceBatch, MaintenanceResult, MaintenanceTask, PostgresStore,
     },
 };
 
-pub(super) async fn run_maintenance_cycle(store: &PostgresStore, settings: &WorkerSettings) {
-    let batch_size = match u32::try_from(settings.maintenance_batch_size.get()) {
+pub(super) async fn run_maintenance_cycle(store: &PostgresStore, settings: &MaintenanceSettings) {
+    let batch_size = match u32::try_from(settings.batch_size.get()) {
         Ok(batch_size) => batch_size,
         Err(_error) => {
             tracing::error!("maintenance batch size exceeds the supported integer range");
@@ -19,7 +19,7 @@ pub(super) async fn run_maintenance_cycle(store: &PostgresStore, settings: &Work
     let mut result = MaintenanceResult::default();
     let mut failed_tasks = 0_u8;
 
-    for _round in 0..settings.maintenance_batches_per_cycle.get() {
+    for _round in 0..settings.batches_per_cycle.get() {
         for (index, task) in MaintenanceTask::ALL.into_iter().enumerate() {
             if !active_tasks[index] {
                 continue;
@@ -57,10 +57,11 @@ pub(super) async fn run_maintenance_cycle(store: &PostgresStore, settings: &Work
 
 fn add_batch(result: &mut MaintenanceResult, task: MaintenanceTask, batch: MaintenanceBatch) {
     let destination = match task {
-        MaintenanceTask::EventHistory => &mut result.events_purged,
+        MaintenanceTask::ExpiredEvents => &mut result.events_purged,
+        MaintenanceTask::ExpiredBlockedRequests => &mut result.blocked_requests_purged,
         MaintenanceTask::ExpiredHooks => &mut result.hooks_purged,
-        MaintenanceTask::TerminalOutbox => &mut result.outbox_rows_purged,
         MaintenanceTask::ExpiredIdempotency => &mut result.idempotency_rows_purged,
+        MaintenanceTask::StaleIpBlocks => &mut result.ip_blocks_purged,
     };
     *destination = destination.saturating_add(batch.rows_affected);
 }
@@ -68,9 +69,10 @@ fn add_batch(result: &mut MaintenanceResult, task: MaintenanceTask, batch: Maint
 fn log_result(result: MaintenanceResult, cycle_limit_reached: bool, failed_tasks: u8) {
     let affected_rows = result
         .events_purged
-        .saturating_add(result.outbox_rows_purged)
+        .saturating_add(result.blocked_requests_purged)
+        .saturating_add(result.hooks_purged)
         .saturating_add(result.idempotency_rows_purged)
-        .saturating_add(result.hooks_purged);
+        .saturating_add(result.ip_blocks_purged);
     if affected_rows == 0 && failed_tasks == 0 && !cycle_limit_reached {
         tracing::debug!("retention maintenance cycle completed without eligible rows");
         return;
@@ -78,9 +80,10 @@ fn log_result(result: MaintenanceResult, cycle_limit_reached: bool, failed_tasks
 
     tracing::info!(
         events_purged = result.events_purged,
-        outbox_rows_purged = result.outbox_rows_purged,
-        idempotency_rows_purged = result.idempotency_rows_purged,
+        blocked_requests_purged = result.blocked_requests_purged,
         hooks_purged = result.hooks_purged,
+        idempotency_rows_purged = result.idempotency_rows_purged,
+        ip_blocks_purged = result.ip_blocks_purged,
         cycle_limit_reached,
         failed_tasks,
         "retention maintenance cycle completed"
@@ -106,8 +109,9 @@ mod tests {
         }
 
         assert_eq!(result.events_purged, 1);
-        assert_eq!(result.hooks_purged, 2);
-        assert_eq!(result.outbox_rows_purged, 3);
+        assert_eq!(result.blocked_requests_purged, 2);
+        assert_eq!(result.hooks_purged, 3);
         assert_eq!(result.idempotency_rows_purged, 4);
+        assert_eq!(result.ip_blocks_purged, 5);
     }
 }

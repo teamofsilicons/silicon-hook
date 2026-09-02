@@ -1,22 +1,22 @@
 //! Hook aggregate persistence and audited lifecycle transactions.
 
+use serde_json::Value;
 use sqlx::{Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::domain::{
-    ActorId, ActorKind, ActorRef, ApplicationId, EncryptedSecret, EncryptionKeyId, EndpointKey,
-    HOOK_RECOVERY_DAYS, Hook, HookDescription, HookId, HookName, HookSnapshot, HookStatus,
-    OrganizationId, SiliconId, TransitionError,
+    ApplicationId, EncryptedSecret, EndpointKey, HOOK_RECOVERY_DAYS, Hook, HookDescription, HookId,
+    HookStatus, OrganizationId, SiliconId, TransitionError,
 };
 
 use super::{
     PostgresStore, StoreError,
     idempotency::{ManagementReservation, finish_management_key, reserve_management_key},
-    models::{HookRow, IngressHookRow},
+    models::{ClockedHookRow, HookRow, hook_columns},
     types::{
         AuditAction, AuditContext, BatchHookActivation, CreateHook, CreateHookOutcome,
-        HookMutation, IngressHookResolution, RestoreHook, RestoreHookOutcome, RotateSecret,
-        RotateSecretOutcome,
+        EndpointResolution, HookMutation, RestoreHook, RestoreHookOutcome, RotateEndpoint,
+        RotateEndpointOutcome, RotateSecret, RotateSecretOutcome, UpdateHook,
     },
 };
 
@@ -36,16 +36,11 @@ impl PostgresStore {
         silicon_id: &SiliconId,
         hook_id: HookId,
     ) -> Result<Option<Hook>, StoreError> {
-        let row = sqlx::query_as::<_, HookRow>(
-            r"
-            SELECT id, org_id, silicon_id, endpoint_key, name, description,
-                   created_by_kind, created_by_id, created_via_app_id,
-                   encryption_key_id, secret_nonce, encrypted_signing_secret,
-                   created_at, disabled_at, deleted_at
-            FROM hook.hooks
-            WHERE org_id = $1 AND silicon_id = $2 AND id = $3
-            ",
-        )
+        let row = sqlx::query_as::<_, HookRow>(concat!(
+            "SELECT ",
+            hook_columns!(),
+            " FROM hook.hooks WHERE org_id = $1 AND silicon_id = $2 AND id = $3"
+        ))
         .bind(organization_id.as_str())
         .bind(silicon_id.as_str())
         .bind(hook_id.as_uuid())
@@ -54,48 +49,55 @@ impl PostgresStore {
         row.map(Hook::try_from).transpose()
     }
 
-    /// Resolves an active ingress route, its encrypted secret, and one
-    /// authoritative PostgreSQL timestamp in the same statement.
-    ///
-    /// Disabled and deleted hooks are indistinguishable from unknown routes at
-    /// this layer.
+    /// Routes a public endpoint key and samples one authoritative PostgreSQL
+    /// timestamp in the same statement.
     ///
     /// # Errors
     ///
     /// Returns an error when PostgreSQL fails or persisted data is invalid.
-    pub async fn find_active_hook_by_endpoint(
+    pub async fn resolve_endpoint(
         &self,
         silicon_id: &SiliconId,
         endpoint_key: &EndpointKey,
-    ) -> Result<Option<IngressHookResolution>, StoreError> {
-        let row = sqlx::query_as::<_, IngressHookRow>(
-            r"
-            WITH ingress_clock AS MATERIALIZED (
-                SELECT clock_timestamp() AS database_time
-            )
-            SELECT id, org_id, silicon_id, endpoint_key, name, description,
-                   created_by_kind, created_by_id, created_via_app_id,
-                   encryption_key_id, secret_nonce, encrypted_signing_secret,
-                   created_at, disabled_at, deleted_at, ingress_clock.database_time
-            FROM hook.hooks
-            CROSS JOIN ingress_clock
-            WHERE silicon_id = $1
-              AND endpoint_key = $2
-              AND disabled_at IS NULL
-              AND deleted_at IS NULL
-            ",
-        )
+    ) -> Result<EndpointResolution, StoreError> {
+        let row = sqlx::query_as::<_, ClockedHookRow>(concat!(
+            "WITH ingress_clock AS MATERIALIZED (SELECT clock_timestamp() AS database_time) ",
+            "SELECT ",
+            hook_columns!(),
+            ", ingress_clock.database_time FROM hook.hooks CROSS JOIN ingress_clock ",
+            "WHERE silicon_id = $1 AND endpoint_key = $2"
+        ))
         .bind(silicon_id.as_str())
         .bind(endpoint_key.as_str())
         .fetch_optional(&self.pool)
         .await?;
-        row.map(|row| {
-            Ok(IngressHookResolution {
-                hook: Hook::try_from(row.hook)?,
-                database_time: row.database_time,
-            })
+        if let Some(row) = row {
+            let database_time = row.database_time;
+            let hook = Hook::try_from(row.hook)?;
+            return Ok(if hook.is_enabled() {
+                EndpointResolution::Active {
+                    hook: Box::new(hook),
+                    database_time,
+                }
+            } else {
+                EndpointResolution::Inactive
+            });
+        }
+        let retired = sqlx::query_scalar::<_, bool>(
+            "SELECT EXISTS (
+                 SELECT 1 FROM hook_private.retired_endpoint_keys
+                 WHERE silicon_id = $1 AND endpoint_key = $2
+             )",
+        )
+        .bind(silicon_id.as_str())
+        .bind(endpoint_key.as_str())
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(if retired {
+            EndpointResolution::Retired
+        } else {
+            EndpointResolution::Unknown
         })
-        .transpose()
     }
 
     /// Lists recoverable hooks in deterministic newest-first order.
@@ -114,20 +116,13 @@ impl PostgresStore {
         retained_at: time::OffsetDateTime,
     ) -> Result<Vec<Hook>, StoreError> {
         let recovery_cutoff = recovery_cutoff(retained_at)?;
-        let rows = sqlx::query_as::<_, HookRow>(
-            r"
-            SELECT id, org_id, silicon_id, endpoint_key, name, description,
-                   created_by_kind, created_by_id, created_via_app_id,
-                   encryption_key_id, secret_nonce, encrypted_signing_secret,
-                   created_at, disabled_at, deleted_at
-            FROM hook.hooks
-            WHERE org_id = $1
-              AND silicon_id = $2
-              AND (deleted_at IS NULL OR ($3 AND deleted_at >= $4))
-            ORDER BY created_at DESC, id DESC
-            LIMIT $5
-            ",
-        )
+        let rows = sqlx::query_as::<_, HookRow>(concat!(
+            "SELECT ",
+            hook_columns!(),
+            " FROM hook.hooks WHERE org_id = $1 AND silicon_id = $2 ",
+            "AND (deleted_at IS NULL OR ($3 AND deleted_at >= $4)) ",
+            "ORDER BY created_at DESC, id DESC LIMIT $5"
+        ))
         .bind(organization_id.as_str())
         .bind(silicon_id.as_str())
         .bind(include_deleted)
@@ -144,10 +139,8 @@ impl PostgresStore {
         rows.into_iter().map(Hook::try_from).collect()
     }
 
-    /// Returns the requested hooks in deterministic UUID order within one tenant scope.
-    ///
-    /// Disabled and soft-deleted hooks are deliberately included. Callers compare
-    /// the result count with their unique input set before authorizing a batch.
+    /// Returns the requested hooks in deterministic UUID order within one
+    /// tenant scope. Disabled and soft-deleted hooks are included.
     ///
     /// # Errors
     ///
@@ -167,17 +160,11 @@ impl PostgresStore {
             .copied()
             .map(HookId::as_uuid)
             .collect::<Vec<_>>();
-        let rows = sqlx::query_as::<_, HookRow>(
-            r"
-            SELECT id, org_id, silicon_id, endpoint_key, name, description,
-                   created_by_kind, created_by_id, created_via_app_id,
-                   encryption_key_id, secret_nonce, encrypted_signing_secret,
-                   created_at, disabled_at, deleted_at
-            FROM hook.hooks
-            WHERE org_id = $1 AND silicon_id = $2 AND id = ANY($3)
-            ORDER BY id
-            ",
-        )
+        let rows = sqlx::query_as::<_, HookRow>(concat!(
+            "SELECT ",
+            hook_columns!(),
+            " FROM hook.hooks WHERE org_id = $1 AND silicon_id = $2 AND id = ANY($3) ORDER BY id"
+        ))
         .bind(organization_id.as_str())
         .bind(silicon_id.as_str())
         .bind(&hook_ids)
@@ -187,10 +174,6 @@ impl PostgresStore {
     }
 
     /// Atomically sets the desired ingress state for a unique hook batch.
-    ///
-    /// Target rows are locked in UUID order. A missing, cross-tenant, or deleted
-    /// target aborts the complete batch. Hooks already in the requested state are
-    /// returned unchanged and do not receive duplicate audit records.
     ///
     /// # Errors
     ///
@@ -218,6 +201,8 @@ impl PostgresStore {
     ///
     /// A concurrent identical key waits for the winner and replays its encrypted
     /// result. Different content returns [`StoreError::IdempotencyConflict`].
+    /// A generated key that collides with a live or retired key for the Silicon
+    /// returns [`StoreError::EndpointKeyConflict`] so the caller can retry.
     ///
     /// # Errors
     ///
@@ -240,7 +225,7 @@ impl PostgresStore {
                 if hook.status() == HookStatus::Deleted {
                     return Err(StoreError::StateConflict { entity: "hook" });
                 }
-                if response.encrypted_secret.as_ref() != Some(hook.encrypted_signing_secret()) {
+                if response.encrypted_secret.as_ref() != hook.encrypted_signing_secret() {
                     return Err(StoreError::SecretSuperseded);
                 }
                 transaction.commit().await?;
@@ -253,7 +238,6 @@ impl PostgresStore {
             reserve_iam_hook_registration(&mut transaction, &command.hook, command.recorded_at)
                 .await?;
         }
-
         reserve_retained_hook_slot(
             &mut transaction,
             command.hook.organization_id(),
@@ -261,7 +245,12 @@ impl PostgresStore {
             command.recorded_at,
         )
         .await?;
-
+        ensure_endpoint_key_unused(
+            &mut transaction,
+            command.hook.silicon_id(),
+            command.hook.endpoint_key(),
+        )
+        .await?;
         if let Err(error) =
             insert_hook(&mut transaction, &command.hook, command.is_iam_default).await
         {
@@ -306,11 +295,8 @@ impl PostgresStore {
             .map_err(|_| StoreError::StateConflict { entity: "hook" })?;
 
         let updated = sqlx::query(
-            r"
-            UPDATE hook.hooks
-            SET disabled_at = NULL, deleted_at = $2, updated_at = $2
-            WHERE id = $1 AND deleted_at IS NULL
-            ",
+            "UPDATE hook.hooks SET disabled_at = NULL, deleted_at = $2, updated_at = $2
+             WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(command.hook_id.as_uuid())
         .bind(command.occurred_at)
@@ -320,6 +306,73 @@ impl PostgresStore {
         insert_audit(
             &mut transaction,
             AuditAction::Deleted,
+            &hook,
+            &command.audit,
+            command.occurred_at,
+        )
+        .await?;
+        transaction.commit().await?;
+        Ok(hook)
+    }
+
+    /// Replaces hook metadata and signing policy atomically.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::NotFound`] for a mismatched tenant scope and
+    /// [`StoreError::StateConflict`] when the hook is deleted.
+    pub async fn update_hook(&self, command: UpdateHook) -> Result<Hook, StoreError> {
+        let mut transaction = self.pool.begin().await?;
+        let mut hook = select_scoped_hook_for_update(
+            &mut transaction,
+            &command.organization_id,
+            &command.silicon_id,
+            command.hook_id,
+        )
+        .await?
+        .ok_or(StoreError::NotFound { entity: "hook" })?;
+        let replaces_secret = command
+            .update
+            .signing
+            .as_ref()
+            .is_some_and(|signing| signing.encrypted_secret != hook.signing().encrypted_secret);
+        hook.update(command.update)
+            .map_err(|_| StoreError::StateConflict { entity: "hook" })?;
+
+        let config = serde_json::to_value(&hook.signing().config)
+            .map_err(|error| StoreError::corrupt("hook", error))?;
+        let secret = hook.encrypted_signing_secret();
+        let updated = sqlx::query(
+            "UPDATE hook.hooks
+             SET name = $2,
+                 description = $3,
+                 time_zone = $4,
+                 signature_required = $5,
+                 signature_config = $6,
+                 encryption_key_id = $7,
+                 secret_nonce = $8,
+                 encrypted_signing_secret = $9,
+                 secret_generation = secret_generation + CASE WHEN $10 THEN 1 ELSE 0 END,
+                 updated_at = $11
+             WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(command.hook_id.as_uuid())
+        .bind(hook.name().as_str())
+        .bind(hook.description().map(HookDescription::as_str))
+        .bind(hook.time_zone().as_str())
+        .bind(hook.signing().required)
+        .bind(config)
+        .bind(secret.map(|secret| secret.key_id().as_str()))
+        .bind(secret.map(|secret| secret.nonce().as_slice()))
+        .bind(secret.map(EncryptedSecret::ciphertext))
+        .bind(replaces_secret)
+        .bind(command.occurred_at)
+        .execute(&mut *transaction)
+        .await?;
+        ensure_one_row(updated.rows_affected(), "hook")?;
+        insert_audit(
+            &mut transaction,
+            AuditAction::Updated,
             &hook,
             &command.audit,
             command.occurred_at,
@@ -371,11 +424,8 @@ impl PostgresStore {
             .map_err(|_| StoreError::StateConflict { entity: "hook" })?;
 
         let updated = sqlx::query(
-            r"
-            UPDATE hook.hooks
-            SET deleted_at = NULL, updated_at = $2
-            WHERE id = $1 AND deleted_at IS NOT NULL
-            ",
+            "UPDATE hook.hooks SET deleted_at = NULL, updated_at = $2
+             WHERE id = $1 AND deleted_at IS NOT NULL",
         )
         .bind(command.hook_id.as_uuid())
         .bind(command.occurred_at)
@@ -421,7 +471,7 @@ impl PostgresStore {
                 if hook.status() == HookStatus::Deleted {
                     return Err(StoreError::StateConflict { entity: "hook" });
                 }
-                if response.encrypted_secret.as_ref() != Some(hook.encrypted_signing_secret()) {
+                if response.encrypted_secret.as_ref() != hook.encrypted_signing_secret() {
                     return Err(StoreError::SecretSuperseded);
                 }
                 transaction.commit().await?;
@@ -440,17 +490,15 @@ impl PostgresStore {
         hook.rotate_secret(command.encrypted_secret.clone())
             .map_err(|_| StoreError::StateConflict { entity: "hook" })?;
 
-        let secret = hook.encrypted_signing_secret();
+        let secret = &command.encrypted_secret;
         let updated = sqlx::query(
-            r"
-            UPDATE hook.hooks
-            SET encryption_key_id = $2,
-                secret_nonce = $3,
-                encrypted_signing_secret = $4,
-                secret_generation = secret_generation + 1,
-                updated_at = $5
-            WHERE id = $1 AND deleted_at IS NULL
-            ",
+            "UPDATE hook.hooks
+             SET encryption_key_id = $2,
+                 secret_nonce = $3,
+                 encrypted_signing_secret = $4,
+                 secret_generation = secret_generation + 1,
+                 updated_at = $5
+             WHERE id = $1 AND deleted_at IS NULL",
         )
         .bind(command.hook_id.as_uuid())
         .bind(secret.key_id().as_str())
@@ -471,6 +519,95 @@ impl PostgresStore {
         finish_management_key(&mut transaction, &command.idempotency, &command.response).await?;
         transaction.commit().await?;
         Ok(RotateSecretOutcome::Rotated(hook))
+    }
+
+    /// Replaces a non-deleted hook's endpoint key and permanently retires the
+    /// previous key for the Silicon.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`StoreError::EndpointKeyConflict`] when the replacement is
+    /// already live or retired, a not-found or lifecycle conflict, or a
+    /// PostgreSQL failure.
+    pub async fn rotate_hook_endpoint(
+        &self,
+        command: &RotateEndpoint,
+    ) -> Result<RotateEndpointOutcome, StoreError> {
+        validate_endpoint_rotation_command(command)?;
+        let mut transaction = self.pool.begin().await?;
+        match reserve_management_key(&mut transaction, &command.idempotency, command.occurred_at)
+            .await?
+        {
+            ManagementReservation::Replayed(response) => {
+                let hook = select_replayed_scoped_hook(
+                    &mut transaction,
+                    &command.organization_id,
+                    &command.silicon_id,
+                    &response,
+                )
+                .await?;
+                if hook.status() == HookStatus::Deleted {
+                    return Err(StoreError::StateConflict { entity: "hook" });
+                }
+                transaction.commit().await?;
+                return Ok(RotateEndpointOutcome::Replayed { hook, response });
+            }
+            ManagementReservation::Reserved => {}
+        }
+        let mut hook = select_scoped_hook_for_update(
+            &mut transaction,
+            &command.organization_id,
+            &command.silicon_id,
+            command.hook_id,
+        )
+        .await?
+        .ok_or(StoreError::NotFound { entity: "hook" })?;
+        ensure_endpoint_key_unused(&mut transaction, &command.silicon_id, &command.replacement)
+            .await?;
+        let retired = hook
+            .rotate_endpoint(command.replacement.clone(), command.occurred_at)
+            .map_err(|error| match error {
+                TransitionError::HookAlreadyDeleted => StoreError::StateConflict { entity: "hook" },
+                _ => StoreError::InvalidArgument {
+                    field: "occurred_at",
+                    reason: "must not precede hook creation",
+                },
+            })?;
+
+        let updated = sqlx::query(
+            "UPDATE hook.hooks
+             SET endpoint_key = $2, endpoint_rotated_at = $3, updated_at = $3
+             WHERE id = $1 AND deleted_at IS NULL",
+        )
+        .bind(command.hook_id.as_uuid())
+        .bind(hook.endpoint_key().as_str())
+        .bind(command.occurred_at)
+        .execute(&mut *transaction)
+        .await
+        .map_err(classify_hook_insert_error)?;
+        ensure_one_row(updated.rows_affected(), "hook")?;
+        sqlx::query(
+            "INSERT INTO hook_private.retired_endpoint_keys (
+                 silicon_id, endpoint_key, hook_id, retired_at
+             ) VALUES ($1, $2, $3, $4)",
+        )
+        .bind(command.silicon_id.as_str())
+        .bind(retired.as_str())
+        .bind(command.hook_id.as_uuid())
+        .bind(command.occurred_at)
+        .execute(&mut *transaction)
+        .await?;
+        insert_audit(
+            &mut transaction,
+            AuditAction::EndpointRotated,
+            &hook,
+            &command.audit,
+            command.occurred_at,
+        )
+        .await?;
+        finish_management_key(&mut transaction, &command.idempotency, &command.response).await?;
+        transaction.commit().await?;
+        Ok(RotateEndpointOutcome::Rotated(hook))
     }
 }
 
@@ -502,18 +639,12 @@ async fn lock_hooks_for_activation(
     command: &BatchHookActivation,
     hook_ids: &[Uuid],
 ) -> Result<Vec<Hook>, StoreError> {
-    let rows = sqlx::query_as::<_, HookRow>(
-        r"
-        SELECT id, org_id, silicon_id, endpoint_key, name, description,
-               created_by_kind, created_by_id, created_via_app_id,
-               encryption_key_id, secret_nonce, encrypted_signing_secret,
-               created_at, disabled_at, deleted_at
-        FROM hook.hooks
-        WHERE org_id = $1 AND silicon_id = $2 AND id = ANY($3)
-        ORDER BY id
-        FOR UPDATE
-        ",
-    )
+    let rows = sqlx::query_as::<_, HookRow>(concat!(
+        "SELECT ",
+        hook_columns!(),
+        " FROM hook.hooks WHERE org_id = $1 AND silicon_id = $2 AND id = ANY($3) ",
+        "ORDER BY id FOR UPDATE"
+    ))
     .bind(command.organization_id.as_str())
     .bind(command.silicon_id.as_str())
     .bind(hook_ids)
@@ -558,18 +689,15 @@ async fn update_hook_activation(
     hook_ids: &[Uuid],
 ) -> Result<Vec<Uuid>, StoreError> {
     let mut changed_ids = sqlx::query_scalar::<_, Uuid>(
-        r"
-        UPDATE hook.hooks
-        SET disabled_at = CASE WHEN $4 THEN NULL ELSE $5 END,
-            updated_at = $5
-        WHERE org_id = $1
-          AND silicon_id = $2
-          AND id = ANY($3)
-          AND deleted_at IS NULL
-          AND (($4 AND disabled_at IS NOT NULL)
-               OR (NOT $4 AND disabled_at IS NULL))
-        RETURNING id
-        ",
+        "UPDATE hook.hooks
+         SET disabled_at = CASE WHEN $4 THEN NULL ELSE $5 END,
+             updated_at = $5
+         WHERE org_id = $1
+           AND silicon_id = $2
+           AND id = ANY($3)
+           AND deleted_at IS NULL
+           AND (($4 AND disabled_at IS NOT NULL) OR (NOT $4 AND disabled_at IS NULL))
+         RETURNING id",
     )
     .bind(command.organization_id.as_str())
     .bind(command.silicon_id.as_str())
@@ -600,17 +728,14 @@ async fn insert_activation_audits(
         AuditAction::Disabled
     };
     let inserted = sqlx::query(
-        r"
-        INSERT INTO hook_private.audit_log (
-            id, occurred_at, action, org_id, silicon_id, hook_id,
-            actor_kind, actor_id, calling_app_id, request_id
-        )
-        SELECT audit.audit_id, $3, $4, hook.org_id, hook.silicon_id, hook.id,
-               $5, $6, $7, $8
-        FROM unnest($1::uuid[], $2::uuid[]) AS audit(hook_id, audit_id)
-        JOIN hook.hooks AS hook ON hook.id = audit.hook_id
-        WHERE hook.org_id = $9 AND hook.silicon_id = $10
-        ",
+        "INSERT INTO hook_private.audit_log (
+             id, occurred_at, action, org_id, silicon_id, hook_id,
+             actor_kind, actor_id, calling_app_id, request_id
+         )
+         SELECT audit.audit_id, $3, $4, hook.org_id, hook.silicon_id, hook.id, $5, $6, $7, $8
+         FROM unnest($1::uuid[], $2::uuid[]) AS audit(hook_id, audit_id)
+         JOIN hook.hooks AS hook ON hook.id = audit.hook_id
+         WHERE hook.org_id = $9 AND hook.silicon_id = $10",
     )
     .bind(changed_ids)
     .bind(&audit_ids)
@@ -654,12 +779,9 @@ async fn reserve_retained_hook_slot(
         .execute(&mut **transaction)
         .await?;
     let retained = sqlx::query_scalar::<_, i64>(
-        r"
-        SELECT count(*)
-        FROM hook.hooks
-        WHERE org_id = $1 AND silicon_id = $2
-          AND (deleted_at IS NULL OR deleted_at >= $3)
-        ",
+        "SELECT count(*) FROM hook.hooks
+         WHERE org_id = $1 AND silicon_id = $2
+           AND (deleted_at IS NULL OR deleted_at >= $3)",
     )
     .bind(organization_id.as_str())
     .bind(silicon_id.as_str())
@@ -672,6 +794,31 @@ async fn reserve_retained_hook_slot(
     Ok(())
 }
 
+/// Rejects a key that is live for the Silicon or was retired by an earlier
+/// rotation. Live uniqueness is also enforced by the table constraint.
+async fn ensure_endpoint_key_unused(
+    transaction: &mut Transaction<'_, Postgres>,
+    silicon_id: &SiliconId,
+    endpoint_key: &EndpointKey,
+) -> Result<(), StoreError> {
+    let in_use = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS (
+             SELECT 1 FROM hook_private.retired_endpoint_keys
+             WHERE silicon_id = $1 AND endpoint_key = $2
+         ) OR EXISTS (
+             SELECT 1 FROM hook.hooks WHERE silicon_id = $1 AND endpoint_key = $2
+         )",
+    )
+    .bind(silicon_id.as_str())
+    .bind(endpoint_key.as_str())
+    .fetch_one(&mut **transaction)
+    .await?;
+    if in_use {
+        return Err(StoreError::EndpointKeyConflict);
+    }
+    Ok(())
+}
+
 fn recovery_cutoff(retained_at: time::OffsetDateTime) -> Result<time::OffsetDateTime, StoreError> {
     retained_at
         .checked_sub(time::Duration::days(HOOK_RECOVERY_DAYS))
@@ -680,90 +827,22 @@ fn recovery_cutoff(retained_at: time::OffsetDateTime) -> Result<time::OffsetDate
         })
 }
 
-impl TryFrom<HookRow> for Hook {
-    type Error = StoreError;
-
-    fn try_from(row: HookRow) -> Result<Self, Self::Error> {
-        let status = if row.deleted_at.is_some() {
-            HookStatus::Deleted
-        } else if row.disabled_at.is_some() {
-            HookStatus::Disabled
-        } else {
-            HookStatus::Active
-        };
-        let nonce: [u8; 12] = row
-            .secret_nonce
-            .as_slice()
-            .try_into()
-            .map_err(|_| StoreError::corrupt("hook", "invalid secret nonce length"))?;
-        let key_id = EncryptionKeyId::new(row.encryption_key_id)
-            .map_err(|error| StoreError::corrupt("hook", error))?;
-        let encrypted_signing_secret =
-            EncryptedSecret::new(key_id, nonce, row.encrypted_signing_secret)
-                .map_err(|error| StoreError::corrupt("hook", error))?;
-        let actor_kind = parse_actor_kind(&row.created_by_kind)?;
-        let created_by = ActorRef::new(
-            actor_kind,
-            ActorId::new(row.created_by_id).map_err(|error| StoreError::corrupt("hook", error))?,
-        );
-
-        Hook::rehydrate(HookSnapshot {
-            id: row.id.into(),
-            organization_id: OrganizationId::new(row.org_id)
-                .map_err(|error| StoreError::corrupt("hook", error))?,
-            silicon_id: SiliconId::new(row.silicon_id)
-                .map_err(|error| StoreError::corrupt("hook", error))?,
-            name: HookName::new(row.name).map_err(|error| StoreError::corrupt("hook", error))?,
-            description: row
-                .description
-                .map(HookDescription::new)
-                .transpose()
-                .map_err(|error| StoreError::corrupt("hook", error))?,
-            endpoint_key: EndpointKey::parse(&row.endpoint_key)
-                .map_err(|error| StoreError::corrupt("hook", error))?,
-            status,
-            created_by,
-            created_via_application: row
-                .created_via_app_id
-                .map(ApplicationId::new)
-                .transpose()
-                .map_err(|error| StoreError::corrupt("hook", error))?,
-            created_at: row.created_at,
-            disabled_at: row.disabled_at,
-            deleted_at: row.deleted_at,
-            encrypted_signing_secret,
-        })
-        .map_err(|error| StoreError::corrupt("hook", error))
-    }
-}
-
 async fn insert_hook(
     transaction: &mut Transaction<'_, Postgres>,
     hook: &Hook,
     is_iam_default: bool,
 ) -> Result<(), sqlx::Error> {
     let secret = hook.encrypted_signing_secret();
+    let config: Value = serde_json::to_value(&hook.signing().config)
+        .map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
     sqlx::query(
-        r"
-        INSERT INTO hook.hooks (
-            id,
-            org_id,
-            silicon_id,
-            endpoint_key,
-            name,
-            description,
-            created_by_kind,
-            created_by_id,
-            created_via_app_id,
-            encryption_key_id,
-            secret_nonce,
-            encrypted_signing_secret,
-            is_iam_default,
-            created_at,
-            updated_at
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14)
-        ",
+        "INSERT INTO hook.hooks (
+             id, org_id, silicon_id, endpoint_key, name, description,
+             signature_required, signature_config, encryption_key_id, secret_nonce,
+             encrypted_signing_secret, time_zone, is_iam_default,
+             created_by_kind, created_by_id, created_via_app_id, created_at, updated_at
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $17)",
     )
     .bind(hook.id().as_uuid())
     .bind(hook.organization_id().as_str())
@@ -771,13 +850,16 @@ async fn insert_hook(
     .bind(hook.endpoint_key().as_str())
     .bind(hook.name().as_str())
     .bind(hook.description().map(HookDescription::as_str))
+    .bind(hook.signing().required)
+    .bind(config)
+    .bind(secret.map(|secret| secret.key_id().as_str()))
+    .bind(secret.map(|secret| secret.nonce().as_slice()))
+    .bind(secret.map(EncryptedSecret::ciphertext))
+    .bind(hook.time_zone().as_str())
+    .bind(is_iam_default)
     .bind(super::actor_kind_as_str(hook.created_by().kind()))
     .bind(hook.created_by().id().as_str())
     .bind(hook.created_via_application().map(ApplicationId::as_str))
-    .bind(secret.key_id().as_str())
-    .bind(secret.nonce().as_slice())
-    .bind(secret.ciphertext())
-    .bind(is_iam_default)
     .bind(hook.created_at())
     .execute(&mut **transaction)
     .await?;
@@ -790,16 +872,10 @@ async fn reserve_iam_hook_registration(
     created_at: time::OffsetDateTime,
 ) -> Result<(), StoreError> {
     let inserted = sqlx::query(
-        r"
-        INSERT INTO hook_private.iam_hook_registrations (
-            org_id,
-            silicon_id,
-            original_hook_id,
-            created_at
-        )
-        VALUES ($1, $2, $3, $4)
-        ON CONFLICT DO NOTHING
-        ",
+        "INSERT INTO hook_private.iam_hook_registrations (
+             org_id, silicon_id, original_hook_id, created_at
+         ) VALUES ($1, $2, $3, $4)
+         ON CONFLICT DO NOTHING",
     )
     .bind(hook.organization_id().as_str())
     .bind(hook.silicon_id().as_str())
@@ -814,23 +890,17 @@ async fn reserve_iam_hook_registration(
     }
 }
 
-async fn select_scoped_hook_for_update(
+pub(super) async fn select_scoped_hook_for_update(
     transaction: &mut Transaction<'_, Postgres>,
     organization_id: &OrganizationId,
     silicon_id: &SiliconId,
     hook_id: HookId,
 ) -> Result<Option<Hook>, StoreError> {
-    sqlx::query_as::<_, HookRow>(
-        r"
-        SELECT id, org_id, silicon_id, endpoint_key, name, description,
-               created_by_kind, created_by_id, created_via_app_id,
-               encryption_key_id, secret_nonce, encrypted_signing_secret,
-               created_at, disabled_at, deleted_at
-        FROM hook.hooks
-        WHERE org_id = $1 AND silicon_id = $2 AND id = $3
-        FOR UPDATE
-        ",
-    )
+    sqlx::query_as::<_, HookRow>(concat!(
+        "SELECT ",
+        hook_columns!(),
+        " FROM hook.hooks WHERE org_id = $1 AND silicon_id = $2 AND id = $3 FOR UPDATE"
+    ))
     .bind(organization_id.as_str())
     .bind(silicon_id.as_str())
     .bind(hook_id.as_uuid())
@@ -867,21 +937,11 @@ pub(super) async fn insert_audit(
     occurred_at: time::OffsetDateTime,
 ) -> Result<(), StoreError> {
     sqlx::query(
-        r"
-        INSERT INTO hook_private.audit_log (
-            id,
-            occurred_at,
-            action,
-            org_id,
-            silicon_id,
-            hook_id,
-            actor_kind,
-            actor_id,
-            calling_app_id,
-            request_id
-        )
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
-        ",
+        "INSERT INTO hook_private.audit_log (
+             id, occurred_at, action, org_id, silicon_id, hook_id,
+             actor_kind, actor_id, calling_app_id, request_id
+         )
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(Uuid::now_v7())
     .bind(occurred_at)
@@ -932,12 +992,17 @@ fn validate_create_command(command: &CreateHook) -> Result<(), StoreError> {
             reason: "must identify the created hook",
         });
     }
-    if command.response.encrypted_secret.as_ref() != Some(command.hook.encrypted_signing_secret())
-        || !has_normative_secret_deadline(&command.response, command.recorded_at)
-    {
+    if command.response.encrypted_secret.as_ref() != command.hook.encrypted_signing_secret() {
         return Err(StoreError::InvalidArgument {
             field: "response.encrypted_secret",
-            reason: "must contain the created hook secret and a replay deadline",
+            reason: "must match the created hook secret",
+        });
+    }
+    let has_secret = command.response.encrypted_secret.is_some();
+    if has_secret != has_normative_secret_deadline(&command.response, command.recorded_at) {
+        return Err(StoreError::InvalidArgument {
+            field: "response.secret_replay_until",
+            reason: "must accompany exactly a secret-bearing response",
         });
     }
     Ok(())
@@ -951,11 +1016,31 @@ fn validate_restore_command(command: &RestoreHook) -> Result<(), StoreError> {
         &command.response,
         &command.audit,
     )?;
-    if command.response.encrypted_secret.is_some() || command.response.secret_replay_until.is_some()
-    {
+    ensure_non_secret_response(&command.response, "restore")
+}
+
+fn validate_endpoint_rotation_command(command: &RotateEndpoint) -> Result<(), StoreError> {
+    validate_mutation_scope(
+        &command.organization_id,
+        command.hook_id,
+        &command.idempotency,
+        &command.response,
+        &command.audit,
+    )?;
+    ensure_non_secret_response(&command.response, "endpoint rotation")
+}
+
+fn ensure_non_secret_response(
+    response: &super::types::PersistedResponse,
+    operation: &'static str,
+) -> Result<(), StoreError> {
+    if response.encrypted_secret.is_some() || response.secret_replay_until.is_some() {
         return Err(StoreError::InvalidArgument {
             field: "response.encrypted_secret",
-            reason: "restore responses must not contain secret material",
+            reason: match operation {
+                "restore" => "restore responses must not contain secret material",
+                _ => "endpoint rotation responses must not contain secret material",
+            },
         });
     }
     Ok(())
@@ -1017,16 +1102,6 @@ fn has_normative_secret_deadline(
     operation_time
         .checked_add(super::SECRET_REPLAY_WINDOW)
         .is_some_and(|deadline| response.secret_replay_until == Some(deadline))
-}
-
-fn parse_actor_kind(value: &str) -> Result<ActorKind, StoreError> {
-    match value {
-        "carbon" => Ok(ActorKind::Carbon),
-        "silicon" => Ok(ActorKind::Silicon),
-        "application" => Ok(ActorKind::Application),
-        "service" => Ok(ActorKind::Service),
-        _ => Err(StoreError::corrupt("hook", "unknown creator actor kind")),
-    }
 }
 
 fn classify_hook_insert_error(error: sqlx::Error) -> StoreError {
