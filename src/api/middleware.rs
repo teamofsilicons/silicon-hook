@@ -62,8 +62,18 @@ pub(super) async fn request_scope(mut request: Request, next: Next) -> Response 
 
 fn is_management_path(path: &str) -> bool {
     path.starts_with("/api/v1/silicons/")
-        || path == "/api/v1/internal/iam/hooks"
+        || path.starts_with("/api/v1/auth/")
         || path == "/api/v1/ws"
+}
+
+/// Refuses versioned requests pinned to another API major before any handler
+/// runs, so a client that negotiated a different contract is never served
+/// this one by accident.
+pub(super) async fn enforce_api_version(request: Request, next: Next) -> Response {
+    match super::version::check_pinned(request.headers(), request.uri().path()) {
+        Ok(()) => next.run(request).await,
+        Err(error) => error.into_response(),
+    }
 }
 
 fn prevent_shared_caching(response: &mut Response) {

@@ -41,6 +41,13 @@ The default policy is the Standard Webhooks convention: HMAC-SHA-256 over
 conventions are described with the expression language documented in
 [API_DOCS.md](./API_DOCS.md#signature-expressions).
 
+## Client
+
+The official Rust client lives in the sibling `hook-client-rust` repository
+and is published as `silicon-hook-client`. It negotiates the API major with
+`GET /api/version` on connect, pins every request to it, and covers hook
+management, history, deliveries, the WebSocket stream, and Carbon sign-in.
+
 ## Lifecycle
 
 - **Create** returns the endpoint URL, the endpoint key, and the signing secret once.

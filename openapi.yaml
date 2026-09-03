@@ -54,6 +54,44 @@ paths:
         '408': { $ref: '#/components/responses/RequestTimeout' }
         '500': { $ref: '#/components/responses/InternalError' }
         '503': { $ref: '#/components/responses/ServiceUnavailable' }
+  /api/version:
+    get:
+      tags: [System]
+      operationId: negotiateApiVersion
+      summary: Negotiate the API major with a client
+      description: >-
+        Unversioned handshake. The client advertises the majors it implements
+        in `Silicon-Hook-Supported-API-Versions`; Hook answers with the highest
+        shared major in the body and in `Silicon-Hook-API-Version`, and varies
+        the response on the advertised list. Every versioned request may then
+        pin that major in `Silicon-Hook-API-Version`; a pin that disagrees with
+        the route is refused with `400 api_version_mismatch`.
+      security: []
+      parameters:
+        - name: Silicon-Hook-Supported-API-Versions
+          in: header
+          required: false
+          description: Comma-separated majors the client implements, such as `v2,v1`.
+          schema: { type: string, maxLength: 128 }
+      responses:
+        '200':
+          description: The shared major.
+          headers:
+            Silicon-Hook-API-Version:
+              schema: { type: string, enum: [v1] }
+            Vary:
+              schema: { type: string, const: Silicon-Hook-Supported-API-Versions }
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ApiVersionNegotiation' }
+        '400': { $ref: '#/components/responses/BadRequest' }
+        '406':
+          description: No shared major (code api_version_unsupported); details list Hook's majors.
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '500': { $ref: '#/components/responses/InternalError' }
+
   /api/v1/version:
     get:
       tags: [System]
@@ -1215,6 +1253,20 @@ components:
       properties:
         status: { const: webhook.ok }
         receipt_id: { type: string, format: uuid }
+    ApiVersionNegotiation:
+      type: object
+      required: [service, selected_api_version, supported_api_versions, build, commit]
+      properties:
+        service: { type: string, const: silicon-hook }
+        selected_api_version: { type: string, pattern: '^v[1-9][0-9]*$' }
+        supported_api_versions:
+          type: array
+          minItems: 1
+          maxItems: 16
+          items: { type: string, pattern: '^v[1-9][0-9]*$' }
+          description: Highest first.
+        build: { type: string }
+        commit: { type: string }
     LoginRequest:
       type: object
       additionalProperties: false

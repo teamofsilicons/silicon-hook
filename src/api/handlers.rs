@@ -11,15 +11,17 @@ use serde::de::DeserializeOwned;
 
 use super::{
     dto::{
-        AcknowledgeRequest, BlockedRequestResponse, CreateHookRequest, DeliveriesQuery,
-        DeliveryBatchResponse, DeliveryCursorResponse, EventResponse, HealthResponse,
-        HistoryPageResponse, HistoryQuery, HookPageResponse, HookResponse, HookWithSecretResponse,
-        IamHookResponse, IamWebhookResponse, ListHooksQuery, LoginCallbackRequest, LoginRequest,
-        LoginResponse, OneTimeSecret, ReceiptResponse, RefreshRequest, SetHooksEnabledRequest,
-        SigningSecretResponse, TokensResponse, UpdateHookRequest, VersionResponse,
+        AcknowledgeRequest, ApiVersionResponse, BlockedRequestResponse, CreateHookRequest,
+        DeliveriesQuery, DeliveryBatchResponse, DeliveryCursorResponse, EventResponse,
+        HealthResponse, HistoryPageResponse, HistoryQuery, HookPageResponse, HookResponse,
+        HookWithSecretResponse, IamHookResponse, IamWebhookResponse, ListHooksQuery,
+        LoginCallbackRequest, LoginRequest, LoginResponse, OneTimeSecret, ReceiptResponse,
+        RefreshRequest, SetHooksEnabledRequest, SigningSecretResponse, TokensResponse,
+        UpdateHookRequest, VersionResponse,
     },
     extractors::{self, PeerAddress},
     state::ApiState,
+    version,
 };
 use crate::{
     application::{
@@ -65,6 +67,23 @@ pub(super) async fn version() -> Json<VersionResponse> {
         service: "silicon-hook",
         version: env!("CARGO_PKG_VERSION"),
     })
+}
+
+/// Unversioned handshake: selects the API major shared with the client.
+pub(super) async fn negotiate_api_version(
+    headers: HeaderMap,
+) -> Result<(HeaderMap, Json<ApiVersionResponse>), AppError> {
+    let selected = version::negotiate(version::advertised_versions(&headers)?)?;
+    Ok((
+        version::response_headers(selected),
+        Json(ApiVersionResponse {
+            service: "silicon-hook",
+            selected_api_version: selected,
+            supported_api_versions: version::SUPPORTED_API_VERSIONS,
+            build: env!("CARGO_PKG_VERSION"),
+            commit: option_env!("HOOK_BUILD_COMMIT").unwrap_or("unknown"),
+        }),
+    ))
 }
 
 pub(super) async fn list_hooks(

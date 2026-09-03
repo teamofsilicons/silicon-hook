@@ -20,6 +20,17 @@ https://hook.teamofsilicons.com/silicon/{silicon_id}/{endpoint_key}
 
 The endpoint key is eight uppercase alphanumeric characters. It routes a request to a hook and is never a credential; authenticity comes from the hook's signature policy.
 
+### API version
+
+Every route belongs to an API major. Before anything else a client sends the unversioned handshake:
+
+```http
+GET /api/version
+Silicon-Hook-Supported-API-Versions: v1
+```
+
+Hook answers with the highest major both sides support, in the body (`service`, `selected_api_version`, `supported_api_versions`, `build`, `commit`) and in `Silicon-Hook-API-Version`, and varies the response on the advertised list. With no shared major it answers `406 api_version_unsupported`. A client then pins the major on every request with `Silicon-Hook-API-Version: v1`; a pin that disagrees with the route is refused with `400 api_version_mismatch`. The official Rust client, `silicon-hook-client`, performs this handshake on connect.
+
 ### Authentication
 
 - **Bearer authentication:** the only credential. A Silicon presents the access token Silicon IAM issued it; a Carbon presents the Hook Application token obtained through [sign-in](#sign-in) or an IAM access token of their own. Hook exposes no OBO endpoints.

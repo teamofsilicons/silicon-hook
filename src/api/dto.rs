@@ -487,6 +487,16 @@ pub(super) struct VersionResponse {
     pub(super) version: &'static str,
 }
 
+/// Outcome of the unversioned API-version handshake.
+#[derive(Clone, Copy, Debug, Serialize)]
+pub(super) struct ApiVersionResponse {
+    pub(super) service: &'static str,
+    pub(super) selected_api_version: &'static str,
+    pub(super) supported_api_versions: &'static [&'static str],
+    pub(super) build: &'static str,
+    pub(super) commit: &'static str,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{OneTimeSecret, SignatureRequest, UpdateHookRequest};

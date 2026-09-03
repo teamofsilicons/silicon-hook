@@ -76,6 +76,9 @@ pub enum AppError {
     /// Route exists but not for this HTTP method.
     #[error("method is not allowed for this route")]
     MethodNotAllowed,
+    /// The client advertised no API major this build serves.
+    #[error("no supported API version is shared with the client")]
+    ApiVersionUnsupported,
     /// A required dependency is unavailable or violated its contract.
     #[error("a required dependency is unavailable")]
     ProviderUnavailable,
@@ -164,6 +167,7 @@ impl AppError {
             Self::PayloadTooLarge => StatusCode::PAYLOAD_TOO_LARGE,
             Self::UnsupportedMediaType => StatusCode::UNSUPPORTED_MEDIA_TYPE,
             Self::MethodNotAllowed => StatusCode::METHOD_NOT_ALLOWED,
+            Self::ApiVersionUnsupported => StatusCode::NOT_ACCEPTABLE,
             Self::ProviderUnavailable => StatusCode::SERVICE_UNAVAILABLE,
             Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
         }
@@ -236,6 +240,14 @@ impl AppError {
                 Cow::Borrowed("method_not_allowed"),
                 Cow::Borrowed("The HTTP method is not allowed for this route."),
                 None,
+            ),
+            Self::ApiVersionUnsupported => (
+                Cow::Borrowed("api_version_unsupported"),
+                Cow::Borrowed("No API version is shared with the client."),
+                Some(format!(
+                    "supported: {}",
+                    crate::api::SUPPORTED_API_VERSIONS.join(", ")
+                )),
             ),
             Self::ProviderUnavailable => (
                 Cow::Borrowed("provider_unavailable"),

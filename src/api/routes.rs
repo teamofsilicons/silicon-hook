@@ -21,6 +21,7 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
     let system = Router::new()
         .route("/healthz", get(handlers::liveness))
         .route("/readyz", get(handlers::readiness))
+        .route("/api/version", get(handlers::negotiate_api_version))
         .route("/api/v1/version", get(handlers::version));
 
     // Sign-in runs before any bearer exists, so it lives outside management.
@@ -64,6 +65,7 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
         .fallback(handlers::not_found)
         .method_not_allowed_fallback(handlers::method_not_allowed)
         .with_state(state)
+        .layer(axum_middleware::from_fn(middleware::enforce_api_version))
         .layer(SetSensitiveRequestHeadersLayer::new([
             header::AUTHORIZATION,
             header::COOKIE,
@@ -239,6 +241,71 @@ mod tests {
         assert!(response.headers().contains_key("x-request-id"));
         let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
         assert_eq!(body, serde_json::json!({"status": "ok"}));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn api_version_handshake_pins_the_shared_major() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let negotiated = test_router()
+            .await?
+            .oneshot(
+                Request::get("/api/version")
+                    .header("silicon-hook-supported-api-versions", "v2,v1")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(negotiated.status(), StatusCode::OK);
+        assert_eq!(
+            negotiated
+                .headers()
+                .get("silicon-hook-api-version")
+                .and_then(|value| value.to_str().ok()),
+            Some("v1")
+        );
+        assert_eq!(
+            negotiated
+                .headers()
+                .get("vary")
+                .and_then(|value| value.to_str().ok()),
+            Some("Silicon-Hook-Supported-API-Versions")
+        );
+        let body: Value = serde_json::from_slice(&to_bytes(negotiated.into_body(), 4096).await?)?;
+        assert_eq!(body["service"], "silicon-hook");
+        assert_eq!(body["selected_api_version"], "v1");
+        assert_eq!(body["supported_api_versions"], serde_json::json!(["v1"]));
+
+        let unsupported = test_router()
+            .await?
+            .oneshot(
+                Request::get("/api/version")
+                    .header("silicon-hook-supported-api-versions", "v9")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(unsupported.status(), StatusCode::NOT_ACCEPTABLE);
+
+        let mismatched = test_router()
+            .await?
+            .oneshot(
+                Request::get("/api/v1/version")
+                    .header("silicon-hook-api-version", "v2")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(mismatched.status(), StatusCode::BAD_REQUEST);
+        let body: Value = serde_json::from_slice(&to_bytes(mismatched.into_body(), 4096).await?)?;
+        assert_eq!(body["error"]["code"], "api_version_mismatch");
+
+        let pinned = test_router()
+            .await?
+            .oneshot(
+                Request::get("/api/v1/version")
+                    .header("silicon-hook-api-version", "v1")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(pinned.status(), StatusCode::OK);
         Ok(())
     }
 
