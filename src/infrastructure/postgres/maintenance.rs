@@ -90,13 +90,17 @@ async fn purge(
     })
 }
 
+// The victim CTEs deliberately carry no row-locking clause. PostgreSQL
+// requires the UPDATE privilege for FOR UPDATE / FOR SHARE, and the worker
+// role holds only SELECT and DELETE by design (deploy/postgres/README.md).
+// Deleting a row another worker already removed affects zero rows, so
+// concurrent workers stay correct; they merely share the same batch.
 const PURGE_EXPIRED_EVENTS_SQL: &str = "
     WITH maintenance_clock AS MATERIALIZED (SELECT clock_timestamp() AS now),
     victims AS (
         SELECT id FROM hook.events, maintenance_clock
         WHERE expires_at <= maintenance_clock.now
         ORDER BY expires_at, id
-        FOR UPDATE SKIP LOCKED
         LIMIT $1
     )
     DELETE FROM hook.events AS event USING victims
@@ -109,7 +113,6 @@ const PURGE_EXPIRED_BLOCKED_SQL: &str = "
         SELECT id FROM hook.blocked_requests, maintenance_clock
         WHERE expires_at <= maintenance_clock.now
         ORDER BY expires_at, id
-        FOR UPDATE SKIP LOCKED
         LIMIT $1
     )
     DELETE FROM hook.blocked_requests AS blocked USING victims
@@ -122,7 +125,6 @@ const PURGE_EXPIRED_HOOKS_SQL: &str = "
         SELECT id FROM hook.hooks, maintenance_clock
         WHERE deleted_at < maintenance_clock.now - INTERVAL '45 days'
         ORDER BY deleted_at, id
-        FOR UPDATE SKIP LOCKED
         LIMIT $1
     )
     DELETE FROM hook.hooks AS hook USING victims
@@ -135,7 +137,6 @@ const PURGE_EXPIRED_IDEMPOTENCY_SQL: &str = "
         SELECT tableoid, ctid FROM hook_private.management_idempotency, maintenance_clock
         WHERE expires_at <= maintenance_clock.now
         ORDER BY expires_at
-        FOR UPDATE SKIP LOCKED
         LIMIT $1
     )
     DELETE FROM hook_private.management_idempotency AS record USING victims
@@ -150,7 +151,6 @@ const PURGE_STALE_IP_BLOCKS_SQL: &str = "
         WHERE (blocked_until IS NULL OR blocked_until <= maintenance_clock.now)
           AND updated_at < maintenance_clock.now - ($2 * INTERVAL '1 day')
         ORDER BY updated_at
-        FOR UPDATE SKIP LOCKED
         LIMIT $1
     )
     DELETE FROM hook_private.ip_blocks AS block USING victims

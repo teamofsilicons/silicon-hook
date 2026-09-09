@@ -16,7 +16,7 @@ lives as comments next to the code it explains.
 
 ## What a hook is
 
-An authenticated Silicon owns the namespace `https://hook.teamofsilicons.com/{silicon_id}/`.
+An authenticated Silicon owns the namespace `https://hook.teamofsilicons.com/silicon/{silicon_id}/`.
 Every hook created for it gets an eight-character uppercase alphanumeric endpoint key and a
 public URL:
 
@@ -41,10 +41,19 @@ The default policy is the Standard Webhooks convention: HMAC-SHA-256 over
 conventions are described with the expression language documented in
 [API_DOCS.md](./API_DOCS.md#signature-expressions).
 
+## Frontend
+
+The [SolidJS console](web/README.md) follows the hosted Silicon IAM console.
+It covers hook management, request history, delivery and test environments.
+See the [browser verification record](web/VERIFICATION.md) for tested flows and
+remaining IAM/hosting checks. Run and hosting instructions are in the frontend guide.
+
 ## Client
 
-The official Rust client lives in the sibling `hook-client-rust` repository
-and is published as `silicon-hook-client`. It negotiates the API major with
+Start with the [documentation index](docs/README.md), [Rust client guide](docs/client/README.md) or [CLI guide](docs/cli/README.md).
+
+The official Rust client lives in `crates/client` as `silicon-hook-client`.
+The `hook` binary lives in `crates/cli` and uses the client for all network actions. It negotiates the API major with
 `GET /api/version` on connect, pins every request to it, and covers hook
 management, history, deliveries, the WebSocket stream, and Carbon sign-in.
 

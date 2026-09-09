@@ -71,8 +71,8 @@ impl AuthorizationDecision {
 /// Evaluates actor- and resource-specific hook authorization.
 ///
 /// A Silicon acts only on itself. A Carbon sees the Silicons IAM confirmed
-/// visible for the request; organization owners and administrators see and
-/// may mutate every Silicon in the organization.
+/// visible for the request. Organization managers may mutate those Silicons,
+/// but a role alone never proves that a target Silicon exists.
 #[must_use]
 pub fn authorize(
     context: &AuthorizationContext,
@@ -87,9 +87,8 @@ pub fn authorize(
             context.organization_role(),
             OrganizationRole::Owner | OrganizationRole::Admin
         );
-    let can_see_target = owns_target
-        || (is_carbon
-            && (context.has_silicon_visibility(target_silicon) || is_organization_manager));
+    let can_see_target =
+        owns_target || (is_carbon && context.has_silicon_visibility(target_silicon));
 
     if !can_see_target {
         return AuthorizationDecision::TargetNotVisible;
@@ -191,11 +190,21 @@ mod tests {
     }
 
     #[test]
-    fn owners_and_admins_manage_every_silicon_without_a_visibility_fact()
+    fn owners_and_admins_need_an_authoritative_target_fact()
     -> Result<(), Box<dyn std::error::Error>> {
         let target = silicon("silicon:target")?;
         for role in [OrganizationRole::Owner, OrganizationRole::Admin] {
-            let manager = context(ActorKind::Carbon, "carbon-manager", role, &[])?;
+            let unconfirmed = context(ActorKind::Carbon, "carbon-manager", role, &[])?;
+            assert_eq!(
+                authorize(&unconfirmed, Action::CreateHook, &target),
+                AuthorizationDecision::TargetNotVisible
+            );
+            let manager = context(
+                ActorKind::Carbon,
+                "carbon-manager",
+                role,
+                std::slice::from_ref(&target),
+            )?;
             assert!(authorize(&manager, Action::DeleteHook, &target).is_allowed());
             assert!(authorize(&manager, Action::RotateSecret, &target).is_allowed());
             assert!(authorize(&manager, Action::ReadEvents, &target).is_allowed());

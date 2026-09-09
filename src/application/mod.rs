@@ -3,6 +3,7 @@
 mod clock;
 mod commands;
 mod deliveries;
+pub mod environments;
 mod error;
 mod history;
 mod hooks;

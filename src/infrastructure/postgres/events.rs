@@ -48,7 +48,7 @@ impl PostgresStore {
         let sequence = sqlx::query_scalar::<_, i64>(
             "INSERT INTO hook_private.delivery_sequences (silicon_id, last_sequence)
              VALUES ($1, 1)
-             ON CONFLICT (silicon_id) DO UPDATE
+             ON CONFLICT (environment_id, silicon_id) DO UPDATE
              SET last_sequence = hook_private.delivery_sequences.last_sequence + 1
              RETURNING last_sequence",
         )

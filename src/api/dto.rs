@@ -543,36 +543,16 @@ mod tests {
     }
 }
 
-/// Optional sign-in parameters.
-#[derive(Debug, Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct LoginRequest {
-    /// Organization the sign-in should be bound to.
-    pub(super) org_id: Option<String>,
-}
-
-/// Redirect and continuation that start a sign-in.
-#[derive(Debug, Serialize)]
-pub(super) struct LoginResponse {
-    pub(super) authorization_url: String,
-    pub(super) continuation: OneTimeSecret,
-}
-
-/// Callback completion input.
+/// IAM-hosted login produces this single-use token. Hook never accepts OTPs.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-pub(super) struct LoginCallbackRequest {
-    pub(super) continuation: String,
-    pub(super) callback_url: String,
+pub(super) struct LoginRequest {
+    pub(super) slt: String,
 }
 
-impl fmt::Debug for LoginCallbackRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("LoginCallbackRequest")
-            .field("continuation", &"[REDACTED]")
-            .field("callback_url", &"[REDACTED]")
-            .finish()
+impl fmt::Debug for LoginRequest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str("LoginRequest([REDACTED])")
     }
 }
 

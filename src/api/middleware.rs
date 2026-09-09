@@ -14,7 +14,7 @@ use crate::{error::AppError, request_context};
 
 const REQUEST_ID_HEADER: http::HeaderName = http::HeaderName::from_static("x-request-id");
 const MAX_REQUEST_ID_BYTES: usize = 64;
-const MANAGEMENT_VARY: &str = "authorization, x-org-id";
+const MANAGEMENT_VARY: &str = "authorization, x-org-id, x-hook-test-key";
 
 pub(super) async fn request_scope(mut request: Request, next: Next) -> Response {
     let contains_management_data = is_management_path(request.uri().path());
@@ -61,7 +61,8 @@ pub(super) async fn request_scope(mut request: Request, next: Next) -> Response 
 }
 
 fn is_management_path(path: &str) -> bool {
-    path.starts_with("/api/v1/silicons/")
+    path.starts_with("/api/v1/testing-environment")
+        || path.starts_with("/api/v1/silicons/")
         || path.starts_with("/api/v1/auth/")
         || path == "/api/v1/ws"
 }

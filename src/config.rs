@@ -18,7 +18,6 @@ use zeroize::Zeroizing;
 const MAX_INGRESS_BODY_BYTES: usize = 1024 * 1024;
 const MAX_MANAGEMENT_BODY_BYTES: usize = 64 * 1024;
 /// Scopes a Carbon grants Hook at sign-in unless configured otherwise.
-const DEFAULT_IAM_SCOPES: &str = "profile organizations.read memberships.read roles.read";
 const MAX_PROVIDER_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_KEYRING_ENTRIES: usize = 16;
 const MAX_MAINTENANCE_BATCH_SIZE: usize = 10_000;
@@ -37,6 +36,8 @@ pub struct ApiSettings {
     pub shutdown: ShutdownSettings,
     /// Runtime PostgreSQL pool settings.
     pub database: DatabaseSettings,
+    /// Separate shared database for isolated Hook testing environments.
+    pub test_database: Option<DatabaseSettings>,
     /// Encryption and cursor-integrity keys.
     pub crypto: CryptoSettings,
     /// Silicon IAM integration settings.
@@ -56,6 +57,8 @@ pub struct WorkerProcessSettings {
     pub shutdown: ShutdownSettings,
     /// Runtime PostgreSQL pool settings.
     pub database: DatabaseSettings,
+    /// Separate shared database for isolated Hook testing environments.
+    pub test_database: Option<DatabaseSettings>,
     /// Retention maintenance policy.
     pub maintenance: MaintenanceSettings,
 }
@@ -67,6 +70,8 @@ pub struct MigrationSettings {
     pub process: ProcessSettings,
     /// Privileged migration pool settings.
     pub database: DatabaseSettings,
+    /// Separate shared database for isolated Hook testing environments.
+    pub test_database: Option<DatabaseSettings>,
 }
 
 /// Settings shared by all executable process boundaries.
@@ -175,8 +180,6 @@ pub struct IamSettings {
     pub allow_insecure_local_http: bool,
     /// Whether deterministic `local:` credentials are accepted (never in production).
     pub local_auth: bool,
-    /// Carbon sign-in settings, when Hook offers sign-in.
-    pub login: Option<LoginSettings>,
     /// Application webhook secrets, when Hook receives IAM events.
     pub webhook: Option<IamWebhookSettings>,
 }
@@ -187,15 +190,6 @@ impl IamSettings {
     pub const fn local_auth_enabled(&self) -> bool {
         self.local_auth
     }
-}
-
-/// OAuth sign-in settings registered with IAM for the Hook Application.
-#[derive(Clone, Debug)]
-pub struct LoginSettings {
-    /// The exact redirect URI registered with IAM.
-    pub redirect_uri: Url,
-    /// Scopes requested at sign-in.
-    pub scopes: Vec<String>,
 }
 
 /// Versioned `whs_` secrets IAM signs Application webhook deliveries with.
@@ -306,6 +300,8 @@ impl ApiSettings {
         let server = ServerSettings::load(source, environment)?;
         let shutdown = ShutdownSettings::load(source)?;
         let database = DatabaseSettings::runtime(source, environment)?;
+        let test_database =
+            test_database(source, environment, &database, "HOOK_TEST_DATABASE_URL")?;
         let crypto = CryptoSettings::load(source)?;
         let iam = IamSettings::load(source, environment)?;
         let policy = PolicySettings::load(source)?;
@@ -316,6 +312,7 @@ impl ApiSettings {
             server,
             shutdown,
             database,
+            test_database,
             crypto,
             iam,
             policy,
@@ -341,12 +338,15 @@ impl WorkerProcessSettings {
         let environment = process.environment;
         let shutdown = ShutdownSettings::load(source)?;
         let database = DatabaseSettings::runtime(source, environment)?;
+        let test_database =
+            test_database(source, environment, &database, "HOOK_TEST_DATABASE_URL")?;
         let maintenance = MaintenanceSettings::load(source)?;
 
         Ok(Self {
             process,
             shutdown,
             database,
+            test_database,
             maintenance,
         })
     }
@@ -377,8 +377,45 @@ impl MigrationSettings {
             statement_timeout: source
                 .positive_duration_seconds("HOOK_MIGRATION_STATEMENT_TIMEOUT_SECONDS", 300)?,
         };
-        Ok(Self { process, database })
+        let test_database = test_database(
+            source,
+            environment,
+            &database,
+            "HOOK_TEST_MIGRATOR_DATABASE_URL",
+        )?;
+        Ok(Self {
+            process,
+            database,
+            test_database,
+        })
     }
+}
+
+fn test_database(
+    source: &impl ConfigurationSource,
+    environment: RuntimeEnvironment,
+    production: &DatabaseSettings,
+    name: &'static str,
+) -> Result<Option<DatabaseSettings>, SettingsError> {
+    let Some(raw) = source.optional(name) else {
+        return Ok(None);
+    };
+    validate_database_url(environment, &raw, name)?;
+    let parsed = Url::parse(&raw).map_err(|_| invalid(name, "invalid database URL"))?;
+    let prod = Url::parse(production.url.expose_secret())
+        .map_err(|_| invalid(name, "invalid database URL"))?;
+    if parsed.host_str() == prod.host_str()
+        && parsed.port_or_known_default() == prod.port_or_known_default()
+        && parsed.path() == prod.path()
+    {
+        return Err(invalid(
+            name,
+            "the shared test database must be distinct from production",
+        ));
+    }
+    let mut settings = production.clone();
+    settings.url = SecretString::from(raw);
+    Ok(Some(settings))
 }
 
 impl ProcessSettings {
@@ -605,49 +642,8 @@ impl IamSettings {
             )?,
             allow_insecure_local_http,
             local_auth,
-            login: LoginSettings::load(source, environment)?,
             webhook: IamWebhookSettings::load(source)?,
         })
-    }
-}
-
-impl LoginSettings {
-    fn load(
-        source: &impl ConfigurationSource,
-        environment: RuntimeEnvironment,
-    ) -> Result<Option<Self>, SettingsError> {
-        let Some(redirect_uri) = source.optional("HOOK_IAM_REDIRECT_URI") else {
-            return Ok(None);
-        };
-        let redirect_uri = Url::parse(&redirect_uri)
-            .map_err(|_| invalid("HOOK_IAM_REDIRECT_URI", "must be an absolute URL"))?;
-        if !matches!(redirect_uri.scheme(), "http" | "https")
-            || redirect_uri.host_str().is_none()
-            || redirect_uri.fragment().is_some()
-        {
-            return Err(invalid(
-                "HOOK_IAM_REDIRECT_URI",
-                "must be an absolute HTTP(S) URL without a fragment",
-            ));
-        }
-        if environment.is_production() && redirect_uri.scheme() != "https" {
-            return Err(invalid(
-                "HOOK_IAM_REDIRECT_URI",
-                "production redirect URIs must use HTTPS",
-            ));
-        }
-        let scopes = source
-            .value_or("HOOK_IAM_SCOPES", DEFAULT_IAM_SCOPES)
-            .split_whitespace()
-            .map(ToOwned::to_owned)
-            .collect::<Vec<_>>();
-        if scopes.is_empty() {
-            return Err(invalid("HOOK_IAM_SCOPES", "must name at least one scope"));
-        }
-        Ok(Some(Self {
-            redirect_uri,
-            scopes,
-        }))
     }
 }
 
@@ -656,7 +652,7 @@ impl IamWebhookSettings {
         let Some(secret) = source.optional_secret("HOOK_IAM_WEBHOOK_SECRET") else {
             return Ok(None);
         };
-        validate_iam_secret("HOOK_IAM_WEBHOOK_SECRET", &secret, "whs_")?;
+        validate_webhook_secret("HOOK_IAM_WEBHOOK_SECRET", &secret)?;
         let version: u64 = source.parse_or("HOOK_IAM_WEBHOOK_SECRET_VERSION", "1")?;
         if version == 0 {
             return Err(invalid(
@@ -670,7 +666,7 @@ impl IamWebhookSettings {
         ) {
             (None, None) => None,
             (Some(previous), Some(previous_version)) => {
-                validate_iam_secret("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET", &previous, "whs_")?;
+                validate_webhook_secret("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET", &previous)?;
                 let previous_version = previous_version.parse::<u64>().map_err(|_| {
                     invalid(
                         "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION",
@@ -1061,25 +1057,40 @@ fn validate_base64url_key(
     Ok(key)
 }
 
-/// IAM Application IDs are 3 to 63 lowercase ASCII letters, digits, `_`, or
-/// `-`, starting with a letter.
+/// Canonical IAM application identifier: organization handle and app handle.
 fn validate_iam_app_id(app_id: &str) -> Result<(), SettingsError> {
-    let valid = (3..=63).contains(&app_id.len())
-        && app_id
-            .bytes()
-            .next()
-            .is_some_and(|byte| byte.is_ascii_lowercase())
-        && app_id.bytes().all(|byte| {
-            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
-        });
-    if valid {
+    let valid_handle = |value: &str| {
+        (1..=80).contains(&value.len())
+            && value
+                .bytes()
+                .next()
+                .is_some_and(|byte| byte.is_ascii_lowercase())
+            && value.bytes().all(|byte| {
+                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+            })
+    };
+    if app_id
+        .split_once('>')
+        .is_some_and(|(org, app)| valid_handle(org) && valid_handle(app))
+    {
         Ok(())
     } else {
         Err(invalid(
             "HOOK_IAM_APP_ID",
-            "must be 3 to 63 lowercase letters, digits, '_' or '-', starting with a letter",
+            "must be the canonical IAM application ID: organization>app",
         ))
     }
+}
+
+fn validate_webhook_secret(name: &'static str, secret: &SecretString) -> Result<(), SettingsError> {
+    silicon_iam_client::WebhookSecret::new(secret.expose_secret())
+        .map(|_| ())
+        .map_err(|_| {
+            invalid(
+                name,
+                "must contain 32 to 512 non-whitespace ASCII characters",
+            )
+        })
 }
 
 /// IAM secrets are a fixed 4-character prefix plus 43 URL-safe base64 characters.
@@ -1192,7 +1203,7 @@ mod tests {
                 "HOOK_IAM_BASE_URL",
                 "https://backend.iam.teamofsilicons.com".to_owned(),
             ),
-            ("HOOK_IAM_APP_ID", "silicon-hook".to_owned()),
+            ("HOOK_IAM_APP_ID", "tos>hook".to_owned()),
             ("HOOK_IAM_APP_SECRET", format!("ask_{}", "A".repeat(43))),
         ]);
         TestEnvironment(values)
@@ -1382,7 +1393,6 @@ mod tests {
 
         let settings = ApiSettings::load(&environment)?;
         assert!(settings.iam.local_auth_enabled());
-        assert!(settings.iam.login.is_none());
         Ok(())
     }
 
@@ -1401,10 +1411,6 @@ mod tests {
         ));
 
         let mut configured = valid_api_environment("production");
-        configured.0.insert(
-            "HOOK_IAM_REDIRECT_URI",
-            "https://hook.teamofsilicons.com/auth/callback".to_owned(),
-        );
         configured
             .0
             .insert("HOOK_IAM_WEBHOOK_SECRET", format!("whs_{}", "B".repeat(43)));
@@ -1419,12 +1425,6 @@ mod tests {
             .0
             .insert("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION", "1".to_owned());
         let settings = ApiSettings::load(&configured)?;
-        let login = settings
-            .iam
-            .login
-            .as_ref()
-            .ok_or(SettingsError::Missing("HOOK_IAM_REDIRECT_URI"))?;
-        assert_eq!(login.scopes.len(), 4);
         let webhook = settings
             .iam
             .webhook

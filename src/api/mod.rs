@@ -1,6 +1,7 @@
 //! HTTP API composition root: management, ingress, history, and realtime.
 
 mod dto;
+mod environments;
 mod extractors;
 mod handlers;
 mod middleware;
@@ -43,6 +44,8 @@ use crate::config::{RealtimeSettings, ServerSettings};
 pub struct ApiDependencies {
     /// Application services over PostgreSQL.
     pub application: HookApplication,
+    /// Shared test database control plane, when configured.
+    pub environments: Option<crate::application::environments::EnvironmentService>,
     /// Online IAM adapter.
     pub iam: IamClient,
     /// Trusted reverse-proxy hops for client address resolution.
@@ -58,6 +61,7 @@ pub fn router(dependencies: ApiDependencies, server: &ServerSettings) -> axum::R
     routes::router(
         ApiState {
             application: dependencies.application,
+            environments: dependencies.environments,
             iam: dependencies.iam,
             trusted_proxy_hops: dependencies.trusted_proxy_hops,
             realtime: dependencies.realtime,
@@ -78,23 +82,7 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
         .context("failed to connect API database pool")?;
     let store = PostgresStore::new(pool.clone());
     let wakeups = DeliveryWakeups::new();
-    let dependencies = ApiDependencies {
-        application: HookApplication::new(
-            store,
-            Arc::new(build_secret_cipher(&settings.crypto)?),
-            Arc::new(CursorCodec::new(SecretKey::from_base64url(
-                settings.crypto.cursor_signing_key.expose_secret(),
-            )?)),
-            Arc::new(SystemClock),
-            settings.server.public_base_url.clone(),
-        ),
-        iam: IamClient::connect(&settings.iam)
-            .await
-            .context("failed to connect to Silicon IAM")?,
-        trusted_proxy_hops: settings.server.trusted_proxy_hops,
-        realtime: settings.realtime,
-        wakeups: wakeups.clone(),
-    };
+    let dependencies = build_dependencies(&settings, store, wakeups.clone()).await?;
     let app = router(dependencies, &settings.server);
     let listener = tokio::net::TcpListener::bind(settings.server.bind_addr)
         .await
@@ -113,9 +101,18 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
     let listener_options = connect_options(&settings.database, "silicon-hook-listener")?;
     let mut notification_task = tokio::spawn(spawn_delivery_listener(
         listener_options,
-        wakeups,
+        wakeups.clone(),
         shutdown_receiver.clone(),
     ));
+    let mut test_notification_task = if let Some(database) = &settings.test_database {
+        Some(tokio::spawn(spawn_delivery_listener(
+            connect_options(database, "silicon-hook-test-listener")?,
+            wakeups,
+            shutdown_receiver.clone(),
+        )))
+    } else {
+        None
+    };
     let mut server_shutdown = shutdown_receiver;
     let mut server_task = tokio::spawn(async move {
         axum::serve(
@@ -161,6 +158,13 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
     {
         notification_task.abort();
     }
+    if let Some(task) = &mut test_notification_task
+        && tokio::time::timeout(settings.shutdown.timeout, &mut *task)
+            .await
+            .is_err()
+    {
+        task.abort();
+    }
     pool.close().await;
     result
 }
@@ -173,6 +177,45 @@ fn flatten_server_result(
         Ok(result) => result.context(context),
         Err(error) => Err(anyhow::Error::new(error).context(context)),
     }
+}
+
+async fn build_dependencies(
+    settings: &ApiSettings,
+    store: PostgresStore,
+    wakeups: DeliveryWakeups,
+) -> anyhow::Result<ApiDependencies> {
+    let cipher = Arc::new(build_secret_cipher(&settings.crypto)?);
+    let iam = IamClient::connect(&settings.iam)
+        .await
+        .context("failed to connect to Silicon IAM")?;
+    let environments = if let Some(database) = &settings.test_database {
+        Some(
+            crate::application::environments::EnvironmentService::connect(
+                database.clone(),
+                cipher.clone(),
+                iam.clone(),
+            )
+            .await?,
+        )
+    } else {
+        None
+    };
+    Ok(ApiDependencies {
+        application: HookApplication::new(
+            store,
+            cipher,
+            Arc::new(CursorCodec::new(SecretKey::from_base64url(
+                settings.crypto.cursor_signing_key.expose_secret(),
+            )?)),
+            Arc::new(SystemClock),
+            settings.server.public_base_url.clone(),
+        ),
+        iam,
+        environments,
+        trusted_proxy_hops: settings.server.trusted_proxy_hops,
+        realtime: settings.realtime,
+        wakeups,
+    })
 }
 
 fn build_secret_cipher(settings: &CryptoSettings) -> anyhow::Result<SecretCipher> {

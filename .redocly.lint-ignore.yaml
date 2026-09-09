@@ -6,3 +6,6 @@
 openapi.yaml:
   operation-2xx-response:
     - '#/paths/~1api~1v1~1ws/get/responses'
+  # IAM's configured receiver includes a trailing slash; both spellings are served.
+  no-path-trailing-slash:
+    - '#/paths/~1webhook~1'

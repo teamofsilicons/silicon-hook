@@ -63,7 +63,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 url = { version = "2.5.7", features = ["serde"] }
 uuid = { version = "1.26.0", features = ["serde", "v4", "v7"] }
 zeroize = { version = "1.8.2", features = ["derive"] }
-silicon-iam = "0.1.0"
+silicon-iam-client = "1.4.0"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
@@ -90,3 +90,7 @@ pedantic = { level = "warn", priority = -1 }
 todo = "deny"
 unimplemented = "deny"
 unwrap_used = "deny"
+
+[workspace]
+members = ["crates/client", "crates/cli"]
+resolver = "3"

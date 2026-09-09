@@ -103,7 +103,8 @@ impl PostgresStore {
     ///
     /// # Errors
     ///
-    /// Returns an error for a negative position or a PostgreSQL failure.
+    /// Returns an error for a negative or not-yet-allocated position, or a
+    /// PostgreSQL failure. The bound is checked in the cursor write statement.
     pub async fn acknowledge_deliveries(
         &self,
         silicon_id: &SiliconId,
@@ -117,12 +118,15 @@ impl PostgresStore {
                 reason: "must not be negative",
             });
         }
-        let (through, updated_at) = sqlx::query_as::<_, (i64, OffsetDateTime)>(
+        let row = sqlx::query_as::<_, (i64, OffsetDateTime)>(
             "INSERT INTO hook_private.delivery_cursors (
                  silicon_id, consumer_kind, consumer_id, acknowledged_through, updated_at
              )
-             VALUES ($1, $2, $3, $4, $5)
-             ON CONFLICT (silicon_id, consumer_kind, consumer_id) DO UPDATE
+             SELECT $1, $2, $3, $4, $5
+             WHERE $4 <= COALESCE((
+                 SELECT last_sequence FROM hook_private.delivery_sequences WHERE silicon_id = $1
+             ), 0)
+             ON CONFLICT (environment_id, silicon_id, consumer_kind, consumer_id) DO UPDATE
              SET acknowledged_through = GREATEST(
                      hook_private.delivery_cursors.acknowledged_through, EXCLUDED.acknowledged_through
                  ),
@@ -134,8 +138,12 @@ impl PostgresStore {
         .bind(consumer.id().as_str())
         .bind(through_sequence)
         .bind(acknowledged_at)
-        .fetch_one(&self.pool)
+        .fetch_optional(&self.pool)
         .await?;
+        let (through, updated_at) = row.ok_or(StoreError::InvalidArgument {
+            field: "through_sequence",
+            reason: "must not exceed the latest allocated delivery sequence",
+        })?;
         Ok(DeliveryCursor {
             silicon_id: silicon_id.clone(),
             acknowledged_through: through,

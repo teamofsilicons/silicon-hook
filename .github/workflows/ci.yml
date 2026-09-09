@@ -25,22 +25,25 @@ jobs:
           rustup toolchain install 1.98.0 --profile minimal --component clippy,rustfmt
           rustup default 1.98.0
 
+      - name: Check bundled CLI guides
+        run: python3 scripts/bundle-cli-docs.py --check
+
       - name: Check formatting
         run: cargo fmt --all --check
 
       - name: Check every target
-        run: cargo check --locked --all-targets --all-features
+        run: cargo check --workspace --locked --all-targets --all-features
 
       - name: Run strict Clippy
-        run: cargo clippy --locked --all-targets --all-features -- -D warnings
+        run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
 
       - name: Run unit and PostgreSQL integration tests
-        run: cargo test --locked --all-targets --all-features
+        run: cargo test --workspace --locked --all-targets --all-features
 
       - name: Build warning-free documentation
         env:
           RUSTDOCFLAGS: -D warnings
-        run: cargo doc --locked --no-deps --all-features
+        run: cargo doc --workspace --locked --no-deps --all-features
 
       - name: Validate OpenAPI
         run: npx --yes @redocly/cli@2.49.0 lint openapi.yaml
@@ -50,3 +53,21 @@ jobs:
 
       - name: Enforce dependency policy
         run: cargo deny --locked check
+
+  frontend:
+    name: SolidJS frontend and session gateway
+    runs-on: ubuntu-24.04
+    container: node:24-bookworm
+    timeout-minutes: 10
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install locked frontend dependencies
+        run: npm ci
+      - name: Type-check and build the frontend and gateway
+        run: npm run build
+      - name: Check session and gateway security invariants
+        run: npm test

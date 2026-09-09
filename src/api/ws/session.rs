@@ -22,6 +22,13 @@ use crate::{
 };
 
 const MAX_OUTSTANDING_PINGS: usize = 8;
+const MAX_IN_FLIGHT_PER_STREAM: usize = 32;
+
+pub(super) struct SessionAuthority {
+    pub(super) epoch: u64,
+    pub(super) iam: crate::infrastructure::iam::IamClient,
+    pub(super) request: crate::infrastructure::iam::AuthorizationRequest,
+}
 
 /// Runs one already-authorized WebSocket until disconnect or heartbeat timeout.
 pub(super) async fn serve_socket(
@@ -30,9 +37,14 @@ pub(super) async fn serve_socket(
     wakeups: DeliveryWakeups,
     settings: RealtimeSettings,
     streams: Vec<StreamAccess>,
+    authority: SessionAuthority,
 ) {
     let connection_id = Uuid::now_v7();
     let mut runtime = SessionRuntime {
+        checked_epoch: authority.epoch,
+        last_authorized: Instant::now(),
+        wakeup_registry: wakeups.clone(),
+        authority,
         application,
         settings,
         streams: BTreeMap::new(),
@@ -47,11 +59,20 @@ pub(super) async fn serve_socket(
             StreamState {
                 access,
                 sent_through: 0,
+                pending: VecDeque::new(),
             },
         );
     }
     let exit = match runtime.run(&mut socket).await {
         Ok(exit) => exit,
+        Err(_)
+            if matches!(
+                runtime.application.environment_is_available().await,
+                Ok(false)
+            ) =>
+        {
+            SocketExit::server(4001, "environment-changed")
+        }
         Err(error) => {
             tracing::warn!(%connection_id, error = %error, "realtime session failed");
             let _sent = send_frame(
@@ -80,9 +101,14 @@ pub(super) async fn serve_socket(
 struct StreamState {
     access: StreamAccess,
     sent_through: i64,
+    pending: VecDeque<i64>,
 }
 
 struct SessionRuntime {
+    checked_epoch: u64,
+    last_authorized: Instant,
+    wakeup_registry: DeliveryWakeups,
+    authority: SessionAuthority,
     application: HookApplication,
     settings: RealtimeSettings,
     streams: BTreeMap<SiliconId, StreamState>,
@@ -125,6 +151,9 @@ enum SessionEvent {
 
 impl SessionRuntime {
     async fn run(&mut self, socket: &mut WebSocket) -> Result<SocketExit, ApplicationError> {
+        if let Some(exit) = self.refresh_authority_if_due().await {
+            return Ok(exit);
+        }
         self.send_ready(socket).await?;
         // Unacknowledged events are attached to every new connection.
         for silicon_id in self.streams.keys().cloned().collect::<Vec<_>>() {
@@ -147,6 +176,12 @@ impl SessionRuntime {
                 _ = heartbeat.tick() => SessionEvent::Heartbeat,
                 _ = poll.tick() => SessionEvent::Poll,
             };
+            if !self.application.environment_is_available().await? {
+                return Ok(SocketExit::server(4001, "environment-changed"));
+            }
+            if let Some(exit) = self.refresh_authority_if_due().await {
+                return Ok(exit);
+            }
             match event {
                 SessionEvent::Incoming(Some(Ok(message))) => {
                     if let Some(exit) = self.handle_message(socket, message).await? {
@@ -182,6 +217,36 @@ impl SessionRuntime {
                 SessionEvent::Poll => self.deliver_all_pending(socket).await?,
             }
         }
+    }
+
+    async fn refresh_authority_if_due(&mut self) -> Option<SocketExit> {
+        let epoch = self.wakeup_registry.authorization_epoch();
+        if epoch == self.checked_epoch
+            && self.last_authorized.elapsed() < std::time::Duration::from_secs(30)
+        {
+            return None;
+        }
+        let context = match self.authority.iam.authorize(&self.authority.request).await {
+            Ok(context) => context,
+            Err(
+                crate::infrastructure::iam::IamError::InvalidCredential
+                | crate::infrastructure::iam::IamError::Forbidden
+                | crate::infrastructure::iam::IamError::NotFound,
+            ) => return Some(SocketExit::server(4003, "authorization-changed")),
+            Err(_) => return Some(SocketExit::server(1013, "iam-unavailable")),
+        };
+        for (silicon, stream) in &mut self.streams {
+            let Ok(access) = self.application.authorize_stream(&context, silicon) else {
+                return Some(SocketExit::server(4003, "authorization-changed"));
+            };
+            if access.consumer() != stream.access.consumer() {
+                return Some(SocketExit::server(4003, "authorization-changed"));
+            }
+            stream.access = access;
+        }
+        self.checked_epoch = epoch;
+        self.last_authorized = Instant::now();
+        None
     }
 
     async fn send_ready(&mut self, socket: &mut WebSocket) -> Result<(), ApplicationError> {
@@ -225,43 +290,46 @@ impl SessionRuntime {
         Ok(())
     }
 
-    /// Sends every retained event after the stream's sent position, in order,
-    /// until the stream is drained.
+    /// Bound outstanding delivery so a slow recipient cannot starve heartbeat
+    /// processing or force the client to buffer the entire retained history.
     async fn deliver_pending(
         &mut self,
         socket: &mut WebSocket,
         silicon_id: &SiliconId,
     ) -> Result<(), ApplicationError> {
-        let batch_size = self.settings.replay_batch_size.get();
-        loop {
-            let Some(stream) = self.streams.get(silicon_id) else {
-                return Ok(());
-            };
-            let access = stream.access.clone();
-            let after = stream.sent_through;
-            let events = self
-                .application
-                .fetch_after(&access, after, batch_size)
-                .await?;
-            let fetched = events.len();
-            for event in &events {
-                send_frame(
-                    socket,
-                    &ServerFrame::Event {
-                        silicon_id: silicon_id.clone(),
-                        delivery_sequence: event.delivery_sequence().get(),
-                        event: Box::new(EventResponse::from(event)),
-                    },
-                )
-                .await?;
-                if let Some(stream) = self.streams.get_mut(silicon_id) {
-                    stream.sent_through = stream.sent_through.max(event.delivery_sequence().get());
-                }
-            }
-            if fetched < batch_size as usize {
-                return Ok(());
+        let Some(stream) = self.streams.get(silicon_id) else {
+            return Ok(());
+        };
+        let available = MAX_IN_FLIGHT_PER_STREAM.saturating_sub(stream.pending.len());
+        if available == 0 {
+            return Ok(());
+        }
+        let batch_size = self
+            .settings
+            .replay_batch_size
+            .get()
+            .min(u32::try_from(available).unwrap_or(32));
+        let events = self
+            .application
+            .fetch_after(&stream.access, stream.sent_through, batch_size)
+            .await?;
+        for event in events {
+            let sequence = event.delivery_sequence().get();
+            send_frame(
+                socket,
+                &ServerFrame::Event {
+                    silicon_id: silicon_id.clone(),
+                    delivery_sequence: sequence,
+                    event: Box::new(EventResponse::from(&event)),
+                },
+            )
+            .await?;
+            if let Some(stream) = self.streams.get_mut(silicon_id) {
+                stream.sent_through = stream.sent_through.max(sequence);
+                stream.pending.push_back(sequence);
             }
         }
+        Ok(())
     }
 
     async fn handle_message(
@@ -314,8 +382,18 @@ impl SessionRuntime {
                 silicon_id,
                 after_sequence,
             } => {
-                if let Some(stream) = self.streams.get_mut(&silicon_id) {
-                    stream.sent_through = after_sequence.max(0);
+                if after_sequence < 0 {
+                    send_frame(
+                        socket,
+                        &ServerFrame::recoverable_error(
+                            "invalid_resume",
+                            "after_sequence must not be negative.",
+                        ),
+                    )
+                    .await?;
+                } else if let Some(stream) = self.streams.get_mut(&silicon_id) {
+                    stream.sent_through = after_sequence;
+                    stream.pending.clear();
                     self.deliver_pending(socket, &silicon_id).await?;
                 } else {
                     send_unknown_stream(socket).await?;
@@ -340,6 +418,11 @@ impl SessionRuntime {
             .await
         {
             Ok(cursor) => {
+                if let Some(stream) = self.streams.get_mut(silicon_id) {
+                    stream
+                        .pending
+                        .retain(|sequence| *sequence > cursor.acknowledged_through);
+                }
                 send_frame(
                     socket,
                     &ServerFrame::AckRecorded {
@@ -347,14 +430,15 @@ impl SessionRuntime {
                         acknowledged_through: cursor.acknowledged_through,
                     },
                 )
-                .await
+                .await?;
+                self.deliver_pending(socket, silicon_id).await
             }
             Err(ApplicationError::Validation { .. }) => {
                 send_frame(
                     socket,
                     &ServerFrame::recoverable_error(
                         "invalid_ack",
-                        "through_sequence must not be negative.",
+                        "through_sequence must be between zero and the latest allocated sequence.",
                     ),
                 )
                 .await
@@ -379,10 +463,13 @@ async fn send_frame(socket: &mut WebSocket, frame: &ServerFrame) -> Result<(), A
     let encoded = serde_json::to_string(frame).map_err(|error| {
         ApplicationError::Internal(anyhow::Error::new(error).context("encode realtime frame"))
     })?;
-    socket
-        .send(Message::Text(encoded.into()))
-        .await
-        .map_err(|error| {
-            ApplicationError::Internal(anyhow::Error::new(error).context("send frame"))
-        })
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        socket.send(Message::Text(encoded.into())),
+    )
+    .await
+    .map_err(|error| {
+        ApplicationError::Internal(anyhow::Error::new(error).context("realtime write timed out"))
+    })?
+    .map_err(|error| ApplicationError::Internal(anyhow::Error::new(error).context("send frame")))
 }

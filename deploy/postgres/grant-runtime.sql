@@ -79,3 +79,14 @@ GRANT SELECT, DELETE ON TABLE hook_private.management_idempotency TO :"worker_ro
 
 -- Trigger functions are not application APIs; keep them off PUBLIC.
 REVOKE ALL PRIVILEGES ON FUNCTION hook_private.reject_row_mutation() FROM PUBLIC;
+
+-- Shared test database control plane and row-level environment policy.
+GRANT USAGE ON SCHEMA hook_control TO :"api_role", :"worker_role";
+GRANT SELECT, INSERT, UPDATE ON hook_control.environments TO :"api_role";
+GRANT SELECT, UPDATE, DELETE ON hook_control.environments TO :"worker_role";
+GRANT SELECT ON hook_control.endpoint_routes TO :"api_role", :"worker_role";
+GRANT EXECUTE ON FUNCTION hook_private.environment_id(), hook_private.environment_is_available()
+    TO :"api_role", :"worker_role";
+GRANT EXECUTE ON FUNCTION hook_control.clean_environment(uuid) TO :"api_role", :"worker_role";
+GRANT SELECT, INSERT, UPDATE ON hook_control.mutation_results TO :"api_role";
+GRANT SELECT, DELETE ON hook_control.mutation_results TO :"worker_role";

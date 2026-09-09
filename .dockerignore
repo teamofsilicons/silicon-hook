@@ -2,3 +2,8 @@
 .env
 target
 *.log
+web/node_modules
+web/dist
+web/.env*
+web/.sessions
+web/.vercel

@@ -1,9 +1,9 @@
 //! HTTP handlers that translate between transport and application contracts.
 
 use axum::{
-    Json,
+    Extension, Json,
     body::Bytes,
-    extract::{Path, Query, State, rejection::QueryRejection},
+    extract::{Path, Query, rejection::QueryRejection},
     http::{HeaderMap, HeaderValue, Method, StatusCode, Uri, header},
 };
 use secrecy::ExposeSecret as _;
@@ -14,10 +14,9 @@ use super::{
         AcknowledgeRequest, ApiVersionResponse, BlockedRequestResponse, CreateHookRequest,
         DeliveriesQuery, DeliveryBatchResponse, DeliveryCursorResponse, EventResponse,
         HealthResponse, HistoryPageResponse, HistoryQuery, HookPageResponse, HookResponse,
-        HookWithSecretResponse, IamHookResponse, IamWebhookResponse, ListHooksQuery,
-        LoginCallbackRequest, LoginRequest, LoginResponse, OneTimeSecret, ReceiptResponse,
-        RefreshRequest, SetHooksEnabledRequest, SigningSecretResponse, TokensResponse,
-        UpdateHookRequest, VersionResponse,
+        HookWithSecretResponse, IamHookResponse, IamWebhookResponse, ListHooksQuery, LoginRequest,
+        OneTimeSecret, ReceiptResponse, RefreshRequest, SetHooksEnabledRequest,
+        SigningSecretResponse, TokensResponse, UpdateHookRequest, VersionResponse,
     },
     extractors::{self, PeerAddress},
     state::ApiState,
@@ -32,10 +31,10 @@ use crate::{
     },
     domain::{
         AuthorizationContext, EndpointKey, Hook, HookDescription, HookId, HookName, HookTimeZone,
-        OrganizationId, SiliconId,
+        SiliconId,
     },
     error::AppError,
-    infrastructure::iam::{AuthorizationRequest, LoginOutcome},
+    infrastructure::iam::AuthorizationRequest,
     infrastructure::postgres::RuntimeDatabaseRole,
     request_context,
 };
@@ -45,7 +44,7 @@ pub(super) async fn liveness() -> Json<HealthResponse> {
 }
 
 pub(super) async fn readiness(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
 ) -> Result<Json<HealthResponse>, AppError> {
     state
         .application
@@ -87,7 +86,7 @@ pub(super) async fn negotiate_api_version(
 }
 
 pub(super) async fn list_hooks(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path(silicon_id): Path<String>,
     query: Result<Query<ListHooksQuery>, QueryRejection>,
     headers: HeaderMap,
@@ -107,7 +106,7 @@ pub(super) async fn list_hooks(
 }
 
 pub(super) async fn create_hook(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path(silicon_id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -149,7 +148,7 @@ pub(super) async fn create_hook(
 }
 
 pub(super) async fn get_hook(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path((silicon_id, hook_id)): Path<(String, String)>,
     headers: HeaderMap,
 ) -> Result<Json<HookResponse>, AppError> {
@@ -166,7 +165,7 @@ pub(super) async fn get_hook(
 }
 
 pub(super) async fn update_hook(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path((silicon_id, hook_id)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
@@ -213,7 +212,7 @@ pub(super) async fn update_hook(
 }
 
 pub(super) async fn delete_hook(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path((silicon_id, hook_id)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
@@ -237,7 +236,7 @@ pub(super) async fn delete_hook(
 }
 
 pub(super) async fn set_hooks_enabled(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path(silicon_id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -264,7 +263,7 @@ pub(super) async fn set_hooks_enabled(
 }
 
 pub(super) async fn restore_hook(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path((silicon_id, hook_id)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
@@ -288,7 +287,7 @@ pub(super) async fn restore_hook(
 }
 
 pub(super) async fn rotate_hook_secret(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path((silicon_id, hook_id)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
@@ -320,7 +319,7 @@ pub(super) async fn rotate_hook_secret(
 }
 
 pub(super) async fn rotate_hook_endpoint(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path((silicon_id, hook_id)): Path<(String, String)>,
     headers: HeaderMap,
     body: Bytes,
@@ -344,7 +343,7 @@ pub(super) async fn rotate_hook_endpoint(
 }
 
 pub(super) async fn list_events(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path(silicon_id): Path<String>,
     query: Result<Query<HistoryQuery>, QueryRejection>,
     headers: HeaderMap,
@@ -362,7 +361,7 @@ pub(super) async fn list_events(
 }
 
 pub(super) async fn list_hook_events(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path((silicon_id, hook_id)): Path<(String, String)>,
     query: Result<Query<HistoryQuery>, QueryRejection>,
     headers: HeaderMap,
@@ -381,7 +380,7 @@ pub(super) async fn list_hook_events(
 }
 
 pub(super) async fn list_blocked_requests(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path(silicon_id): Path<String>,
     query: Result<Query<HistoryQuery>, QueryRejection>,
     headers: HeaderMap,
@@ -403,7 +402,7 @@ pub(super) async fn list_blocked_requests(
 }
 
 pub(super) async fn list_hook_blocked_requests(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path((silicon_id, hook_id)): Path<(String, String)>,
     query: Result<Query<HistoryQuery>, QueryRejection>,
     headers: HeaderMap,
@@ -449,7 +448,7 @@ async fn history_command(
 }
 
 pub(super) async fn pull_deliveries(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path(silicon_id): Path<String>,
     query: Result<Query<DeliveriesQuery>, QueryRejection>,
     headers: HeaderMap,
@@ -476,7 +475,7 @@ pub(super) async fn pull_deliveries(
 }
 
 pub(super) async fn acknowledge_deliveries(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path(silicon_id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -499,7 +498,7 @@ pub(super) async fn acknowledge_deliveries(
 }
 
 pub(super) async fn delivery_cursor(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path(silicon_id): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<DeliveryCursorResponse>, AppError> {
@@ -519,7 +518,7 @@ pub(super) async fn delivery_cursor(
 }
 
 pub(super) async fn receive(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path((silicon_id, endpoint_key)): Path<(String, String)>,
     peer: PeerAddress,
     method: Method,
@@ -617,7 +616,7 @@ fn parse_time_zone(value: Option<String>) -> Result<Option<HookTimeZone>, AppErr
         .map_err(|error| AppError::validation_with_details("invalid_time_zone", error.to_string()))
 }
 
-fn parse_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, AppError> {
+pub(super) fn parse_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, AppError> {
     serde_json::from_slice(body).map_err(|error| match error.classify() {
         serde_json::error::Category::Syntax | serde_json::error::Category::Eof => {
             AppError::bad_request("invalid_json")
@@ -629,7 +628,7 @@ fn parse_json<T: DeserializeOwned>(body: &[u8]) -> Result<T, AppError> {
     })
 }
 
-fn require_empty_body(body: &[u8]) -> Result<(), AppError> {
+pub(super) fn require_empty_body(body: &[u8]) -> Result<(), AppError> {
     if body.is_empty() {
         Ok(())
     } else {
@@ -637,7 +636,7 @@ fn require_empty_body(body: &[u8]) -> Result<(), AppError> {
     }
 }
 
-fn secret_response_headers() -> HeaderMap {
+pub(super) fn secret_response_headers() -> HeaderMap {
     let mut headers = HeaderMap::new();
     headers.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     headers.insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
@@ -679,58 +678,55 @@ pub(super) async fn method_not_allowed() -> AppError {
     AppError::MethodNotAllowed
 }
 
-pub(super) async fn login_begin(
-    State(state): State<ApiState>,
+pub(super) async fn iam_information(
+    Extension(state): Extension<ApiState>,
+) -> (HeaderMap, Json<serde_json::Value>) {
+    (
+        secret_response_headers(),
+        Json(serde_json::json!({
+            "app_id": state.iam.application_id(),
+            "iam_url": state.iam.base_url(),
+            "testing": state.iam.is_testing(),
+            "login_method": "short_lived_token",
+        })),
+    )
+}
+
+pub(super) async fn login_status(
+    Extension(state): Extension<ApiState>,
     headers: HeaderMap,
-    body: Bytes,
-) -> Result<(HeaderMap, Json<LoginResponse>), AppError> {
-    let request: LoginRequest = if body.is_empty() {
-        LoginRequest::default()
-    } else {
-        extractors::require_json(&headers)?;
-        parse_json(&body)?
-    };
-    let organization_id = request
-        .org_id
-        .map(OrganizationId::new)
-        .transpose()
-        .map_err(|_| AppError::validation("invalid_org_id"))?;
-    let start = state
-        .iam
-        .begin_login(organization_id.as_ref())
-        .map_err(AppError::from)?;
+) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
+    let authorization = authorize_management(&state, &headers, &[]).await?;
     Ok((
         secret_response_headers(),
-        Json(LoginResponse {
-            authorization_url: start.authorization_url,
-            continuation: OneTimeSecret::new(start.continuation),
-        }),
+        Json(serde_json::json!({
+            "authenticated": true,
+            "actor": authorization.actor(),
+            "org_id": authorization.organization_id(),
+        })),
     ))
 }
 
-pub(super) async fn login_callback(
-    State(state): State<ApiState>,
+pub(super) async fn login(
+    Extension(state): Extension<ApiState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(HeaderMap, Json<TokensResponse>), AppError> {
     extractors::require_json(&headers)?;
-    let request: LoginCallbackRequest = parse_json(&body)?;
-    let outcome = state
+    let request: LoginRequest = parse_json(&body)?;
+    let tokens = state
         .iam
-        .complete_login(&request.continuation, &request.callback_url)
+        .login(&request.slt, &extractors::idempotency_key(&headers)?)
         .await
         .map_err(AppError::from)?;
-    match outcome {
-        LoginOutcome::Granted(tokens) => Ok((
-            secret_response_headers(),
-            Json(TokensResponse::from_issued(tokens)),
-        )),
-        LoginOutcome::Denied { code } => Err(AppError::LoginDenied { code }),
-    }
+    Ok((
+        secret_response_headers(),
+        Json(TokensResponse::from_issued(tokens)),
+    ))
 }
 
 pub(super) async fn refresh_tokens(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(HeaderMap, Json<TokensResponse>), AppError> {
@@ -738,7 +734,10 @@ pub(super) async fn refresh_tokens(
     let request: RefreshRequest = parse_json(&body)?;
     let tokens = state
         .iam
-        .refresh(&request.refresh_token)
+        .refresh(
+            &request.refresh_token,
+            &extractors::idempotency_key(&headers)?,
+        )
         .await
         .map_err(AppError::from)?;
     Ok((
@@ -748,7 +747,7 @@ pub(super) async fn refresh_tokens(
 }
 
 pub(super) async fn logout(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, AppError> {
@@ -756,7 +755,10 @@ pub(super) async fn logout(
     let token = extractors::bearer_token(&headers)?;
     state
         .iam
-        .logout(token.expose_secret())
+        .logout(
+            token.expose_secret(),
+            &extractors::idempotency_key(&headers)?,
+        )
         .await
         .map_err(AppError::from)?;
     Ok(StatusCode::NO_CONTENT)
@@ -766,7 +768,7 @@ pub(super) async fn logout(
 /// as the Silicon's IAM webhook with the caller's own bearer, then stores the
 /// secret IAM issued. A retry after a partial failure reconciles each step.
 pub(super) async fn connect_iam_hook(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     Path(silicon_id): Path<String>,
     headers: HeaderMap,
     body: Bytes,
@@ -816,24 +818,58 @@ pub(super) async fn connect_iam_hook(
 }
 
 /// Receives Hook's own Application webhook from IAM. Deliveries are
-/// authenticated by the `silicon-iam` verifier before anything is read; Hook
-/// keeps no authorization cache, so the event is recorded and acknowledged.
+/// authenticated with the official IAM verifier before changing state. The
+/// test key is only a routing hint until verification succeeds. Verified events
+/// invalidate retained WebSocket authority locally and across API replicas.
 pub(super) async fn receive_iam_event(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, AppError> {
-    let verified = state
-        .iam
+    let envelope: serde_json::Value =
+        serde_json::from_slice(&body).map_err(|_| AppError::bad_request("invalid_json"))?;
+    let test_context = if let Some(test) = envelope.get("test") {
+        let key = test
+            .get("testing_key")
+            .and_then(serde_json::Value::as_str)
+            .ok_or(AppError::Forbidden)?;
+        Some(
+            state
+                .environments
+                .as_ref()
+                .ok_or(AppError::Forbidden)?
+                .resolve_iam_key(key)
+                .await?,
+        )
+    } else {
+        None
+    };
+    let iam = test_context
+        .as_ref()
+        .map_or(&state.iam, |context| &context.iam);
+    let verified = iam
         .verify_application_webhook(&headers, &body)
         .map_err(AppError::from)?;
+    let store = test_context
+        .as_ref()
+        .map_or(state.application.store(), |context| &context.store);
+    sqlx::query("SELECT pg_notify($1, '')")
+        .bind(crate::infrastructure::postgres::AUTHORIZATION_CHANNEL)
+        .execute(store.pool())
+        .await
+        .map_err(AppError::internal)?;
+    state.wakeups.invalidate_authorization();
     let event = verified.event();
+    if let Some(context) = &test_context
+        && let Some(service) = &state.environments
+    {
+        service
+            .touch(context.environment.id, context.environment.generation)
+            .await?;
+    }
     tracing::info!(
-        event_id = %event.event_id(),
-        event_type = %event.event_type(),
-        aggregate_kind = event.aggregate().kind(),
-        aggregate_version = event.aggregate().version(),
-        signing_key_version = verified.signing_key_version(),
+        event_id = %event.event_id,
+        event_type = %event.event_type,
         "Silicon IAM event received"
     );
     Ok(StatusCode::NO_CONTENT)

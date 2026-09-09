@@ -12,7 +12,7 @@ use tower_http::{
     catch_panic::CatchPanicLayer, sensitive_headers::SetSensitiveRequestHeadersLayer,
 };
 
-use super::{handlers, middleware, state::ApiState, ws};
+use super::{environments, handlers, middleware, state::ApiState, ws};
 use crate::config::ServerSettings;
 
 const IAM_EVENT_BODY_LIMIT: usize = 1024 * 1024;
@@ -26,8 +26,9 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
 
     // Sign-in runs before any bearer exists, so it lives outside management.
     let auth = Router::new()
-        .route("/api/v1/auth/login", post(handlers::login_begin))
-        .route("/api/v1/auth/callback", post(handlers::login_callback))
+        .route("/api/v1/auth/iam", get(handlers::iam_information))
+        .route("/api/v1/auth/status", get(handlers::login_status))
+        .route("/api/v1/auth/login", post(handlers::login))
         .route("/api/v1/auth/refresh", post(handlers::refresh_tokens))
         .route("/api/v1/auth/logout", post(handlers::logout))
         .layer(DefaultBodyLimit::max(settings.max_management_body_bytes));
@@ -36,9 +37,19 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
     // directory state; the verifier's own bound is the same one megabyte.
     let iam_events = Router::new()
         .route("/api/v1/iam/events", post(handlers::receive_iam_event))
+        .route("/webhook/", post(handlers::receive_iam_event))
+        .route("/webhook", post(handlers::receive_iam_event))
         .layer(DefaultBodyLimit::max(IAM_EVENT_BODY_LIMIT));
 
     let ingress = Router::new()
+        .route(
+            "/test/silicon/{silicon_id}/{endpoint_key}",
+            any(handlers::receive),
+        )
+        .route(
+            "/test/silicon/{silicon_id}/{endpoint_key}/",
+            any(handlers::receive),
+        )
         .route(
             "/silicon/{silicon_id}/{endpoint_key}",
             any(handlers::receive),
@@ -57,18 +68,56 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
         )
         .layer(DefaultBodyLimit::max(settings.max_ingress_body_bytes));
 
+    let testing = Router::new()
+        .route(
+            "/api/v1/testing-environments",
+            get(environments::list).post(environments::create),
+        )
+        .route(
+            "/api/v1/testing-environments/{id}",
+            get(environments::get).delete(environments::delete),
+        )
+        .route(
+            "/api/v1/testing-environments/{id}/key",
+            get(environments::key),
+        )
+        .route(
+            "/api/v1/testing-environments/{id}/key/rotate",
+            post(environments::rotate),
+        )
+        .route(
+            "/api/v1/testing-environments/{id}/restore",
+            post(environments::restore),
+        )
+        .route("/api/v1/testing-environment", get(environments::current))
+        .route(
+            "/api/v1/testing-environment/clean",
+            post(environments::clean),
+        )
+        .route(
+            "/api/v1/testing-environment/iam",
+            axum::routing::put(environments::configure_iam),
+        )
+        .layer(DefaultBodyLimit::max(settings.max_management_body_bytes));
+
     system
+        .merge(testing)
         .merge(management_router(settings))
         .merge(auth)
         .merge(iam_events)
         .merge(ingress)
         .fallback(handlers::not_found)
         .method_not_allowed_fallback(handlers::method_not_allowed)
+        .layer(axum_middleware::from_fn_with_state(
+            state.clone(),
+            environments::scope,
+        ))
         .with_state(state)
         .layer(axum_middleware::from_fn(middleware::enforce_api_version))
         .layer(SetSensitiveRequestHeadersLayer::new([
             header::AUTHORIZATION,
             header::COOKIE,
+            http::HeaderName::from_static("x-hook-test-key"),
         ]))
         .layer(ConcurrencyLimitLayer::new(settings.concurrency_limit))
         .layer(axum_middleware::from_fn_with_state(
@@ -198,7 +247,6 @@ mod tests {
             max_response_bytes: 1_024,
             allow_insecure_local_http: true,
             local_auth: true,
-            login: None,
             webhook: None,
         })
         .await?;
@@ -213,6 +261,7 @@ mod tests {
         };
         Ok(router(
             ApiState {
+                environments: None,
                 application,
                 iam,
                 trusted_proxy_hops: 0,
@@ -227,6 +276,62 @@ mod tests {
             },
             &settings,
         ))
+    }
+
+    #[tokio::test]
+    async fn login_discovery_and_online_status_do_not_expose_credentials()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let app = test_router().await?;
+        let response = app
+            .clone()
+            .oneshot(Request::get("/api/v1/auth/iam").body(Body::empty())?)
+            .await?;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert!(
+            response.headers()["cache-control"]
+                .to_str()?
+                .contains("no-store")
+        );
+        let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
+        assert_eq!(
+            body,
+            serde_json::json!({"app_id":null,"iam_url":"http://127.0.0.1:9/",
+            "testing":false,"login_method":"short_lived_token"})
+        );
+        for (token, actor) in [
+            ("local:carbon:owner:alice", "carbon"),
+            ("local:silicon:member:cos:tos", "silicon"),
+        ] {
+            let response = app
+                .clone()
+                .oneshot(
+                    Request::get("/api/v1/auth/status")
+                        .header("authorization", format!("Bearer {token}"))
+                        .header("x-org-id", "tos")
+                        .body(Body::empty())?,
+                )
+                .await?;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert!(
+                response.headers()["cache-control"]
+                    .to_str()?
+                    .contains("no-store")
+            );
+            let body: Value = serde_json::from_slice(&to_bytes(response.into_body(), 4096).await?)?;
+            assert_eq!(body["authenticated"], true);
+            assert_eq!(body["actor"]["type"], actor);
+            assert_eq!(body["org_id"], "tos");
+            assert!(body.get("access_token").is_none());
+        }
+        let response = app
+            .oneshot(
+                Request::get("/api/v1/auth/status")
+                    .header("x-org-id", "tos")
+                    .body(Body::empty())?,
+            )
+            .await?;
+        assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+        Ok(())
     }
 
     #[tokio::test]

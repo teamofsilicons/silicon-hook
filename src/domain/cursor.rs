@@ -43,6 +43,8 @@ pub struct HistoryCursorScope {
     silicon_id: SiliconId,
     collection: HistoryCollection,
     filter: HistoryFilter,
+    #[serde(default)]
+    environment: Option<(Uuid, i64)>,
 }
 
 impl HistoryCursorScope {
@@ -59,7 +61,15 @@ impl HistoryCursorScope {
             silicon_id,
             collection,
             filter,
+            environment: None,
         }
+    }
+
+    /// Binds a cursor to a test world and its current lifecycle generation.
+    #[must_use]
+    pub const fn with_environment(mut self, environment: Option<(Uuid, i64)>) -> Self {
+        self.environment = environment;
+        self
     }
 
     /// Returns the organization restriction.

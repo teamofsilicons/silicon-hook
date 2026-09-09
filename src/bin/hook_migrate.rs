@@ -11,5 +11,10 @@ async fn main() -> anyhow::Result<()> {
     let pool = postgres::connect(&settings.database, "hook-migrate").await?;
     postgres::migrate(&pool).await?;
     pool.close().await;
+    if let Some(database) = &settings.test_database {
+        let pool = postgres::connect(database, "hook-test-migrate").await?;
+        postgres::migrate(&pool).await?;
+        pool.close().await;
+    }
     Ok(())
 }

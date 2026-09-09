@@ -68,7 +68,8 @@ impl HookApplication {
             command.silicon_id.clone(),
             collection,
             filter.clone(),
-        );
+        )
+        .with_environment(self.environment_identity());
         let cursor = command
             .cursor
             .as_deref()

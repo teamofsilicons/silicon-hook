@@ -5,6 +5,27 @@ use sqlx::PgPool;
 use super::StoreError;
 
 const REQUIRED_COLUMNS: &[&str] = &[
+    "hook.hooks.environment_id|uuid|true",
+    "hook.events.environment_id|uuid|true",
+    "hook.blocked_requests.environment_id|uuid|true",
+    "hook_private.retired_endpoint_keys.environment_id|uuid|true",
+    "hook_private.delivery_sequences.environment_id|uuid|true",
+    "hook_private.delivery_cursors.environment_id|uuid|true",
+    "hook_private.ip_blocks.environment_id|uuid|true",
+    "hook_private.management_idempotency.environment_id|uuid|true",
+    "hook_private.audit_log.environment_id|uuid|true",
+    "hook_control.environments.id|uuid|true",
+    "hook_control.environments.key_hash|bytea|true",
+    "hook_control.environments.iam_key_hash|bytea|true",
+    "hook_control.environments.encrypted_credentials|jsonb|true",
+    "hook_control.environments.generation|bigint|true",
+    "hook_control.endpoint_routes.environment_id|uuid|false",
+    "hook_control.mutation_results.environment_id|uuid|true",
+    "hook_control.mutation_results.request_hash|bytea|true",
+    "hook_control.mutation_results.input_hash|bytea|true",
+    "hook_control.mutation_results.metadata|jsonb|true",
+    "hook_control.mutation_results.encrypted_credentials|jsonb|false",
+    "hook_control.mutation_results.created_at|timestamp with time zone|true",
     "hook.hooks.id|uuid|true",
     "hook.hooks.org_id|text|true",
     "hook.hooks.silicon_id|text|true",
@@ -342,6 +363,29 @@ const MISSING_DEFAULTS_SQL: &str = "
 ";
 
 pub(super) async fn validate(pool: &PgPool) -> Result<(), StoreError> {
+    let missing: Vec<String> = sqlx::query_scalar(
+        "SELECT name FROM unnest($1::text[]) name WHERE NOT EXISTS (
+            SELECT FROM pg_catalog.pg_class c JOIN pg_catalog.pg_policy p ON p.polrelid = c.oid
+            WHERE c.oid = to_regclass(name) AND c.relrowsecurity AND c.relforcerowsecurity
+              AND p.polname = 'environment_scope'
+        ) ORDER BY name",
+    )
+    .bind(
+        &[
+            "hook.hooks",
+            "hook.events",
+            "hook.blocked_requests",
+            "hook_private.retired_endpoint_keys",
+            "hook_private.delivery_sequences",
+            "hook_private.delivery_cursors",
+            "hook_private.ip_blocks",
+            "hook_private.management_idempotency",
+            "hook_private.audit_log",
+        ][..],
+    )
+    .fetch_all(pool)
+    .await?;
+    ensure_objects("environment row security", &missing)?;
     ensure_objects(
         "columns",
         &missing_objects(pool, MISSING_COLUMNS_SQL, REQUIRED_COLUMNS).await?,

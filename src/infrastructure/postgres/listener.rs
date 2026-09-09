@@ -5,7 +5,13 @@
 //! WebSocket sessions. Sessions also poll on a slow timer, so a missed or
 //! lagged notification only delays a delivery rather than losing it.
 
-use std::time::Duration;
+use std::{
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
+    time::Duration,
+};
 
 use sqlx::postgres::{PgConnectOptions, PgListener, PgPoolOptions};
 use tokio::sync::{broadcast, watch};
@@ -14,6 +20,8 @@ use crate::domain::SiliconId;
 
 /// Channel carrying Silicon identifiers whose streams gained an event.
 pub const DELIVERY_CHANNEL: &str = "hook_delivery";
+/// IAM notification fan-out; carries no credentials or event payload.
+pub const AUTHORIZATION_CHANNEL: &str = "hook_authorization_changed";
 const RECONNECT_DELAY: Duration = Duration::from_secs(2);
 const BROADCAST_CAPACITY: usize = 4_096;
 
@@ -21,6 +29,7 @@ const BROADCAST_CAPACITY: usize = 4_096;
 #[derive(Clone, Debug)]
 pub struct DeliveryWakeups {
     sender: broadcast::Sender<SiliconId>,
+    authorization_epoch: Arc<AtomicU64>,
 }
 
 impl DeliveryWakeups {
@@ -28,7 +37,21 @@ impl DeliveryWakeups {
     #[must_use]
     pub fn new() -> Self {
         let (sender, _receiver) = broadcast::channel(BROADCAST_CAPACITY);
-        Self { sender }
+        Self {
+            sender,
+            authorization_epoch: Arc::default(),
+        }
+    }
+
+    /// Observes the current cross-replica IAM invalidation generation.
+    #[must_use]
+    pub fn authorization_epoch(&self) -> u64 {
+        self.authorization_epoch.load(Ordering::Acquire)
+    }
+
+    /// Invalidates retained WebSocket authorization after a verified IAM event.
+    pub fn invalidate_authorization(&self) {
+        self.authorization_epoch.fetch_add(1, Ordering::AcqRel);
     }
 
     /// Subscribes to every Silicon notification; callers filter locally.
@@ -71,7 +94,10 @@ pub async fn spawn_delivery_listener(
         };
         match listener {
             Ok(mut listener) => {
-                if let Err(error) = listener.listen(DELIVERY_CHANNEL).await {
+                if let Err(error) = listener
+                    .listen_all([DELIVERY_CHANNEL, AUTHORIZATION_CHANNEL])
+                    .await
+                {
                     tracing::warn!(error = %error, "delivery listener failed to subscribe");
                 } else {
                     tracing::info!("delivery listener subscribed");
@@ -104,6 +130,10 @@ async fn run_listener(
         };
         match notification {
             Ok(Some(notification)) => {
+                if notification.channel() == AUTHORIZATION_CHANNEL {
+                    wakeups.invalidate_authorization();
+                    continue;
+                }
                 if notification.channel() != DELIVERY_CHANNEL {
                     continue;
                 }

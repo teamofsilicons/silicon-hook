@@ -1084,6 +1084,7 @@ fn has_normative_secret_deadline(
 fn classify_hook_insert_error(error: sqlx::Error) -> StoreError {
     if let sqlx::Error::Database(database) = &error {
         match database.constraint() {
+            Some("test_environment_hook_limit") => return StoreError::HookLimitReached,
             Some("hooks_endpoint_key_unique") => return StoreError::EndpointKeyConflict,
             Some("hooks_one_iam_default_per_silicon") => return StoreError::IamDefaultExists,
             _ => {}

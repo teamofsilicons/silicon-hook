@@ -1,37 +1,25 @@
-//! Silicon IAM adapter built on the official `silicon-iam` crate.
+//! Silicon IAM integration through the official published Rust client.
 //!
-//! The crate owns everything a caller could get wrong without noticing: the
-//! fail-closed compatibility handshake, PKCE sign-in, token introspection, and
-//! exact-byte webhook verification. What it deliberately leaves to the bearer
-//! holder, Hook does with the caller's own token against the documented IAM
-//! API: the organization directory says who a token is (the public Carbon ID
-//! or global Silicon ID) and which organization role it holds, and a
-//! per-Silicon read says whether the caller may see a Silicon. Hook caches
-//! nothing, so every decision reflects IAM's current state.
-//!
-//! Hook exposes no OBO endpoints. The only credential a management call can
-//! present is a bearer token: an `oat_` token Hook issued through its own
-//! sign-in flow, or an IAM-native `cat_`/`sat_` token a Carbon or Silicon
-//! obtained from IAM directly.
+//! Every decision is resolved online. Application sessions use IAM's live
+//! authorization snapshot; native actors use the directory with their own
+//! credential. Environment-bound clients carry the IAM test key and test
+//! application credential on every call and cannot fall back to production.
 
 use std::{fmt, sync::Arc, time::Duration};
 
-use http::{HeaderMap, StatusCode, header};
-use reqwest::{Client as HttpClient, Response, Url, redirect::Policy};
+use http::HeaderMap;
 use secrecy::{ExposeSecret as _, SecretString};
-use serde::Deserialize;
 use sha2::{Digest as _, Sha256};
-use silicon_iam::{
-    ApplicationCredentials, AuthorizationCallback, AuthorizationContinuation, AuthorizationOptions,
-    Client as SdkClient, IntrospectionOptions, OAuthAccessToken, OAuthRefreshToken,
-    OAuthTokenParts, ServiceInfo, TokenIntrospection, VerifiedWebhook, WebhookSecret,
-    WebhookSecretKeyring, WebhookVerificationError, WebhookVerifier,
+use silicon_iam_client::{
+    Client as SdkClient, Credential, EnvironmentKey, IdempotencyKey, Mutation, VerifiedWebhook,
+    WebhookError, WebhookSecret, WebhookSecretKeyring, WebhookVerifier, models,
 };
 use thiserror::Error;
-use zeroize::{Zeroize as _, Zeroizing};
+use url::Url;
+use zeroize::Zeroizing;
 
 use crate::{
-    config::{IamSettings, IamWebhookSettings, LoginSettings},
+    config::{IamSettings, IamWebhookSettings},
     domain::{
         ActorKind, ActorRef, AuthorizationContext, OrganizationId, OrganizationRole, SigningSecret,
         SiliconId,
@@ -40,107 +28,60 @@ use crate::{
 };
 
 const USER_AGENT: &str = concat!("silicon-hook/", env!("CARGO_PKG_VERSION"));
-/// Every versioned IAM call is pinned to the API major the SDK negotiated.
-const API_VERSION_HEADER: &str = "silicon-iam-api-version";
-const API_VERSION: &str = "v1";
-const OAUTH_ACCESS_TOKEN_PREFIX: &str = "oat_";
 const LOCAL_TOKEN_PREFIX: &str = "local:";
 const SILICON_WEBHOOK_SECRET_PREFIX: &str = "swhs_";
-const SILICON_WEBHOOK_SECRET_LENGTH: usize = 48;
 const IAM_IDEMPOTENCY_DOMAIN: &[u8] = b"silicon-hook/iam-silicon-webhook/v1\0";
 const LOCAL_SECRET_DOMAIN: &[u8] = b"silicon-hook/local-iam-silicon-webhook/v1\0";
-const MAX_CALLBACK_URL_BYTES: usize = 8_192;
-const MAX_CONTINUATION_BYTES: usize = 16_384;
-const DEFAULT_RETRY_AFTER: Duration = Duration::from_secs(1);
 
-/// Facts a management request presents for authentication.
+/// Credential and organization to resolve, with the Silicons this call targets.
 #[derive(Clone, Debug)]
 pub struct AuthorizationRequest {
-    /// Opaque bearer token from the HTTP `Authorization` header.
+    /// Opaque actor credential.
     pub token: SecretString,
-    /// Organization selected by `X-Org-ID`.
+    /// Selected organization.
     pub org_id: OrganizationId,
-    /// Silicons the request acts on. A Carbon's visibility of each one is
-    /// established online; a Silicon only ever sees itself.
+    /// Requested Silicon visibility.
     pub targets: Vec<SiliconId>,
 }
 
-/// Browser redirect and sealed continuation that start a Carbon sign-in.
-pub struct LoginStart {
-    /// IAM authorization URL the browser must be sent to.
-    pub authorization_url: String,
-    /// Encrypted, Application-bound continuation the client must present on
-    /// the callback. It expires after ten minutes.
-    pub continuation: Zeroizing<String>,
-}
-
-impl fmt::Debug for LoginStart {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("LoginStart")
-            .field("authorization_url", &self.authorization_url)
-            .field("continuation", &"[REDACTED]")
-            .finish()
-    }
-}
-
-/// Result of completing a sign-in callback.
-#[derive(Debug)]
-pub enum LoginOutcome {
-    /// IAM issued tokens for the signed-in actor.
-    Granted(IssuedTokens),
-    /// The actor or IAM declined the authorization.
-    Denied {
-        /// OAuth protocol error code such as `access_denied`.
-        code: String,
-    },
-}
-
-/// Tokens IAM issued to Hook for an actor.
+/// Application tokens returned by IAM. Debug never exposes either token.
 pub struct IssuedTokens {
-    /// Opaque 30-minute access token.
+    /// Access token.
     pub access_token: Zeroizing<String>,
-    /// Rotating refresh token; every use replaces it.
+    /// Rotating refresh token.
     pub refresh_token: Zeroizing<String>,
-    /// Access-token lifetime reported by IAM.
+    /// Access token lifetime.
     pub expires_in: Duration,
     /// Effective scopes.
     pub scopes: Vec<String>,
-    /// Actor the tokens represent.
+    /// Authenticated actor.
     pub actor: ActorRef,
-    /// Organization the tokens are bound to, when any.
+    /// Bound organization, if any.
     pub organization_id: Option<OrganizationId>,
 }
 
 impl fmt::Debug for IssuedTokens {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("IssuedTokens")
-            .field("access_token", &"[REDACTED]")
-            .field("refresh_token", &"[REDACTED]")
-            .field("expires_in", &self.expires_in)
-            .field("scopes", &self.scopes)
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IssuedTokens")
             .field("actor", &self.actor)
             .field("organization_id", &self.organization_id)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
-/// Outcome of registering a Hook endpoint as a Silicon's IAM webhook.
+/// Result of configuring a Silicon's IAM webhook.
 pub struct RegisteredSiliconWebhook {
-    /// Fresh `swhs_` secret IAM will sign deliveries with.
+    /// Newly issued signing secret.
     pub signing_secret: SigningSecret,
-    /// Version IAM presents in `X-Silicon-IAM-Key-Version`.
+    /// IAM signing key version.
     pub secret_version: u64,
 }
 
 impl fmt::Debug for RegisteredSiliconWebhook {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter
-            .debug_struct("RegisteredSiliconWebhook")
-            .field("signing_secret", &"[REDACTED]")
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("RegisteredSiliconWebhook")
             .field("secret_version", &self.secret_version)
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
@@ -191,7 +132,7 @@ pub enum IamError {
     NotConfigured,
     /// An IAM webhook delivery did not authenticate.
     #[error("the IAM webhook delivery could not be verified")]
-    WebhookRejected(#[source] WebhookVerificationError),
+    WebhookRejected(#[source] WebhookError),
 }
 
 impl IamError {
@@ -241,97 +182,199 @@ impl From<IamError> for AppError {
     }
 }
 
-/// Cloneable IAM adapter shared by every request handler.
+/// Shared IAM boundary. Clones preserve their environment and credentials.
 #[derive(Clone)]
 pub struct IamClient {
     inner: Arc<Inner>,
 }
 
 struct Inner {
-    online: Option<Online>,
+    sdk: Option<SdkClient>,
+    base_url: Url,
+    app_id: Option<String>,
     accept_local_tokens: bool,
     webhook_verifier: Option<WebhookVerifier>,
 }
 
-struct Online {
-    sdk: SdkClient,
-    http: HttpClient,
-    base_url: Url,
-    max_response_bytes: usize,
-    login: Option<LoginSettings>,
-}
-
 impl fmt::Debug for IamClient {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let online = self.inner.online.as_ref();
-        formatter
-            .debug_struct("IamClient")
-            .field("base_url", &online.map(|online| &online.base_url))
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("IamClient")
+            .field("app_id", &self.inner.app_id)
+            .field("local_auth", &self.inner.accept_local_tokens)
             .field(
-                "api_version",
-                &online.map(|online| online.sdk.service_info().api_version()),
+                "testing",
+                &self
+                    .inner
+                    .sdk
+                    .as_ref()
+                    .is_some_and(|sdk| sdk.environment().is_some()),
             )
-            .field(
-                "login_configured",
-                &online.is_some_and(|online| online.login.is_some()),
-            )
-            .field("accept_local_tokens", &self.inner.accept_local_tokens)
-            .field(
-                "webhook_verifier",
-                &self.inner.webhook_verifier.as_ref().map(|_| "[configured]"),
-            )
-            .finish()
+            .finish_non_exhaustive()
     }
 }
 
 impl IamClient {
-    /// Connects to IAM with Hook's Application credentials.
-    ///
-    /// With credentials configured this performs the SDK's fail-closed
-    /// compatibility handshake, so a process never starts against an IAM it
-    /// cannot talk to. Without credentials the adapter runs in local mode,
-    /// which only development and test configuration can enable.
+    /// Public application identifier used when requesting an IAM SLT.
+    #[must_use]
+    pub fn application_id(&self) -> Option<&str> {
+        self.inner.app_id.as_deref()
+    }
+
+    /// IAM service origin, without application credentials or environment keys.
+    #[must_use]
+    pub fn base_url(&self) -> &Url {
+        &self.inner.base_url
+    }
+
+    /// Whether this adapter is strictly bound to an IAM test environment.
+    #[must_use]
+    pub fn is_testing(&self) -> bool {
+        self.inner
+            .sdk
+            .as_ref()
+            .is_some_and(|sdk| sdk.environment().is_some())
+    }
+
+    /// Connects and negotiates compatibility using the official SDK.
     ///
     /// # Errors
-    ///
-    /// Returns an error when the credentials or webhook secrets are malformed,
-    /// the handshake fails, or neither online nor local mode is configured.
+    /// Fails closed on invalid configuration or an incompatible IAM deployment.
     pub async fn connect(settings: &IamSettings) -> Result<Self, IamError> {
-        let webhook_verifier = settings.webhook.as_ref().map(build_verifier).transpose()?;
-        let online = match (&settings.app_id, &settings.app_secret) {
-            (Some(app_id), Some(app_secret)) => {
-                Some(Online::connect(settings, app_id, app_secret).await?)
+        let sdk = match (&settings.app_id, &settings.app_secret) {
+            (Some(id), Some(secret)) => {
+                let sdk = SdkClient::builder(settings.base_url.as_str()).map_err(sdk_error)?
+                    .credential(Credential::application(id, secret.expose_secret()))
+                    .timeout(settings.request_timeout).user_agent(USER_AGENT)
+                    // A deployed backend must use its reviewed Cargo.lock.
+                    .auto_update(false).build().map_err(sdk_error)?;
+                sdk.system().negotiate().await.map_err(sdk_error)?;
+                Some(sdk)
             }
-            _ => None,
+            _ if settings.local_auth => None,
+            _ => return Err(IamError::NotConfigured),
         };
-        if online.is_none() && !settings.local_auth {
-            return Err(IamError::NotConfigured);
-        }
         Ok(Self {
             inner: Arc::new(Inner {
-                online,
+                sdk,
+                base_url: settings.base_url.clone(),
+                app_id: settings.app_id.clone(),
                 accept_local_tokens: settings.local_auth,
-                webhook_verifier,
+                webhook_verifier: settings.webhook.as_ref().map(build_verifier).transpose()?,
             }),
         })
     }
 
-    /// Service metadata fixed by the handshake, when connected online.
-    #[must_use]
-    pub fn service_info(&self) -> Option<&ServiceInfo> {
-        self.inner
-            .online
-            .as_ref()
-            .map(|online| online.sdk.service_info())
-    }
-
-    /// Authenticates a bearer token and returns only current IAM facts.
+    /// Confirms that a root key selects a live IAM test environment.
     ///
     /// # Errors
+    /// Refuses unknown, inactive or malformed environment keys.
+    pub async fn validate_environment(&self, key: &str) -> Result<(), IamError> {
+        self.sdk()?
+            .with_environment(EnvironmentKey::new(key).map_err(sdk_error)?)
+            .with_credential(Credential::Anonymous)
+            .environments()
+            .current()
+            .await
+            .map(|_| ())
+            .map_err(sdk_error)
+    }
+
+    /// Builds a strictly isolated IAM application integration.
     ///
-    /// An unknown, inactive, or foreign-organization token returns
-    /// [`IamError::InvalidCredential`]. Transport failures, malformed
-    /// responses, and response overflows fail closed.
+    /// # Errors
+    /// Rejects malformed test keys and unreachable or incompatible IAM services.
+    pub async fn for_environment(
+        &self,
+        key: &str,
+        app_id: &str,
+        app_secret: &str,
+        webhook: &IamWebhookSettings,
+    ) -> Result<Self, IamError> {
+        let sdk = self
+            .sdk()?
+            .with_environment(EnvironmentKey::new(key).map_err(sdk_error)?)
+            .with_credential(Credential::application(app_id, app_secret));
+        sdk.system().negotiate().await.map_err(sdk_error)?;
+        // An unknown token is deliberately inactive. A successful introspection
+        // proves the application credential is accepted in this test plane.
+        sdk.oauth()
+            .introspect(
+                &models::TokenIntrospectionRequest {
+                    token: "oat_hook_credential_probe".to_owned(),
+                    token_type_hint: None,
+                },
+                None,
+            )
+            .await
+            .map_err(sdk_error)?;
+        Ok(Self {
+            inner: Arc::new(Inner {
+                sdk: Some(sdk),
+                base_url: self.inner.base_url.clone(),
+                app_id: Some(app_id.to_owned()),
+                accept_local_tokens: false,
+                webhook_verifier: Some(build_verifier(webhook)?),
+            }),
+        })
+    }
+
+    /// Exchanges only an IAM-issued short-lived token for application tokens.
+    ///
+    /// # Errors
+    /// Expired, spent and wrong-application tokens are rejected by IAM.
+    pub async fn login(&self, slt: &str, idempotency_key: &str) -> Result<IssuedTokens, IamError> {
+        if slt.is_empty() || slt.len() > 4096 || !slt.bytes().all(|byte| byte.is_ascii_graphic()) {
+            return Err(IamError::InvalidInput("slt"));
+        }
+        let tokens = self
+            .sdk()?
+            .oauth()
+            .login(self.app_id()?, slt, &mutation(idempotency_key)?)
+            .await
+            .map_err(sdk_error)?;
+        issued_tokens(tokens)
+    }
+
+    /// Rotates a refresh token, with a stable retry key.
+    ///
+    /// # Errors
+    /// Fails when IAM no longer accepts the token.
+    pub async fn refresh(
+        &self,
+        token: &str,
+        idempotency_key: &str,
+    ) -> Result<IssuedTokens, IamError> {
+        let tokens = self
+            .sdk()?
+            .oauth()
+            .refresh(self.app_id()?, token, &mutation(idempotency_key)?)
+            .await
+            .map_err(sdk_error)?;
+        issued_tokens(tokens)
+    }
+
+    /// Revokes the caller's token or refresh-token family.
+    ///
+    /// # Errors
+    /// Returns IAM transport and authorization failures.
+    pub async fn logout(&self, token: &str, idempotency_key: &str) -> Result<(), IamError> {
+        self.sdk()?
+            .oauth()
+            .revoke(
+                &models::OAuthRevocationRequest {
+                    token: token.to_owned(),
+                    token_type_hint: None,
+                },
+                &mutation(idempotency_key)?,
+            )
+            .await
+            .map_err(sdk_error)
+    }
+
+    /// Resolves current actor authority online, never trusting cached claims.
+    ///
+    /// # Errors
+    /// Rejects inactive sessions, undisclosed roles and cross-organization actors.
     pub async fn authorize(
         &self,
         request: &AuthorizationRequest,
@@ -344,68 +387,100 @@ impl IamClient {
         {
             return local_authorize(request);
         }
-        self.online()?.authorize(request).await
+        let sdk = self.sdk()?;
+        let bearer = sdk.with_credential(Credential::bearer(request.token.expose_secret()));
+        let (actor, role) = if request.token.expose_secret().starts_with("oat_") {
+            let snapshot = sdk
+                .oauth()
+                .authorization(request.token.expose_secret(), Some(request.org_id.as_str()))
+                .await
+                .map_err(sdk_error)?
+                .ok_or(IamError::InvalidCredential)?;
+            if snapshot.audience != self.app_id()?
+                || snapshot.org_id != request.org_id.as_str()
+                || snapshot.testing_environment_id.is_some() != sdk.environment().is_some()
+            {
+                return Err(IamError::InvalidCredential);
+            }
+            let kind = match snapshot.actor_type {
+                models::ApplicationAuthorizationActorType::Carbon => ActorKind::Carbon,
+                models::ApplicationAuthorizationActorType::Silicon => ActorKind::Silicon,
+                models::ApplicationAuthorizationActorType::Other(_) => {
+                    return Err(IamError::InvalidResponse);
+                }
+            };
+            let actor = actor_from_directory(&snapshot.public_id, &request.org_id)?;
+            if actor.kind() != kind {
+                return Err(IamError::InvalidResponse);
+            }
+            (
+                actor,
+                organization_role(snapshot.org_role.as_deref().ok_or(IamError::Forbidden)?)?,
+            )
+        } else {
+            let member = bearer
+                .members()
+                .directory_self(request.org_id.as_str(), Some("id,role,org"))
+                .await
+                .map_err(sdk_error)?;
+            if member
+                .org
+                .as_ref()
+                .is_none_or(|org| org.id != request.org_id.as_str())
+            {
+                return Err(IamError::InvalidCredential);
+            }
+            let actor = actor_from_directory(
+                member.id.as_deref().ok_or(IamError::InvalidResponse)?,
+                &request.org_id,
+            )?;
+            let role = match member.role.ok_or(IamError::Forbidden)?.org_role {
+                models::DirectoryRoleOrgRole::Owner => OrganizationRole::Owner,
+                models::DirectoryRoleOrgRole::Admin => OrganizationRole::Admin,
+                models::DirectoryRoleOrgRole::Member => OrganizationRole::Member,
+                models::DirectoryRoleOrgRole::Other(_) => return Err(IamError::Forbidden),
+            };
+            (actor, role)
+        };
+        let mut visible = Vec::new();
+        for target in &request.targets {
+            validate_target(target, &request.org_id)?;
+            if actor.kind() == ActorKind::Silicon {
+                if actor.id().as_str() == target.as_str() {
+                    visible.push(target.clone());
+                }
+            } else {
+                match bearer
+                    .silicons()
+                    .get(request.org_id.as_str(), target.as_str())
+                    .await
+                {
+                    Ok(silicon)
+                        if silicon.silicon_id == target.as_str()
+                            && silicon.org_id == request.org_id.as_str()
+                            && silicon.status == models::SiliconStatus::Active =>
+                    {
+                        visible.push(target.clone());
+                    }
+                    Ok(_) => return Err(IamError::InvalidResponse),
+                    Err(silicon_iam_client::Error::Api(error))
+                        if error.is_not_found() || error.is_forbidden() => {}
+                    Err(error) => return Err(sdk_error(error)),
+                }
+            }
+        }
+        Ok(AuthorizationContext::new(
+            request.org_id.clone(),
+            actor,
+            role,
+            visible,
+        ))
     }
 
-    /// Starts a Carbon sign-in and returns the redirect plus its continuation.
+    /// Registers a Silicon webhook using the caller's credential and IAM SDK.
     ///
     /// # Errors
-    ///
-    /// Returns [`IamError::NotConfigured`] without a redirect URI, or an SDK
-    /// failure while building or sealing the attempt.
-    pub fn begin_login(
-        &self,
-        organization_id: Option<&OrganizationId>,
-    ) -> Result<LoginStart, IamError> {
-        self.online()?.begin_login(organization_id)
-    }
-
-    /// Completes a sign-in from the exact callback URL the browser delivered.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`IamError::InvalidInput`] for a continuation that is
-    /// malformed, expired, tampered with, or bound to another Application, or
-    /// for a callback that does not match it; provider failures fail closed.
-    pub async fn complete_login(
-        &self,
-        continuation: &str,
-        callback_url: &str,
-    ) -> Result<LoginOutcome, IamError> {
-        self.online()?
-            .complete_login(continuation, callback_url)
-            .await
-    }
-
-    /// Rotates a refresh token into a new token pair.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`IamError::InvalidCredential`] for a token IAM no longer
-    /// honors; provider failures fail closed.
-    pub async fn refresh(&self, refresh_token: &str) -> Result<IssuedTokens, IamError> {
-        self.online()?.refresh(refresh_token).await
-    }
-
-    /// Ends the IAM session behind a Hook-issued access token.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`IamError::InvalidCredential`] for a token that is not a
-    /// Hook-issued access token IAM still honors.
-    pub async fn logout(&self, access_token: &str) -> Result<(), IamError> {
-        self.online()?.logout(access_token).await
-    }
-
-    /// Registers a Hook endpoint as the Silicon's IAM webhook using the
-    /// caller's own bearer, and returns the fresh signing secret IAM issued.
-    ///
-    /// # Errors
-    ///
-    /// Returns [`IamError::Forbidden`] when IAM requires authority or step-up
-    /// the caller lacks, [`IamError::NotFound`] for a Silicon IAM hides from
-    /// the caller, and [`IamError::Rejected`] for precondition or validation
-    /// failures.
+    /// Returns IAM permission, version, validation and transport failures.
     pub async fn register_silicon_webhook(
         &self,
         token: &SecretString,
@@ -417,465 +492,172 @@ impl IamClient {
         if self.inner.accept_local_tokens && token.expose_secret().starts_with(LOCAL_TOKEN_PREFIX) {
             return local_silicon_webhook(organization_id, silicon_id, endpoint_url);
         }
-        self.online()?
-            .register_silicon_webhook(
-                token.expose_secret(),
-                organization_id,
-                silicon_id,
-                endpoint_url,
-                idempotency_key,
+        let sdk = self
+            .sdk()?
+            .with_credential(Credential::bearer(token.expose_secret()));
+        let version = match sdk
+            .silicons()
+            .webhook(organization_id.as_str(), silicon_id.as_str())
+            .await
+        {
+            Ok(webhook) => Some(webhook.version),
+            Err(silicon_iam_client::Error::Api(error)) if error.is_not_found() => None,
+            Err(error) => return Err(sdk_error(error)),
+        };
+        let configured = sdk
+            .silicons()
+            .replace_webhook(
+                organization_id.as_str(),
+                silicon_id.as_str(),
+                version,
+                &models::SiliconWebhookReplace {
+                    url: endpoint_url.to_string(),
+                },
+                &mutation(&iam_idempotency_key(
+                    organization_id,
+                    silicon_id,
+                    idempotency_key,
+                ))?,
             )
             .await
+            .map_err(sdk_error)?;
+        Ok(RegisteredSiliconWebhook {
+            signing_secret: SigningSecret::from_text(configured.webhook_signing_secret)
+                .map_err(|_| IamError::InvalidResponse)?,
+            secret_version: u64::try_from(configured.webhook.secret_version)
+                .map_err(|_| IamError::InvalidResponse)?,
+        })
     }
 
-    /// Authenticates an Application webhook delivery from IAM.
+    /// Verifies exact bytes, then enforces the expected production/test plane.
     ///
     /// # Errors
-    ///
-    /// Returns [`IamError::NotConfigured`] without a webhook secret and
-    /// [`IamError::WebhookRejected`] for a delivery that does not verify.
+    /// Rejects signatures or test envelopes belonging to another environment.
     pub fn verify_application_webhook(
         &self,
         headers: &HeaderMap,
-        exact_body: &[u8],
+        body: &[u8],
     ) -> Result<VerifiedWebhook, IamError> {
-        self.inner
+        let verified = self
+            .inner
             .webhook_verifier
             .as_ref()
             .ok_or(IamError::NotConfigured)?
-            .verify(headers, exact_body)
-            .map_err(IamError::WebhookRejected)
+            .verify(headers, body)
+            .map_err(IamError::WebhookRejected)?;
+        if let Some(key) = self.inner.sdk.as_ref().and_then(SdkClient::environment) {
+            verified
+                .verify_testing_environment(key)
+                .map_err(IamError::WebhookRejected)?;
+        } else if verified.is_testing() {
+            return Err(IamError::Forbidden);
+        }
+        Ok(verified)
     }
 
-    fn online(&self) -> Result<&Online, IamError> {
-        self.inner.online.as_ref().ok_or(IamError::NotConfigured)
+    fn sdk(&self) -> Result<&SdkClient, IamError> {
+        self.inner.sdk.as_ref().ok_or(IamError::NotConfigured)
+    }
+
+    fn app_id(&self) -> Result<&str, IamError> {
+        self.inner.app_id.as_deref().ok_or(IamError::NotConfigured)
     }
 }
 
-impl Online {
-    async fn connect(
-        settings: &IamSettings,
-        app_id: &str,
-        app_secret: &SecretString,
-    ) -> Result<Self, IamError> {
-        let credentials = ApplicationCredentials::new(app_id, app_secret.expose_secret())
-            .map_err(|_| IamError::InvalidInput("iam_app_credentials"))?;
-        let sdk = SdkClient::builder(credentials)
-            .base_url(settings.base_url.as_str())
-            .connect_timeout(settings.connect_timeout)
-            .request_timeout(settings.request_timeout)
-            .max_response_bytes(settings.max_response_bytes)
-            .allow_insecure_local_http(settings.allow_insecure_local_http)
-            .connect()
-            .await
-            .map_err(|error| IamError::Handshake(anyhow::Error::new(error)))?;
-        let http = HttpClient::builder()
-            .redirect(Policy::none())
-            .connect_timeout(settings.connect_timeout)
-            .timeout(settings.request_timeout)
-            .https_only(!settings.allow_insecure_local_http)
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|error| IamError::Transport(anyhow::Error::new(error)))?;
-        Ok(Self {
-            sdk,
-            http,
-            base_url: settings.base_url.clone(),
-            max_response_bytes: settings.max_response_bytes,
-            login: settings.login.clone(),
-        })
-    }
+fn mutation(key: &str) -> Result<Mutation, IamError> {
+    // Hook accepts 8–255 characters; IAM requires at least 16. Hashing every
+    // key preserves stable retries without leaking the caller's value to IAM.
+    let iam_key = hex::encode(Sha256::digest(key.as_bytes()));
+    Ok(Mutation::with_key(
+        IdempotencyKey::parse(iam_key).map_err(sdk_error)?,
+    ))
+}
 
-    async fn authorize(
-        &self,
-        request: &AuthorizationRequest,
-    ) -> Result<AuthorizationContext, IamError> {
-        let token = request.token.expose_secret();
-        let introspected_kind = if token.starts_with(OAUTH_ACCESS_TOKEN_PREFIX) {
-            Some(self.introspect(token, &request.org_id).await?)
-        } else {
-            None
-        };
-        let member = self.directory_self(token, &request.org_id).await?;
-        let actor = actor_from_directory(&member.id, &request.org_id)?;
-        if introspected_kind.is_some_and(|kind| kind != actor.kind()) {
-            return Err(IamError::InvalidResponse);
-        }
-        let role = member
-            .role
-            .ok_or(IamError::InvalidResponse)?
-            .org_role
-            .into_domain();
-        let visible = self
-            .visible_targets(token, &request.org_id, &actor, role, &request.targets)
-            .await?;
-        Ok(AuthorizationContext::new(
-            request.org_id.clone(),
-            actor,
-            role,
-            visible,
-        ))
+fn organization_role(value: &str) -> Result<OrganizationRole, IamError> {
+    match value {
+        "owner" => Ok(OrganizationRole::Owner),
+        "admin" => Ok(OrganizationRole::Admin),
+        "member" => Ok(OrganizationRole::Member),
+        _ => Err(IamError::Forbidden),
     }
+}
 
-    /// Introspects a Hook-issued access token through the SDK, which also
-    /// proves the token was issued to this Application and is still active.
-    async fn introspect(
-        &self,
-        token: &str,
-        organization_id: &OrganizationId,
-    ) -> Result<ActorKind, IamError> {
-        let token = OAuthAccessToken::new(token).map_err(|_| IamError::InvalidCredential)?;
-        let options = IntrospectionOptions::new()
-            .for_organization(organization_id.as_str())
-            .map_err(|_| IamError::InvalidInput("org_id"))?;
-        let introspection = self
-            .sdk
-            .oauth()
-            .introspect_access_token_with_options(&token, &options)
-            .await
-            .map_err(sdk_error)?;
-        let active = match introspection {
-            TokenIntrospection::Active(active) => active,
-            TokenIntrospection::Inactive => return Err(IamError::InvalidCredential),
-            _ => return Err(IamError::InvalidResponse),
-        };
-        if active.organization_id() != Some(organization_id.as_str()) {
-            return Err(IamError::InvalidCredential);
-        }
-        actor_kind_from_sdk(active.actor_kind()).ok_or(IamError::InvalidCredential)
-    }
-
-    /// Reads the caller's own directory row, which names the public actor ID
-    /// and current organization role. IAM answers 401 for a dead token and
-    /// 403/404 for a token without an active membership in the organization.
-    async fn directory_self(
-        &self,
-        token: &str,
-        organization_id: &OrganizationId,
-    ) -> Result<DirectoryMemberWire, IamError> {
-        let mut url = self.api_url(&[
-            "organizations",
-            organization_id.as_str(),
-            "directory",
-            "self",
-        ])?;
-        url.query_pairs_mut().append_pair("fields", "id,role,org");
-        let response = self.bearer_get(token, url).await?;
-        match response.status() {
-            StatusCode::OK => {}
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => {
-                return Err(IamError::InvalidCredential);
-            }
-            StatusCode::TOO_MANY_REQUESTS => return Err(rate_limited(&response)),
-            status => return Err(IamError::UnexpectedStatus(status.as_u16())),
-        }
-        let member: DirectoryMemberWire = bounded_json(response, self.max_response_bytes).await?;
-        if member
-            .org
-            .as_ref()
-            .is_some_and(|organization| organization.id != organization_id.as_str())
-        {
-            return Err(IamError::InvalidResponse);
-        }
-        Ok(member)
-    }
-
-    async fn visible_targets(
-        &self,
-        token: &str,
-        organization_id: &OrganizationId,
-        actor: &ActorRef,
-        role: OrganizationRole,
-        targets: &[SiliconId],
-    ) -> Result<Vec<SiliconId>, IamError> {
-        match actor.kind() {
-            ActorKind::Silicon => Ok(targets
-                .iter()
-                .filter(|target| target.as_str() == actor.id().as_str())
-                .cloned()
-                .collect()),
-            // Owners and administrators act on every Silicon in the
-            // organization; the policy grants that without a directory read.
-            ActorKind::Carbon
-                if matches!(role, OrganizationRole::Owner | OrganizationRole::Admin) =>
-            {
-                Ok(targets.to_vec())
-            }
-            ActorKind::Carbon => {
-                let mut visible = Vec::with_capacity(targets.len());
-                for target in targets {
-                    if self.silicon_visible(token, organization_id, target).await? {
-                        visible.push(target.clone());
-                    }
-                }
-                Ok(visible)
-            }
-        }
-    }
-
-    /// A Silicon is visible to the caller exactly when IAM returns its
-    /// profile; IAM hides invisible and cross-organization Silicons as 404.
-    async fn silicon_visible(
-        &self,
-        token: &str,
-        organization_id: &OrganizationId,
-        silicon_id: &SiliconId,
-    ) -> Result<bool, IamError> {
-        let url = self.api_url(&[
-            "organizations",
-            organization_id.as_str(),
-            "silicons",
-            silicon_id.as_str(),
-        ])?;
-        let response = self.bearer_get(token, url).await?;
-        match response.status() {
-            StatusCode::OK => Ok(true),
-            StatusCode::FORBIDDEN | StatusCode::NOT_FOUND => Ok(false),
-            StatusCode::UNAUTHORIZED => Err(IamError::InvalidCredential),
-            StatusCode::TOO_MANY_REQUESTS => Err(rate_limited(&response)),
-            status => Err(IamError::UnexpectedStatus(status.as_u16())),
-        }
-    }
-
-    fn begin_login(
-        &self,
-        organization_id: Option<&OrganizationId>,
-    ) -> Result<LoginStart, IamError> {
-        let login = self.login.as_ref().ok_or(IamError::NotConfigured)?;
-        let mut options =
-            AuthorizationOptions::new(login.redirect_uri.as_str(), login.scopes.iter().cloned())
-                .map_err(|error| {
-                    tracing::warn!(%error, "IAM login configuration is invalid");
-                    IamError::NotConfigured
-                })?;
-        if let Some(organization_id) = organization_id {
-            options = options
-                .for_organization(organization_id.as_str())
-                .map_err(|_| IamError::InvalidInput("org_id"))?;
-        }
-        let attempt = self
-            .sdk
-            .oauth()
-            .begin_authorization(options)
-            .map_err(sdk_error)?;
-        let authorization_url = attempt.authorization_url().to_string();
-        let continuation = self
-            .sdk
-            .oauth()
-            .seal_authorization_attempt(attempt)
-            .map_err(sdk_error)?;
-        Ok(LoginStart {
-            authorization_url,
-            continuation: Zeroizing::new(continuation.expose_secret().to_owned()),
-        })
-    }
-
-    async fn complete_login(
-        &self,
-        continuation: &str,
-        callback_url: &str,
-    ) -> Result<LoginOutcome, IamError> {
-        if continuation.len() > MAX_CONTINUATION_BYTES {
-            return Err(IamError::InvalidInput("continuation"));
-        }
-        if callback_url.len() > MAX_CALLBACK_URL_BYTES {
-            return Err(IamError::InvalidInput("callback_url"));
-        }
-        let continuation = AuthorizationContinuation::from_encoded(continuation)
-            .map_err(|_| IamError::InvalidInput("continuation"))?;
-        let attempt = self
-            .sdk
-            .oauth()
-            .restore_authorization_attempt(&continuation)
-            .map_err(|_| IamError::InvalidInput("continuation"))?;
-        let callback = attempt
-            .parse_callback(callback_url)
-            .map_err(|_| IamError::InvalidInput("callback_url"))?;
-        match callback {
-            AuthorizationCallback::Granted(grant) => {
-                let tokens = self
-                    .sdk
-                    .oauth()
-                    .exchange_authorization_code(grant)
-                    .send()
-                    .await
-                    .map_err(|error| match sdk_error(error) {
-                        IamError::Rejected { .. } | IamError::InvalidCredential => {
-                            IamError::InvalidInput("callback_url")
-                        }
-                        other => other,
-                    })?;
-                Ok(LoginOutcome::Granted(issued_tokens(tokens.into_parts())?))
-            }
-            AuthorizationCallback::Denied(denied) => Ok(LoginOutcome::Denied {
-                code: denied.code().to_owned(),
-            }),
-            _ => Err(IamError::InvalidResponse),
-        }
-    }
-
-    async fn refresh(&self, refresh_token: &str) -> Result<IssuedTokens, IamError> {
-        let refresh_token =
-            OAuthRefreshToken::new(refresh_token).map_err(|_| IamError::InvalidCredential)?;
-        let tokens = self
-            .sdk
-            .oauth()
-            .refresh(refresh_token)
-            .send()
-            .await
-            .map_err(|error| match sdk_error(error) {
-                IamError::Rejected { .. } => IamError::InvalidCredential,
-                other => other,
-            })?;
-        issued_tokens(tokens.into_parts())
-    }
-
-    async fn logout(&self, access_token: &str) -> Result<(), IamError> {
-        let access_token =
-            OAuthAccessToken::new(access_token).map_err(|_| IamError::InvalidCredential)?;
-        self.sdk
-            .logout(access_token)
-            .send()
-            .await
-            .map(|_| ())
-            .map_err(|error| match sdk_error(error) {
-                IamError::Rejected { .. } => IamError::InvalidCredential,
-                other => other,
-            })
-    }
-
-    async fn register_silicon_webhook(
-        &self,
-        token: &str,
-        organization_id: &OrganizationId,
-        silicon_id: &SiliconId,
-        endpoint_url: &Url,
-        idempotency_key: &str,
-    ) -> Result<RegisteredSiliconWebhook, IamError> {
-        let url = self.api_url(&[
-            "organizations",
-            organization_id.as_str(),
-            "silicons",
-            silicon_id.as_str(),
-            "webhook",
-        ])?;
-        let etag = self.current_webhook_etag(token, url.clone()).await?;
-        let mut request = self
-            .http
-            .put(url)
-            .bearer_auth(token)
-            .header(API_VERSION_HEADER, API_VERSION)
-            .header(
-                "Idempotency-Key",
-                iam_idempotency_key(organization_id, silicon_id, idempotency_key),
-            )
-            .json(&SiliconWebhookReplaceWire {
-                url: endpoint_url.as_str(),
-            });
-        if let Some(etag) = etag {
-            request = request.header(header::IF_MATCH, etag);
-        }
-        let response = request.send().await.map_err(transport_error)?;
-        match response.status() {
-            StatusCode::OK => {}
-            StatusCode::UNAUTHORIZED => return Err(IamError::InvalidCredential),
-            StatusCode::FORBIDDEN => return Err(IamError::Forbidden),
-            StatusCode::NOT_FOUND => return Err(IamError::NotFound),
-            StatusCode::TOO_MANY_REQUESTS => return Err(rate_limited(&response)),
-            status @ (StatusCode::CONFLICT
-            | StatusCode::PRECONDITION_FAILED
-            | StatusCode::UNPROCESSABLE_ENTITY
-            | StatusCode::PRECONDITION_REQUIRED) => {
-                return Err(IamError::Rejected {
-                    status: status.as_u16(),
-                });
-            }
-            status => return Err(IamError::UnexpectedStatus(status.as_u16())),
-        }
-        let configured: SiliconWebhookConfiguredWire =
-            bounded_json(response, self.max_response_bytes).await?;
-        let raw = configured.webhook_signing_secret.into_zeroizing();
-        if raw.len() != SILICON_WEBHOOK_SECRET_LENGTH
-            || !raw.starts_with(SILICON_WEBHOOK_SECRET_PREFIX)
-        {
-            return Err(IamError::InvalidResponse);
-        }
-        let signing_secret =
-            SigningSecret::from_zeroizing(raw).map_err(|_| IamError::InvalidResponse)?;
-        Ok(RegisteredSiliconWebhook {
-            signing_secret,
-            secret_version: configured.webhook.secret_version,
-        })
-    }
-
-    /// IAM requires `If-Match` when a webhook already exists and forbids it
-    /// on first creation, so the current representation is read first.
-    async fn current_webhook_etag(
-        &self,
-        token: &str,
-        url: Url,
-    ) -> Result<Option<String>, IamError> {
-        let response = self.bearer_get(token, url).await?;
-        match response.status() {
-            StatusCode::OK => Ok(response
-                .headers()
-                .get(header::ETAG)
-                .and_then(|value| value.to_str().ok())
-                .map(ToOwned::to_owned)),
-            StatusCode::NOT_FOUND => Ok(None),
-            StatusCode::UNAUTHORIZED => Err(IamError::InvalidCredential),
-            StatusCode::FORBIDDEN => Err(IamError::Forbidden),
-            StatusCode::TOO_MANY_REQUESTS => Err(rate_limited(&response)),
-            status => Err(IamError::UnexpectedStatus(status.as_u16())),
-        }
-    }
-
-    async fn bearer_get(&self, token: &str, url: Url) -> Result<Response, IamError> {
-        self.http
-            .get(url)
-            .bearer_auth(token)
-            .header(API_VERSION_HEADER, API_VERSION)
-            .header(header::ACCEPT, "application/json")
-            .send()
-            .await
-            .map_err(transport_error)
-    }
-
-    fn api_url(&self, segments: &[&str]) -> Result<Url, IamError> {
-        let mut url = self.base_url.clone();
-        {
-            let mut path = url
-                .path_segments_mut()
-                .map_err(|()| IamError::InvalidResponse)?;
-            path.pop_if_empty().push("api").push(API_VERSION);
-            for segment in segments {
-                path.push(segment);
-            }
-        }
-        url.set_query(None);
-        url.set_fragment(None);
-        Ok(url)
-    }
+fn issued_tokens(tokens: models::OAuthTokenResponse) -> Result<IssuedTokens, IamError> {
+    let kind = match tokens.actor.type_field {
+        models::ActorRefType::Carbon => ActorKind::Carbon,
+        models::ActorRefType::Silicon => ActorKind::Silicon,
+        _ => return Err(IamError::InvalidResponse),
+    };
+    Ok(IssuedTokens {
+        access_token: Zeroizing::new(tokens.access_token),
+        refresh_token: Zeroizing::new(tokens.refresh_token),
+        expires_in: Duration::from_secs(
+            u64::try_from(tokens.expires_in).map_err(|_| IamError::InvalidResponse)?,
+        ),
+        scopes: tokens.scope.split_whitespace().map(str::to_owned).collect(),
+        actor: ActorRef::try_new(kind, tokens.actor.public_id)
+            .map_err(|_| IamError::InvalidResponse)?,
+        organization_id: tokens
+            .org_id
+            .map(OrganizationId::new)
+            .transpose()
+            .map_err(|_| IamError::InvalidResponse)?,
+    })
 }
 
 fn build_verifier(settings: &IamWebhookSettings) -> Result<WebhookVerifier, IamError> {
-    let secret = WebhookSecret::new(settings.secret.expose_secret())
-        .map_err(|_| IamError::InvalidInput("iam_webhook_secret"))?;
-    let mut keyring = WebhookSecretKeyring::new(settings.version, secret)
+    let secret =
+        WebhookSecret::new(settings.secret.expose_secret()).map_err(IamError::WebhookRejected)?;
+    let version = i64::try_from(settings.version)
         .map_err(|_| IamError::InvalidInput("iam_webhook_secret_version"))?;
-    if let Some((previous, version)) = &settings.previous {
-        let previous = WebhookSecret::new(previous.expose_secret())
-            .map_err(|_| IamError::InvalidInput("iam_webhook_previous_secret"))?;
+    let mut keyring =
+        WebhookSecretKeyring::new(version, secret).map_err(IamError::WebhookRejected)?;
+    if let Some((secret, version)) = &settings.previous {
         keyring
-            .insert(*version, previous)
-            .map_err(|_| IamError::InvalidInput("iam_webhook_previous_secret_version"))?;
+            .insert(
+                i64::try_from(*version)
+                    .map_err(|_| IamError::InvalidInput("iam_webhook_secret_version"))?,
+                WebhookSecret::new(secret.expose_secret()).map_err(IamError::WebhookRejected)?,
+            )
+            .map_err(IamError::WebhookRejected)?;
     }
     Ok(WebhookVerifier::new(keyring))
+}
+
+fn sdk_error(error: silicon_iam_client::Error) -> IamError {
+    use silicon_iam_client::Error;
+    match error {
+        Error::Api(error) => match error.status {
+            401 => IamError::InvalidCredential,
+            403 => IamError::Forbidden,
+            404 => IamError::NotFound,
+            status => IamError::Rejected { status },
+        },
+        Error::RateLimited { retry_after, .. } => IamError::RateLimited { retry_after },
+        Error::Transport(error) => IamError::Transport(anyhow::Error::new(error)),
+        Error::ResponseTooLarge { .. } => IamError::ResponseTooLarge,
+        Error::UnstructuredResponse { status, .. } => IamError::UnexpectedStatus(status),
+        Error::Invalid(_) => IamError::InvalidInput("iam_request"),
+        _ => IamError::InvalidResponse,
+    }
 }
 
 /// A directory ID with an organization suffix is a global Silicon ID; any
 /// other ID is a public Carbon ID. IAM never issues a Silicon ID whose suffix
 /// differs from the organization it was read from.
+fn validate_target(target: &SiliconId, org: &OrganizationId) -> Result<(), IamError> {
+    let Some((handle, organization)) = target.as_str().split_once(':') else {
+        return Err(IamError::InvalidInput("silicon_id"));
+    };
+    if handle.is_empty() || organization.contains(':') {
+        return Err(IamError::InvalidInput("silicon_id"));
+    }
+    if organization != org.as_str() {
+        return Err(IamError::Forbidden);
+    }
+    Ok(())
+}
+
 fn actor_from_directory(id: &str, organization_id: &OrganizationId) -> Result<ActorRef, IamError> {
     match id.rsplit_once(':') {
         Some((handle, suffix)) => {
@@ -886,73 +668,6 @@ fn actor_from_directory(id: &str, organization_id: &OrganizationId) -> Result<Ac
         }
         None => ActorRef::try_new(ActorKind::Carbon, id).map_err(|_| IamError::InvalidResponse),
     }
-}
-
-fn actor_kind_from_sdk(kind: &silicon_iam::ActorKind) -> Option<ActorKind> {
-    match kind {
-        silicon_iam::ActorKind::Carbon => Some(ActorKind::Carbon),
-        silicon_iam::ActorKind::Silicon => Some(ActorKind::Silicon),
-        _ => None,
-    }
-}
-
-fn issued_tokens(parts: OAuthTokenParts) -> Result<IssuedTokens, IamError> {
-    let kind = actor_kind_from_sdk(parts.actor.kind()).ok_or(IamError::InvalidResponse)?;
-    let actor =
-        ActorRef::try_new(kind, parts.actor.public_id()).map_err(|_| IamError::InvalidResponse)?;
-    let organization_id = parts
-        .organization_id
-        .map(OrganizationId::new)
-        .transpose()
-        .map_err(|_| IamError::InvalidResponse)?;
-    Ok(IssuedTokens {
-        access_token: Zeroizing::new(parts.access_token.expose_secret().to_owned()),
-        refresh_token: Zeroizing::new(parts.refresh_token.expose_secret().to_owned()),
-        expires_in: parts.expires_in,
-        scopes: parts.scopes,
-        actor,
-        organization_id,
-    })
-}
-
-fn sdk_error(error: silicon_iam::Error) -> IamError {
-    match error {
-        silicon_iam::Error::Api(api) => match api.status() {
-            StatusCode::TOO_MANY_REQUESTS => IamError::RateLimited {
-                retry_after: api.retry_after().unwrap_or(DEFAULT_RETRY_AFTER),
-            },
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => IamError::InvalidCredential,
-            status if api.is_retryable() => {
-                IamError::Transport(anyhow::anyhow!("IAM returned HTTP {status}"))
-            }
-            status if status.is_client_error() => IamError::Rejected {
-                status: status.as_u16(),
-            },
-            status => IamError::UnexpectedStatus(status.as_u16()),
-        },
-        silicon_iam::Error::Transport(transport) => {
-            IamError::Transport(anyhow::Error::new(transport))
-        }
-        silicon_iam::Error::Handshake(handshake) => {
-            IamError::Handshake(anyhow::Error::new(handshake))
-        }
-        silicon_iam::Error::Configuration(_) => IamError::NotConfigured,
-        _ => IamError::InvalidResponse,
-    }
-}
-
-fn transport_error(error: reqwest::Error) -> IamError {
-    IamError::Transport(anyhow::Error::new(error))
-}
-
-fn rate_limited(response: &Response) -> IamError {
-    let retry_after = response
-        .headers()
-        .get(header::RETRY_AFTER)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .map_or(DEFAULT_RETRY_AFTER, Duration::from_secs);
-    IamError::RateLimited { retry_after }
 }
 
 /// IAM keys idempotent replays on the caller's key. Hook derives a stable
@@ -974,37 +689,6 @@ fn iam_idempotency_key(
         digest.update(part.as_bytes());
     }
     hex::encode(digest.finalize())
-}
-
-async fn bounded_json<T>(response: Response, maximum: usize) -> Result<T, IamError>
-where
-    T: serde::de::DeserializeOwned,
-{
-    let content_type = response
-        .headers()
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .map(str::trim);
-    if !content_type.is_some_and(|value| value.eq_ignore_ascii_case("application/json")) {
-        return Err(IamError::InvalidResponse);
-    }
-    if response
-        .content_length()
-        .is_some_and(|length| length > maximum as u64)
-    {
-        return Err(IamError::ResponseTooLarge);
-    }
-    let mut response = response;
-    let mut body = Zeroizing::new(Vec::<u8>::new());
-    while let Some(chunk) = response.chunk().await.map_err(transport_error)? {
-        let remaining = maximum.saturating_sub(body.len());
-        if chunk.len() > remaining {
-            return Err(IamError::ResponseTooLarge);
-        }
-        body.extend_from_slice(&chunk);
-    }
-    serde_json::from_slice(&body).map_err(|_| IamError::InvalidResponse)
 }
 
 /// Deterministic development credential `local:<carbon|silicon>:<member|admin|owner>:<id>`.
@@ -1067,76 +751,6 @@ fn local_silicon_webhook(
     })
 }
 
-#[derive(Deserialize)]
-struct DirectoryMemberWire {
-    id: String,
-    #[serde(default)]
-    role: Option<DirectoryRoleWire>,
-    #[serde(default)]
-    org: Option<DirectoryOrganizationWire>,
-}
-
-#[derive(Deserialize)]
-struct DirectoryRoleWire {
-    org_role: OrganizationRoleWire,
-}
-
-#[derive(Deserialize)]
-struct DirectoryOrganizationWire {
-    id: String,
-}
-
-#[derive(Clone, Copy, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum OrganizationRoleWire {
-    Owner,
-    Admin,
-    Member,
-}
-
-impl OrganizationRoleWire {
-    const fn into_domain(self) -> OrganizationRole {
-        match self {
-            Self::Owner => OrganizationRole::Owner,
-            Self::Admin => OrganizationRole::Admin,
-            Self::Member => OrganizationRole::Member,
-        }
-    }
-}
-
-#[derive(serde::Serialize)]
-struct SiliconWebhookReplaceWire<'a> {
-    url: &'a str,
-}
-
-#[derive(Deserialize)]
-struct SiliconWebhookConfiguredWire {
-    webhook: SiliconWebhookWire,
-    webhook_signing_secret: SecretWire,
-}
-
-#[derive(Deserialize)]
-struct SiliconWebhookWire {
-    secret_version: u64,
-}
-
-/// Secret-bearing wire field that is wiped when dropped.
-#[derive(Deserialize)]
-#[serde(transparent)]
-struct SecretWire(String);
-
-impl SecretWire {
-    fn into_zeroizing(mut self) -> Zeroizing<String> {
-        Zeroizing::new(std::mem::take(&mut self.0))
-    }
-}
-
-impl Drop for SecretWire {
-    fn drop(&mut self) {
-        self.0.zeroize();
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::time::Duration;
@@ -1153,20 +767,43 @@ mod tests {
     };
 
     use super::{
-        AuthorizationRequest, IamClient, IamError, LoginOutcome, actor_from_directory,
-        iam_idempotency_key,
+        AuthorizationRequest, IamClient, IamError, actor_from_directory, iam_idempotency_key,
     };
     use crate::{
-        config::{IamSettings, IamWebhookSettings, LoginSettings},
+        config::{IamSettings, IamWebhookSettings},
         domain::{ActorKind, OrganizationId, OrganizationRole, SiliconId},
     };
 
-    const APP_ID: &str = "silicon-hook";
+    const APP_ID: &str = "tos>hook";
     const APP_SECRET: &str = "ask_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     const WEBHOOK_SECRET: &str = "whs_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
     const ACCESS_TOKEN: &str = "oat_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
     const SILICON_TOKEN: &str = "sat_DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD";
     const CARBON_TOKEN: &str = "cat_EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE";
+
+    fn silicon_profile() -> serde_json::Value {
+        serde_json::json!({
+            "id": Uuid::now_v7(), "principal_id": Uuid::now_v7(), "membership_id": Uuid::now_v7(),
+            "silicon_id": "cos:tos", "org_id": "tos", "display_name": "COS", "timezone": "UTC",
+            "profile_photo": "https://example.test/cos.png", "job_role": "engineer", "tags": [],
+            "hierarchy_level": 1, "webhook_configured": false, "status": "active", "version": 1,
+            "created_at": "2026-09-02T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z"
+        })
+    }
+
+    fn iam_failure(status: u16) -> ResponseTemplate {
+        ResponseTemplate::new(status).set_body_json(serde_json::json!({
+            "error": {"code": "not_permitted", "message": "Not permitted", "request_id": Uuid::now_v7()}
+        }))
+    }
+
+    fn webhook_record(secret_version: i64, version: i64) -> serde_json::Value {
+        serde_json::json!({
+            "silicon_id": "cos:tos", "url": "https://hook.example.test/silicon/cos:tos/A1B2C3D4",
+            "status": "active", "secret_version": secret_version, "version": version,
+            "created_at": "2026-09-02T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z"
+        })
+    }
 
     async fn iam_server() -> MockServer {
         let server = MockServer::start().await;
@@ -1199,10 +836,6 @@ mod tests {
             max_response_bytes: 65_536,
             allow_insecure_local_http: true,
             local_auth: false,
-            login: Some(LoginSettings {
-                redirect_uri: Url::parse("https://hook.example.test/auth/callback")?,
-                scopes: vec!["profile".to_owned(), "memberships.read".to_owned()],
-            }),
             webhook: Some(IamWebhookSettings {
                 secret: SecretString::from(WEBHOOK_SECRET),
                 version: 3,
@@ -1221,7 +854,6 @@ mod tests {
             max_response_bytes: 1_024,
             allow_insecure_local_http: true,
             local_auth: true,
-            login: None,
             webhook: None,
         })
     }
@@ -1239,7 +871,14 @@ mod tests {
             "audience": APP_ID,
             "issued_at": 1_700_000_000,
             "expires_at": 1_700_001_800,
-            "authorization_epoch": 4
+            "authorization_epoch": 4,
+            "authorization": {
+                "principal_id": Uuid::now_v7(), "actor_type": actor_type, "public_id": "alice",
+                "organization_id": Uuid::now_v7(), "org_id": "tos", "membership_id": Uuid::now_v7(),
+                "membership_version": 1, "authorization_epoch": 4, "audience": APP_ID,
+                "testing_environment_id": null, "scopes": ["roles.read", "memberships.read"],
+                "org_role": "member", "tags": []
+            }
         })
     }
 
@@ -1266,7 +905,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn hook_issued_tokens_are_introspected_then_resolved_through_the_directory()
+    async fn hook_issued_tokens_use_live_authorization_snapshots()
     -> Result<(), Box<dyn std::error::Error>> {
         let server = iam_server().await;
         Mock::given(method("POST"))
@@ -1285,18 +924,18 @@ mod tests {
             ))
             .and(header("silicon-iam-api-version", "v1"))
             .respond_with(ResponseTemplate::new(200).set_body_json(directory("alice", "member")))
-            .expect(1)
+            .expect(0)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
             .and(path("/api/v1/organizations/tos/silicons/cos:tos"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(silicon_profile()))
             .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
             .and(path("/api/v1/organizations/tos/silicons/hidden:tos"))
-            .respond_with(ResponseTemplate::new(404))
+            .respond_with(iam_failure(404))
             .expect(1)
             .mount(&server)
             .await;
@@ -1347,8 +986,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn administrators_skip_per_silicon_visibility_reads()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn administrators_require_a_confirmed_silicon() -> Result<(), Box<dyn std::error::Error>>
+    {
         let server = iam_server().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/organizations/tos/directory/self"))
@@ -1357,17 +996,24 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/api/v1/organizations/tos/silicons/cos:tos"))
-            .respond_with(ResponseTemplate::new(500))
-            .expect(0)
+            .respond_with(ResponseTemplate::new(200).set_body_json(silicon_profile()))
+            .expect(1)
+            .mount(&server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path("/api/v1/organizations/tos/silicons/missing:tos"))
+            .respond_with(iam_failure(404))
+            .expect(1)
             .mount(&server)
             .await;
 
         let client = IamClient::connect(&settings(&server)?).await?;
         let context = client
-            .authorize(&request(CARBON_TOKEN, &["cos:tos"])?)
+            .authorize(&request(CARBON_TOKEN, &["cos:tos", "missing:tos"])?)
             .await?;
         assert_eq!(context.organization_role(), OrganizationRole::Admin);
         assert!(context.has_silicon_visibility(&SiliconId::new("cos:tos")?));
+        assert!(!context.has_silicon_visibility(&SiliconId::new("missing:tos")?));
         Ok(())
     }
 
@@ -1383,7 +1029,7 @@ mod tests {
             .await;
         Mock::given(method("GET"))
             .and(path("/api/v1/organizations/tos/directory/self"))
-            .respond_with(ResponseTemplate::new(403))
+            .respond_with(iam_failure(403))
             .mount(&server)
             .await;
 
@@ -1394,7 +1040,7 @@ mod tests {
         ));
         assert!(matches!(
             client.authorize(&request(SILICON_TOKEN, &[])?).await,
-            Err(IamError::InvalidCredential)
+            Err(IamError::Forbidden)
         ));
         Ok(())
     }
@@ -1437,27 +1083,24 @@ mod tests {
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header("etag", "\"7\"")
-                    .set_body_json(serde_json::json!({"secret_version": 2, "version": 7})),
+                    .set_body_json(webhook_record(2, 7)),
             )
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
             .and(path("/api/v1/organizations/tos/silicons/cos:tos/webhook"))
             .and(header("if-match", "\"7\""))
-            .and(header("idempotency-key", expected_key.as_str()))
+            .and(header(
+                "idempotency-key",
+                super::mutation(&expected_key)?.key().as_str(),
+            ))
             .and(header(
                 "authorization",
                 format!("Bearer {SILICON_TOKEN}").as_str(),
             ))
             .and(body_json(serde_json::json!({"url": endpoint.as_str()})))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "webhook": {
-                    "silicon_id": "cos:tos",
-                    "url": endpoint.as_str(),
-                    "status": "active",
-                    "secret_version": 3,
-                    "version": 8
-                },
+                "webhook": webhook_record(3, 8),
                 "webhook_signing_secret": format!("swhs_{}", "F".repeat(43)),
                 "secret_replay_expires_at": "2026-09-02T10:10:00Z"
             })))
@@ -1514,7 +1157,7 @@ mod tests {
 
         let verified = client.verify_application_webhook(&headers, body.as_bytes())?;
         assert_eq!(verified.event_id(), event_id);
-        assert_eq!(verified.event().event_type().as_str(), "session.logout.v1");
+        assert_eq!(verified.event().event_type.as_str(), "session.logout.v1");
 
         headers.insert("x-silicon-iam-key-version", HeaderValue::from_static("2"));
         assert!(matches!(
@@ -1525,47 +1168,31 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn login_begins_with_the_registered_redirect_and_denials_are_reported()
-    -> Result<(), Box<dyn std::error::Error>> {
+    async fn login_exchanges_only_a_short_lived_token() -> Result<(), Box<dyn std::error::Error>> {
         let server = iam_server().await;
+        Mock::given(method("POST"))
+            .and(path("/api/v1/app-auth/tokens"))
+            .and(header(
+                "idempotency-key",
+                super::mutation("login-contract-0001")?.key().as_str(),
+            ))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "access_token": ACCESS_TOKEN,
+                "refresh_token": "ort_example",
+                "token_type": "Bearer", "expires_in": 1800,
+                "scope": "profile roles.read memberships.read", "org_id": "tos",
+                "actor": {"principal_id": Uuid::now_v7(), "type": "carbon", "public_id": "alice"}
+            })))
+            .expect(1)
+            .mount(&server)
+            .await;
         let client = IamClient::connect(&settings(&server)?).await?;
-        let start = client.begin_login(Some(&OrganizationId::new("tos")?))?;
-        let url = Url::parse(&start.authorization_url)?;
-        assert!(url.as_str().starts_with(&server.uri()));
-        let query = url.query_pairs().collect::<Vec<_>>();
-        assert!(
-            query
-                .iter()
-                .any(|(key, value)| key == "client_id" && value == APP_ID)
-        );
-        assert!(
-            query
-                .iter()
-                .any(|(key, value)| key == "org_id" && value == "tos")
-        );
-        let state = query
-            .iter()
-            .find(|(key, _)| key == "state")
-            .map(|(_, value)| value.to_string())
-            .ok_or("authorization URL carries state")?;
-
-        let denied = client
-            .complete_login(
-                &start.continuation,
-                &format!(
-                    "https://hook.example.test/auth/callback?error=access_denied&state={state}"
-                ),
-            )
-            .await?;
-        assert!(matches!(denied, LoginOutcome::Denied { code } if code == "access_denied"));
+        let tokens = client.login("slt_example", "login-contract-0001").await?;
+        assert_eq!(tokens.actor.id().as_str(), "alice");
+        assert_eq!(tokens.access_token.as_str(), ACCESS_TOKEN);
         assert!(matches!(
-            client
-                .complete_login(
-                    "not-a-continuation",
-                    "https://hook.example.test/auth/callback"
-                )
-                .await,
-            Err(IamError::InvalidInput("continuation"))
+            client.login("invalid\nvalue", "login-contract-0002").await,
+            Err(IamError::InvalidInput("slt"))
         ));
         Ok(())
     }
@@ -1606,7 +1233,7 @@ mod tests {
         );
         assert_eq!(first.signing_secret.as_str().len(), 48);
         assert!(matches!(
-            client.begin_login(None),
+            client.login("slt_example", "local-login-0001").await,
             Err(IamError::NotConfigured)
         ));
         assert!(matches!(

@@ -34,7 +34,7 @@ use silicon_hook::{
     },
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
-use testcontainers::{ContainerAsync, ImageExt as _, runners::AsyncRunner as _};
+use testcontainers::{ContainerAsync, ImageExt as _, core::ExecCommand, runners::AsyncRunner as _};
 use testcontainers_modules::postgres::Postgres;
 use time::{OffsetDateTime, macros::datetime};
 use url::Url;
@@ -76,6 +76,83 @@ impl TestDatabase {
         let database = Self::start_unmigrated().await?;
         migrate(database.store.pool()).await?;
         Ok(database)
+    }
+
+    /// Migrates as the owner, creates the two restricted runtime logins, and
+    /// applies the real grant manifest through `psql` inside the container.
+    /// Returns the owner store plus stores connected as the API and worker
+    /// roles, so tests exercise the exact privileges production runs with.
+    async fn start_with_runtime_roles() -> Result<(Self, PostgresStore, PostgresStore)> {
+        let manifest = std::fs::read("deploy/postgres/grant-runtime.sql")
+            .context("read the runtime grant manifest")?;
+        let container = Postgres::default()
+            .with_tag("16-alpine")
+            .with_copy_to("/opt/grant-runtime.sql", manifest)
+            .start()
+            .await
+            .context("start PostgreSQL 16 test container")?;
+        let host = container.get_host().await?;
+        let port = container.get_host_port_ipv4(POSTGRES_PORT).await?;
+        let owner_url = format!("postgres://postgres:postgres@{host}:{port}/postgres");
+        let owner = PgPoolOptions::new()
+            .max_connections(12)
+            .connect(&owner_url)
+            .await
+            .context("connect to PostgreSQL test container")?;
+        migrate(&owner).await?;
+        sqlx::raw_sql(
+            "CREATE ROLE silicon_hook_api LOGIN PASSWORD 'api-secret' \
+                 NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION; \
+             CREATE ROLE silicon_hook_worker LOGIN PASSWORD 'worker-secret' \
+                 NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION;",
+        )
+        .execute(&owner)
+        .await?;
+        let mut grants = container
+            .exec(ExecCommand::new([
+                "psql",
+                "--username=postgres",
+                "--dbname=postgres",
+                "--set=api_role=silicon_hook_api",
+                "--set=worker_role=silicon_hook_worker",
+                "--file=/opt/grant-runtime.sql",
+            ]))
+            .await
+            .context("apply the runtime grant manifest")?;
+        // The exit code is only known once the process has finished, which
+        // draining its output guarantees.
+        let stdout = grants.stdout_to_vec().await?;
+        let stderr = grants.stderr_to_vec().await?;
+        let exit_code = grants.exit_code().await?;
+        if exit_code != Some(0) {
+            bail!(
+                "grant manifest failed with {exit_code:?}: {}{}",
+                String::from_utf8_lossy(&stdout),
+                String::from_utf8_lossy(&stderr)
+            );
+        }
+        let api = PgPoolOptions::new()
+            .max_connections(8)
+            .connect(&format!(
+                "postgres://silicon_hook_api:api-secret@{host}:{port}/postgres"
+            ))
+            .await
+            .context("connect as the API role")?;
+        let worker = PgPoolOptions::new()
+            .max_connections(4)
+            .connect(&format!(
+                "postgres://silicon_hook_worker:worker-secret@{host}:{port}/postgres"
+            ))
+            .await
+            .context("connect as the worker role")?;
+        Ok((
+            Self {
+                store: PostgresStore::new(owner),
+                _container: container,
+            },
+            PostgresStore::new(api),
+            PostgresStore::new(worker),
+        ))
     }
 }
 
@@ -283,7 +360,21 @@ async fn migrations_apply_and_readiness_proves_the_schema_contract() -> Result<(
     let applied = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _sqlx_migrations")
         .fetch_one(pool)
         .await?;
-    assert_eq!(applied, 1);
+    assert_eq!(applied, 5);
+
+    let mut absent_environment = pool.begin().await?;
+    sqlx::query("SELECT set_config('hook.environment_id', $1, true)")
+        .bind(uuid::Uuid::now_v7().to_string())
+        .execute(&mut *absent_environment)
+        .await?;
+    let available: bool = sqlx::query_scalar("SELECT hook_private.environment_is_available()")
+        .fetch_one(&mut *absent_environment)
+        .await?;
+    assert!(
+        !available,
+        "an absent environment must return false, never NULL"
+    );
+    absent_environment.rollback().await?;
 
     sqlx::query("ALTER TABLE hook.hooks DROP CONSTRAINT hooks_time_zone_format")
         .execute(pool)
@@ -419,6 +510,20 @@ async fn assert_deliveries_are_ordered_and_acknowledged(
     assert_eq!(backlog.items.len(), 2);
     assert_eq!(backlog.cursor.acknowledged_through, 0);
     assert_eq!(backlog.latest_sequence, 2);
+
+    let future_ack = application
+        .acknowledge_deliveries(AcknowledgeDeliveriesCommand {
+            authorization: identity.authorization(),
+            silicon_id: identity.silicon_id.clone(),
+            through_sequence: 9999,
+        })
+        .await;
+    assert!(matches!(
+        future_ack,
+        Err(ApplicationError::Validation {
+            field: "through_sequence"
+        })
+    ));
 
     let cursor = application
         .acknowledge_deliveries(AcknowledgeDeliveriesCommand {
@@ -1210,5 +1315,233 @@ async fn concurrent_disable_wins_before_event_acceptance_commits() -> Result<()>
         .await?
         .context("hook disappeared")?;
     assert_eq!(hook.status(), HookStatus::Disabled);
+    Ok(())
+}
+
+/// The API and worker roles hold exactly the grants in the reviewed manifest,
+/// so every statement each process runs must work under those grants. The
+/// owner-connected tests cannot see a privilege defect; this one can.
+#[tokio::test]
+async fn runtime_roles_operate_within_their_grants() -> Result<()> {
+    let (database, api_store, worker_store) = TestDatabase::start_with_runtime_roles().await?;
+    api_store.ready_for(RuntimeDatabaseRole::Api).await?;
+    worker_store.ready_for(RuntimeDatabaseRole::Worker).await?;
+
+    let identity = FixtureIdentity::new()?;
+    let application = application(api_store.clone(), time::OffsetDateTime::now_utc())?;
+    let (signed, open) = exercise_api_role(&application, &identity).await?;
+    age_records(database.store.pool(), &identity, &signed, &open).await?;
+
+    let result = worker_store.run_maintenance_pass(100).await?;
+    assert_eq!(result.events_purged, 1);
+    assert_eq!(result.blocked_requests_purged, 1);
+    assert_eq!(result.hooks_purged, 1);
+    assert_eq!(result.idempotency_rows_purged, 1);
+    assert_eq!(result.ip_blocks_purged, 1);
+    Ok(())
+}
+
+/// Runs every mutating and reading use case as the API role.
+async fn exercise_api_role(
+    application: &HookApplication,
+    identity: &FixtureIdentity,
+) -> Result<(HookWithSecret, HookWithSecret)> {
+    let signed = create_hook(
+        application,
+        identity,
+        "GitHub",
+        SigningPatch::default(),
+        "roles-create-0001",
+    )
+    .await?;
+    let open = create_hook(
+        application,
+        identity,
+        "Open",
+        SigningPatch {
+            required: Some(false),
+            ..SigningPatch::default()
+        },
+        "roles-create-0002",
+    )
+    .await?;
+    exercise_ingress_and_delivery(application, identity, &signed, &open).await?;
+    application
+        .rotate_hook_secret(HookMutationCommand {
+            context: identity.context("roles-rotate-secret"),
+            silicon_id: identity.silicon_id.clone(),
+            hook_id: signed.hook.id(),
+        })
+        .await?;
+    application
+        .rotate_hook_endpoint(HookMutationCommand {
+            context: identity.context("roles-rotate-endpoint"),
+            silicon_id: identity.silicon_id.clone(),
+            hook_id: signed.hook.id(),
+        })
+        .await?;
+    application
+        .delete_hook(DeleteHookCommand {
+            authorization: identity.authorization(),
+            silicon_id: identity.silicon_id.clone(),
+            hook_id: open.hook.id(),
+            request_id: None,
+        })
+        .await?;
+    application
+        .restore_hook(HookMutationCommand {
+            context: identity.context("roles-restore"),
+            silicon_id: identity.silicon_id.clone(),
+            hook_id: open.hook.id(),
+        })
+        .await?;
+    let iam = application
+        .prepare_iam_hook(ConnectIamHookCommand {
+            context: identity.context("roles-iam-connect"),
+            silicon_id: identity.silicon_id.clone(),
+        })
+        .await?;
+    application
+        .bind_iam_hook_secret(BindIamHookSecretCommand {
+            context: identity.context("roles-iam-bind"),
+            silicon_id: identity.silicon_id.clone(),
+            hook_id: iam.id(),
+            signing_secret: SigningSecret::from_text(format!("swhs_{}", "G".repeat(43)))?,
+        })
+        .await?;
+
+    Ok((signed, open))
+}
+
+/// Receives one accepted and one withheld request, then reads history and
+/// consumes the delivery stream, all as the API role.
+async fn exercise_ingress_and_delivery(
+    application: &HookApplication,
+    identity: &FixtureIdentity,
+    signed: &HookWithSecret,
+    open: &HookWithSecret,
+) -> Result<()> {
+    let accepted = receive(
+        application,
+        identity,
+        open.hook.endpoint_key(),
+        vec![],
+        b"{\"event\":\"open\"}",
+        PROVIDER_IP,
+    )
+    .await?;
+    assert!(matches!(accepted, ReceiveOutcome::Accepted(_)));
+    let withheld = receive(
+        application,
+        identity,
+        signed.hook.endpoint_key(),
+        vec![],
+        b"{\"event\":\"unsigned\"}",
+        PROVIDER_IP,
+    )
+    .await?;
+    assert!(matches!(withheld, ReceiveOutcome::Blocked(_)));
+
+    let history = ListHistoryCommand {
+        authorization: identity.authorization(),
+        silicon_id: identity.silicon_id.clone(),
+        hook_id: None,
+        limit: 10,
+        cursor: None,
+    };
+    assert_eq!(
+        application.list_events(history.clone()).await?.items.len(),
+        1
+    );
+    assert_eq!(
+        application
+            .list_blocked_requests(history)
+            .await?
+            .items
+            .len(),
+        1
+    );
+    let backlog = application
+        .pull_deliveries(PullDeliveriesCommand {
+            authorization: identity.authorization(),
+            silicon_id: identity.silicon_id.clone(),
+            after_sequence: None,
+            limit: 10,
+        })
+        .await?;
+    assert_eq!(backlog.items.len(), 1);
+    application
+        .acknowledge_deliveries(AcknowledgeDeliveriesCommand {
+            authorization: identity.authorization(),
+            silicon_id: identity.silicon_id.clone(),
+            through_sequence: 1,
+        })
+        .await?;
+    Ok(())
+}
+
+/// Ages one record of every retained kind as the owner so the worker has
+/// something to purge from each table.
+async fn age_records(
+    pool: &PgPool,
+    identity: &FixtureIdentity,
+    signed: &HookWithSecret,
+    open: &HookWithSecret,
+) -> Result<()> {
+    sqlx::query(
+        "INSERT INTO hook.events (id, hook_id, org_id, silicon_id, provider, summary, \
+         delivery_sequence, method, url, path, query_string, headers, body, remote_ip, \
+         received_at, expires_at) \
+         VALUES (gen_random_uuid(), $1, $2, $3, 'GitHub', 'summary', 99, 'POST', $4, \
+         '/silicon/x/A', '', '[]'::jsonb, ''::bytea, '203.0.113.10'::inet, \
+         now() - INTERVAL '15 days', now() - INTERVAL '1 day')",
+    )
+    .bind(signed.hook.id().as_uuid())
+    .bind(identity.organization_id.as_str())
+    .bind(identity.silicon_id.as_str())
+    .bind(format!("{PUBLIC_BASE_URL}silicon/x/A"))
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO hook.blocked_requests (id, hook_id, org_id, silicon_id, provider, \
+         reason_code, reason_detail, method, url, path, query_string, headers, body, \
+         remote_ip, received_at, expires_at) \
+         VALUES (gen_random_uuid(), $1, $2, $3, 'GitHub', 'signature_missing', 'missing', \
+         'POST', $4, '/silicon/x/A', '', '[]'::jsonb, ''::bytea, '203.0.113.10'::inet, \
+         now() - INTERVAL '15 days', now() - INTERVAL '1 day')",
+    )
+    .bind(signed.hook.id().as_uuid())
+    .bind(identity.organization_id.as_str())
+    .bind(identity.silicon_id.as_str())
+    .bind(format!("{PUBLIC_BASE_URL}silicon/x/A"))
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO hook_private.ip_blocks (hook_id, remote_ip, strikes, blocked_until, \
+         first_seen_at, updated_at) VALUES ($1, '198.51.100.99'::inet, 2, NULL, \
+         clock_timestamp() - INTERVAL '40 days', clock_timestamp() - INTERVAL '40 days')",
+    )
+    .bind(signed.hook.id().as_uuid())
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO hook_private.management_idempotency (operation, actor_kind, actor_id, \
+         org_id, target_id, idempotency_key, request_digest, created_at, expires_at) \
+         VALUES ('hook.create', 'silicon', $1, $2, $1, 'expired-key-0001', \
+         decode(repeat('00', 32), 'hex'), now() - INTERVAL '2 days', now() - INTERVAL '1 day')",
+    )
+    .bind(identity.silicon_id.as_str())
+    .bind(identity.organization_id.as_str())
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "UPDATE hook.hooks SET created_at = clock_timestamp() - INTERVAL '50 days', \
+         disabled_at = NULL, deleted_at = clock_timestamp() - INTERVAL '46 days', \
+         updated_at = clock_timestamp() WHERE id = $1",
+    )
+    .bind(open.hook.id().as_uuid())
+    .execute(pool)
+    .await?;
+
     Ok(())
 }

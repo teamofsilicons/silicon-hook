@@ -1,0 +1,14 @@
+{
+  "commands": [
+    "set -eu",
+    "cloud-init status --wait >/dev/null",
+    "cd /opt/silicon-hook",
+    "umask 077",
+    "aws s3 cp s3://silicon-hook-standalone-artifacts-lxpfsbc0jpuk/releases/initial.tar.gz release.tar.gz --only-show-errors --region us-east-1",
+    "tar -xzf release.tar.gz",
+    "aws s3 cp s3://silicon-hook-standalone-artifacts-lxpfsbc0jpuk/releases/install.py install.py --only-show-errors --region us-east-1",
+    "docker load -i images.tar",
+    "HOOK_BACKUP_BUCKET=silicon-hook-standalone-artifacts-lxpfsbc0jpuk python3 install.py"
+  ],
+  "executionTimeout": ["1200"]
+}

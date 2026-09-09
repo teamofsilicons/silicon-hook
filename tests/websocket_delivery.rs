@@ -88,7 +88,6 @@ impl Harness {
             max_response_bytes: 1_024,
             allow_insecure_local_http: true,
             local_auth: true,
-            login: None,
             webhook: None,
         })
         .await?;
@@ -117,6 +116,7 @@ impl Harness {
         };
         let app = router(
             ApiDependencies {
+                environments: None,
                 application,
                 iam,
                 trusted_proxy_hops: 0,
@@ -294,6 +294,17 @@ async fn events_are_delivered_live_acknowledged_and_replayed_on_reconnect() -> R
         .context("events carry a summary line")?;
     assert!(summary.starts_with("GitHub triggered at "));
     assert!(summary.ends_with(" UTC"));
+
+    socket
+        .send(Message::Text(
+            json!({"type": "ack", "silicon_id": SILICON_ID, "through_sequence": 9999})
+                .to_string()
+                .into(),
+        ))
+        .await?;
+    let rejected = expect_type(&mut socket, "error").await?;
+    assert_eq!(rejected["code"], "invalid_ack");
+    assert_eq!(rejected["recoverable"], true);
 
     socket
         .send(Message::Text(

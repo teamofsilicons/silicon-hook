@@ -14,9 +14,12 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "hook_private.ip_blocks",
     "hook_private.management_idempotency",
     "hook_private.retired_endpoint_keys",
+    "hook_control.environments",
+    "hook_control.endpoint_routes",
+    "hook_control.mutation_results",
 ];
 
-const REQUIRED_SCHEMAS: &[&str] = &["hook|USAGE", "hook_private|USAGE"];
+const REQUIRED_SCHEMAS: &[&str] = &["hook|USAGE", "hook_private|USAGE", "hook_control|USAGE"];
 
 const API_TABLE_PRIVILEGES: &[&str] = &[
     "public._sqlx_migrations|SELECT",
@@ -43,6 +46,13 @@ const API_TABLE_PRIVILEGES: &[&str] = &[
     "hook_private.management_idempotency|UPDATE",
     "hook_private.management_idempotency|DELETE",
     "hook_private.audit_log|INSERT",
+    "hook_control.environments|SELECT",
+    "hook_control.environments|INSERT",
+    "hook_control.environments|UPDATE",
+    "hook_control.endpoint_routes|SELECT",
+    "hook_control.mutation_results|SELECT",
+    "hook_control.mutation_results|INSERT",
+    "hook_control.mutation_results|UPDATE",
 ];
 
 const WORKER_TABLE_PRIVILEGES: &[&str] = &[
@@ -57,6 +67,12 @@ const WORKER_TABLE_PRIVILEGES: &[&str] = &[
     "hook_private.ip_blocks|DELETE",
     "hook_private.management_idempotency|SELECT",
     "hook_private.management_idempotency|DELETE",
+    "hook_control.environments|SELECT",
+    "hook_control.environments|UPDATE",
+    "hook_control.environments|DELETE",
+    "hook_control.endpoint_routes|SELECT",
+    "hook_control.mutation_results|SELECT",
+    "hook_control.mutation_results|DELETE",
 ];
 
 /// Runtime process whose exact PostgreSQL grants must be available.
@@ -153,9 +169,25 @@ impl PostgresStore {
             MISSING_TABLE_PRIVILEGES_SQL,
         )
         .await?;
+        ensure_privileges(
+            &self.pool,
+            "function",
+            &[
+                "hook_private.environment_id()|EXECUTE",
+                "hook_private.environment_is_available()|EXECUTE",
+                "hook_control.clean_environment(uuid)|EXECUTE",
+            ],
+            MISSING_FUNCTION_PRIVILEGES_SQL,
+        )
+        .await?;
         Ok(())
     }
 }
+
+const MISSING_FUNCTION_PRIVILEGES_SQL: &str = "
+    WITH required(descriptor) AS (SELECT unnest($1::text[]))
+    SELECT descriptor FROM required WHERE NOT has_function_privilege(current_user, split_part(descriptor, '|', 1), split_part(descriptor, '|', 2)) ORDER BY descriptor
+";
 
 const MISSING_SCHEMA_PRIVILEGES_SQL: &str = "
     WITH required(descriptor) AS (SELECT unnest($1::text[]))

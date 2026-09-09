@@ -233,6 +233,20 @@ fn presented_candidates(
     if value.is_null() {
         return Err(RejectionReason::SignatureMissing);
     }
+    if config.signature_encoding == SignatureEncoding::Raw {
+        let bytes = value
+            .into_bytes()
+            .map_err(|_| RejectionReason::SignatureNotText)?;
+        if bytes.len() > MAX_PRESENTED_SIGNATURE_BYTES {
+            return Err(RejectionReason::SignatureTooLarge);
+        }
+        if bytes.is_empty() {
+            return Err(RejectionReason::SignatureMissing);
+        }
+        // Raw signatures may contain NUL, invalid UTF-8, whitespace, commas
+        // and equals signs. None are delimiters or removable labels here.
+        return Ok(vec![bytes]);
+    }
     let presented = value
         .into_text()
         .map_err(|_| RejectionReason::SignatureNotText)?;
@@ -389,7 +403,7 @@ mod tests {
 
     fn request(
         headers: &[(&str, &str)],
-        body: &'static [u8],
+        body: &[u8],
     ) -> Result<CapturedRequest, Box<dyn std::error::Error>> {
         Ok(CapturedRequest::new(CapturedRequestParts {
             method: "POST".to_owned(),
@@ -398,7 +412,7 @@ mod tests {
                 .iter()
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
                 .collect(),
-            body: Bytes::from_static(body),
+            body: Bytes::copy_from_slice(body),
             remote_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),
             received_at: datetime!(2026-09-02 10:00 UTC),
         })?)
@@ -409,6 +423,32 @@ mod tests {
             .unwrap_or_else(|_| unreachable!("HMAC accepts any key length"));
         mac.update(payload);
         mac.finalize().into_bytes().to_vec()
+    }
+
+    #[test]
+    fn raw_signatures_preserve_binary_bytes_and_trailing_delimiters()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let config = SignatureConfig {
+            algorithm: SignatureAlgorithm::Sha256,
+            payload: Expression::parse(r#""abc""#)?,
+            signature: Expression::parse("request.raw_body_bytes")?,
+            signature_encoding: SignatureEncoding::Raw,
+            ..SignatureConfig::default()
+        };
+        let material = config.material(Some("unused"))?;
+        // Published SHA-256("abc") vector, including NUL and non-UTF-8 bytes.
+        let mut digest =
+            hex::decode("ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")?;
+        assert_eq!(
+            verify(&config, &request(&[], &digest)?, HOOK, &material),
+            VerificationOutcome::Verified
+        );
+        digest.extend_from_slice(b" ,=");
+        assert_eq!(
+            verify(&config, &request(&[], &digest)?, HOOK, &material),
+            VerificationOutcome::Rejected(RejectionReason::SignatureMismatch)
+        );
+        Ok(())
     }
 
     #[test]

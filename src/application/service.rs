@@ -26,6 +26,7 @@ pub struct HookApplication {
     pub(super) cursor_codec: Arc<CursorCodec>,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) public_base_url: Url,
+    pub(super) environment: Option<(uuid::Uuid, i64)>,
 }
 
 impl std::fmt::Debug for HookApplication {
@@ -78,7 +79,39 @@ impl HookApplication {
             cursor_codec,
             clock,
             public_base_url,
+            environment: None,
         }
+    }
+
+    /// Binds this application clone to an isolated test pool and generation.
+    #[must_use]
+    pub fn for_test_environment(
+        &self,
+        store: PostgresStore,
+        id: uuid::Uuid,
+        generation: i64,
+    ) -> Self {
+        let mut scoped = self.clone();
+        scoped.store = store;
+        scoped.environment = Some((id, generation));
+        scoped
+    }
+
+    /// Returns the immutable test selector for request activity accounting.
+    #[must_use]
+    pub const fn environment_identity(&self) -> Option<(uuid::Uuid, i64)> {
+        self.environment
+    }
+
+    /// Whether the environment underlying a retained connection is still valid.
+    ///
+    /// # Errors
+    /// Returns database failures instead of allowing stale connections to continue.
+    pub async fn environment_is_available(&self) -> Result<bool, ApplicationError> {
+        sqlx::query_scalar("SELECT hook_private.environment_is_available()")
+            .fetch_one(self.store.pool())
+            .await
+            .map_err(ApplicationError::unavailable)
     }
 
     /// Exposes the store for readiness without leaking it into handlers.
@@ -98,7 +131,11 @@ impl HookApplication {
         silicon_id: &SiliconId,
         endpoint_key: &EndpointKey,
     ) -> Result<Url, ApplicationError> {
-        endpoint_url(&self.public_base_url, silicon_id, endpoint_key)
+        let mut url = endpoint_url(&self.public_base_url, silicon_id, endpoint_key)?;
+        if self.environment.is_some() {
+            url.set_path(&format!("/test{}", url.path()));
+        }
+        Ok(url)
     }
 }
 

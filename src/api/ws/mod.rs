@@ -10,7 +10,8 @@ mod protocol;
 mod session;
 
 use axum::{
-    extract::{RawQuery, State, ws::WebSocketUpgrade},
+    Extension,
+    extract::{RawQuery, ws::WebSocketUpgrade},
     http::HeaderMap,
     response::Response,
 };
@@ -26,7 +27,7 @@ use super::{
 use crate::{domain::SiliconId, error::AppError};
 
 pub(super) async fn upgrade(
-    State(state): State<ApiState>,
+    Extension(state): Extension<ApiState>,
     headers: HeaderMap,
     RawQuery(query): RawQuery,
     upgrade: WebSocketUpgrade,
@@ -35,6 +36,7 @@ pub(super) async fn upgrade(
         query.as_deref().unwrap_or_default(),
         state.realtime.max_silicons_per_connection.get(),
     )?;
+    let authorization_epoch = state.wakeups.authorization_epoch();
     let authorization = authorize_management(&state, &headers, &silicon_ids).await?;
     let streams = silicon_ids
         .iter()
@@ -46,13 +48,22 @@ pub(super) async fn upgrade(
         })
         .collect::<Result<Vec<_>, _>>()?;
 
+    let authority = session::SessionAuthority {
+        epoch: authorization_epoch,
+        iam: state.iam.clone(),
+        request: crate::infrastructure::iam::AuthorizationRequest {
+            token: super::extractors::bearer_token(&headers)?,
+            org_id: super::extractors::organization_id(&headers)?,
+            targets: silicon_ids,
+        },
+    };
     let application = state.application.clone();
     let wakeups = state.wakeups.clone();
     let settings = state.realtime;
     Ok(upgrade
         .max_message_size(64 * 1024)
         .on_upgrade(move |socket| {
-            session::serve_socket(socket, application, wakeups, settings, streams)
+            session::serve_socket(socket, application, wakeups, settings, streams, authority)
         }))
 }
 

@@ -29,7 +29,9 @@ use crate::config::DatabaseSettings;
 use crate::domain::ActorKind;
 
 pub use error::{Result, StoreError};
-pub use listener::{DELIVERY_CHANNEL, DeliveryWakeups, spawn_delivery_listener};
+pub use listener::{
+    AUTHORIZATION_CHANNEL, DELIVERY_CHANNEL, DeliveryWakeups, spawn_delivery_listener,
+};
 pub use readiness::RuntimeDatabaseRole;
 pub use types::{
     AcceptEvent, AuditAction, AuditContext, BatchHookActivation, CreateHook, CreateHookOutcome,
@@ -126,6 +128,13 @@ pub fn connect_options(
 ) -> anyhow::Result<PgConnectOptions> {
     Ok(PgConnectOptions::from_str(settings.url.expose_secret())?
         .application_name(application_name)
+        .options([
+            ("timezone", "UTC".to_owned()),
+            (
+                "statement_timeout",
+                settings.statement_timeout.as_millis().to_string(),
+            ),
+        ])
         .disable_statement_logging())
 }
 
