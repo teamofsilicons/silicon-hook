@@ -1946,8 +1946,9 @@ components:
       description: 'Every member is optional. Defaults are the Standard Webhooks convention:
         required, HMAC-SHA256, concat(request.headers["webhook-id"], ".", request.headers["webhook-timestamp"],
         ".", request.raw_body), request.headers["webhook-signature"], base64, utf8.
-        A supplied secret is stored as given; otherwise a `v1.`-prefixed secret is
-        generated for symmetric algorithms.'
+        BYOS secrets are stored verbatim on creation and replace the current secret on
+        update. Omitting secret generates one on creation and keeps the current
+        secret on update. Generated and rotated secrets respect secret_encoding.'
       properties:
         required:
           type: boolean
@@ -1970,8 +1971,11 @@ components:
           type: string
           minLength: 1
           maxLength: 4096
-          description: Provider-issued secret text; never echoed after the creation
-            response.
+          writeOnly: true
+          description: BYOS secret text (1-4096 UTF-8 bytes, no control characters).
+            Set at creation or replace after registration. Must decode to nonempty
+            key bytes with secret_encoding. Not accepted for asymmetric algorithms.
+            Never echoed after the creation response.
     HookBase:
       type: object
       required:

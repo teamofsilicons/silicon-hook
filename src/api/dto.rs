@@ -26,7 +26,7 @@ use crate::{
 ///
 /// Every field is optional; omitted fields keep the Standard Webhooks defaults
 /// on creation or the current values on update.
-#[derive(Debug, Default, Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(super) struct SignatureRequest {
     #[serde(default)]
@@ -47,6 +47,17 @@ pub(super) struct SignatureRequest {
     pub(super) public_key: Option<Option<String>>,
     #[serde(default)]
     pub(super) secret: Option<String>,
+}
+
+impl fmt::Debug for SignatureRequest {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("SignatureRequest")
+            .field("required", &self.required)
+            .field("algorithm", &self.algorithm)
+            .field("secret", &self.secret.as_ref().map(|_| "[REDACTED]"))
+            .finish_non_exhaustive()
+    }
 }
 
 impl SignatureRequest {
@@ -540,6 +551,24 @@ mod tests {
             ..SignatureRequest::default()
         };
         assert!(valid.into_patch().is_ok());
+    }
+
+    #[test]
+    fn byos_requests_preserve_secret_text_and_redact_debug()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let request: UpdateHookRequest = serde_json::from_str(
+            r#"{"signature":{"secret":" provider-secret ","secret_encoding":"utf8"}}"#,
+        )?;
+        assert!(!format!("{request:?}").contains("provider-secret"));
+        let patch = request.signature.ok_or("missing signature")?.into_patch()?;
+        assert_eq!(
+            patch
+                .secret
+                .as_ref()
+                .map(crate::domain::SigningSecret::as_str),
+            Some(" provider-secret ")
+        );
+        Ok(())
     }
 }
 

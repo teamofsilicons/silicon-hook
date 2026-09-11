@@ -3,6 +3,10 @@
 
 use std::collections::BTreeMap;
 
+use base64::{
+    Engine as _,
+    engine::general_purpose::{STANDARD, URL_SAFE_NO_PAD},
+};
 use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
@@ -20,7 +24,9 @@ use crate::{
         Action, ActorRef, AuthorizationContext, EndpointKey, Hook, HookDescription, HookId,
         HookName, HookStatus, HookTimeZone, HookUpdate, NewHook, OrganizationId, SigningPolicy,
         SigningSecret, SiliconId,
-        signature::{Expression, SignatureAlgorithm, SignatureConfig, SignatureEncoding},
+        signature::{
+            Expression, SecretEncoding, SignatureAlgorithm, SignatureConfig, SignatureEncoding,
+        },
     },
     infrastructure::postgres::{
         AuditContext, BatchHookActivation, CreateHook, CreateHookOutcome, HookMutation,
@@ -169,6 +175,9 @@ impl HookApplication {
             authorize_action(authorization, Action::UpdateHook, &command.silicon_id)?;
         }
 
+        let signing = signing
+            .map(|signing| self.signing_policy(existing.id(), signing, existing.signing()))
+            .transpose()?;
         let mut current = existing;
         if let Some(enabled) = command.patch.enabled {
             let mut updated = self
@@ -192,9 +201,6 @@ impl HookApplication {
         if !command.patch.changes_metadata() {
             return Ok(current);
         }
-        let signing = signing
-            .map(|signing| self.signing_policy(current.id(), signing, current.signing()))
-            .transpose()?;
         self.store
             .update_hook(UpdateHook {
                 organization_id: authorization.organization_id().clone(),
@@ -404,7 +410,7 @@ impl HookApplication {
             });
         }
 
-        let secret = SigningSecret::generate().map_err(ApplicationError::internal)?;
+        let secret = generate_signing_secret(hook.signing().config.secret_encoding)?;
         self.store_rotated_secret(
             command,
             secret,
@@ -635,8 +641,8 @@ impl HookApplication {
         Ok(hook)
     }
 
-    /// Turns validated input into a persisted policy, generating a secret when
-    /// the scheme needs one and none was supplied or already stored.
+    /// Turns validated input into a persisted policy, retaining the stored secret
+    /// when no replacement is supplied and validating its effective encoding.
     fn signing_policy(
         &self,
         hook_id: HookId,
@@ -652,6 +658,16 @@ impl HookApplication {
                     .map_err(ApplicationError::internal)?,
             )
         } else {
+            if input.config.algorithm.uses_secret()
+                && input.config.secret_encoding != existing.config.secret_encoding
+                && let Some(encrypted) = &existing.encrypted_secret
+            {
+                let secret = self
+                    .secret_cipher
+                    .decrypt(hook_id, encrypted)
+                    .map_err(ApplicationError::internal)?;
+                validate_secret_encoding(input.config.secret_encoding, &secret)?;
+            }
             existing.encrypted_secret.clone()
         };
         if input.required && input.config.algorithm.uses_secret() && encrypted_secret.is_none() {
@@ -678,7 +694,9 @@ impl HookApplication {
             parts.signing.config.algorithm.uses_secret(),
         ) {
             (Some(secret), true) => Some(secret.clone()),
-            (None, true) => Some(SigningSecret::generate().map_err(ApplicationError::internal)?),
+            (None, true) => Some(generate_signing_secret(
+                parts.signing.config.secret_encoding,
+            )?),
             (_, false) => None,
         };
         for _ in 0..ENDPOINT_GENERATION_ATTEMPTS {
@@ -807,16 +825,33 @@ fn validate_signing_input(input: &SigningInput) -> Result<(), ApplicationError> 
         });
     }
     if let Some(secret) = &input.secret {
-        input
-            .config
-            .secret_encoding
-            .decode(secret.as_str())
-            .map_err(|error| ApplicationError::ValidationDetailed {
-                field: "signature",
-                detail: error.to_string(),
-            })?;
+        validate_secret_encoding(input.config.secret_encoding, secret)?;
     }
     Ok(())
+}
+
+fn validate_secret_encoding(
+    encoding: SecretEncoding,
+    secret: &SigningSecret,
+) -> Result<(), ApplicationError> {
+    encoding
+        .decode(secret.as_str())
+        .map_err(|error| ApplicationError::ValidationDetailed {
+            field: "signature",
+            detail: error.to_string(),
+        })?;
+    Ok(())
+}
+
+fn generate_signing_secret(encoding: SecretEncoding) -> Result<SigningSecret, ApplicationError> {
+    let secret = SigningSecret::generate().map_err(ApplicationError::internal)?;
+    let encoded = match encoding {
+        SecretEncoding::Utf8 | SecretEncoding::Ascii | SecretEncoding::Raw => return Ok(secret),
+        SecretEncoding::Hex => hex::encode(secret.as_str().as_bytes()),
+        SecretEncoding::Base64 => STANDARD.encode(secret.as_str().as_bytes()),
+        SecretEncoding::Base64Url => URL_SAFE_NO_PAD.encode(secret.as_str().as_bytes()),
+    };
+    SigningSecret::from_text(encoded).map_err(ApplicationError::internal)
 }
 
 #[derive(Clone, Debug)]

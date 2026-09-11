@@ -79,6 +79,8 @@ pub struct Signature {
         deserialize_with = "nullable"
     )]
     pub public_key: Option<Option<String>>,
+    /// BYOS: stored verbatim on creation or replaces the current secret on update.
+    /// Omit to generate at creation or retain on update. Decoded using `secret_encoding`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub secret: Option<Secret>,
 }

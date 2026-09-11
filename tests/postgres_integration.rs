@@ -15,15 +15,16 @@ use silicon_hook::{
     application::{
         AcknowledgeDeliveriesCommand, ApplicationError, BindIamHookSecretCommand, Clock,
         ConnectIamHookCommand, CreateHookCommand, DeleteHookCommand, HookApplication,
-        HookMutationCommand, HookWithSecret, ListHistoryCommand, ManagementContext,
+        HookMutationCommand, HookPatch, HookWithSecret, ListHistoryCommand, ManagementContext,
         PullDeliveriesCommand, ReceiveOutcome, ReceiveRequestCommand, SigningPatch,
+        UpdateHookCommand,
     },
     domain::{
         ActorKind, ActorRef, AuthorizationContext, EncryptionKeyId, EndpointKey, EventRecord,
         HookName, HookStatus, HookTimeZone, OrganizationId, OrganizationRole, SigningSecret,
         SiliconId,
         safety::UNVERIFIED_REQUESTS_PER_BLOCK,
-        signature::{Expression, SignatureEncoding},
+        signature::{Expression, SecretEncoding, SignatureEncoding},
     },
     infrastructure::{
         crypto::{CursorCodec, SecretCipher, SecretKey, SecretKeyring},
@@ -1543,5 +1544,152 @@ async fn age_records(
     .execute(pool)
     .await?;
 
+    Ok(())
+}
+
+#[tokio::test]
+async fn byos_can_be_set_after_creation_and_replaced_without_changing_the_endpoint() -> Result<()> {
+    let database = TestDatabase::start().await?;
+    let identity = FixtureIdentity::new()?;
+    let application = application(database.store.clone(), datetime!(2026-09-02 10:00 UTC))?;
+    let created = create_hook(
+        &application,
+        &identity,
+        "BYOS",
+        SigningPatch::default(),
+        "byos-create-0001",
+    )
+    .await?;
+    let body = br#"{"event":"byos"}"#;
+    let mut previous = secret_of(&created)?;
+    for (index, supplied) in [" provider secret with spaces ", "replacement-secret"]
+        .iter()
+        .enumerate()
+    {
+        let updated = application
+            .update_hook(UpdateHookCommand {
+                authorization: identity.authorization(),
+                silicon_id: identity.silicon_id.clone(),
+                hook_id: created.hook.id(),
+                patch: HookPatch {
+                    signing: Some(SigningPatch {
+                        secret: Some(SigningSecret::from_text(*supplied)?),
+                        ..SigningPatch::default()
+                    }),
+                    ..HookPatch::default()
+                },
+                request_id: None,
+            })
+            .await?;
+        assert_eq!(updated.endpoint_key(), created.hook.endpoint_key());
+        assert_eq!(updated.signing().config, created.hook.signing().config);
+        let rejected = receive(
+            &application,
+            &identity,
+            updated.endpoint_key(),
+            standard_webhook_headers(&previous, &format!("old-{index}"), "1700000000", body)?,
+            body,
+            PROVIDER_IP,
+        )
+        .await?;
+        assert!(!matches!(rejected, ReceiveOutcome::Accepted(_)));
+        previous = SigningSecret::from_text(*supplied)?;
+        let accepted = receive(
+            &application,
+            &identity,
+            updated.endpoint_key(),
+            standard_webhook_headers(&previous, &format!("new-{index}"), "1700000000", body)?,
+            body,
+            PROVIDER_IP,
+        )
+        .await?;
+        assert!(matches!(accepted, ReceiveOutcome::Accepted(_)));
+    }
+    // Reject an incompatible encoding before applying even the activation change.
+    let invalid = application
+        .update_hook(UpdateHookCommand {
+            authorization: identity.authorization(),
+            silicon_id: identity.silicon_id.clone(),
+            hook_id: created.hook.id(),
+            patch: HookPatch {
+                enabled: Some(false),
+                signing: Some(SigningPatch {
+                    secret_encoding: Some(SecretEncoding::Hex),
+                    ..SigningPatch::default()
+                }),
+                ..HookPatch::default()
+            },
+            request_id: None,
+        })
+        .await;
+    assert!(matches!(
+        invalid,
+        Err(ApplicationError::ValidationDetailed { .. })
+    ));
+    let stored = database
+        .store
+        .get_hook(
+            &identity.organization_id,
+            &identity.silicon_id,
+            created.hook.id(),
+        )
+        .await?
+        .context("hook exists")?;
+    assert_eq!(stored.status(), HookStatus::Active);
+    Ok(())
+}
+
+#[tokio::test]
+async fn encoded_secrets_verify_after_creation_and_rotation() -> Result<()> {
+    let database = TestDatabase::start().await?;
+    let identity = FixtureIdentity::new()?;
+    let application = application(database.store.clone(), datetime!(2026-09-02 10:00 UTC))?;
+    let body = br#"{"event":"encoded"}"#;
+    for (index, encoding) in [
+        SecretEncoding::Hex,
+        SecretEncoding::Base64,
+        SecretEncoding::Base64Url,
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let created = create_hook(
+            &application,
+            &identity,
+            "Encoded",
+            SigningPatch {
+                secret_encoding: Some(encoding),
+                ..SigningPatch::default()
+            },
+            &format!("encoded-create-{index}"),
+        )
+        .await?;
+        let rotated = application
+            .rotate_hook_secret(HookMutationCommand {
+                context: identity.context(&format!("encoded-rotate-{index}")),
+                silicon_id: identity.silicon_id.clone(),
+                hook_id: created.hook.id(),
+            })
+            .await?;
+        for (label, result, accepted) in [("old", &created, false), ("new", &rotated, true)] {
+            let key = encoding.decode(secret_of(result)?.as_str())?;
+            let decoded = SigningSecret::from_text(String::from_utf8(key.to_vec())?)?;
+            let outcome = receive(
+                &application,
+                &identity,
+                created.hook.endpoint_key(),
+                standard_webhook_headers(
+                    &decoded,
+                    &format!("{label}-{index}"),
+                    "1700000000",
+                    body,
+                )?,
+                body,
+                PROVIDER_IP,
+            )
+            .await?;
+            assert_eq!(matches!(outcome, ReceiveOutcome::Accepted(_)), accepted);
+        }
+    }
     Ok(())
 }

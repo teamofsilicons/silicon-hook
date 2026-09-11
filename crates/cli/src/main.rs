@@ -64,6 +64,30 @@ fn input<T: serde::de::DeserializeOwned>(value: &str) -> Result<T> {
     };
     serde_json::from_str(&value).context("invalid JSON input")
 }
+
+fn read_secret(path: &str) -> Result<Secret> {
+    let mut text = zeroize::Zeroizing::new(String::new());
+    if path == "-" {
+        std::io::stdin().read_to_string(&mut text)?;
+    } else {
+        std::fs::File::open(path)
+            .with_context(|| format!("could not read {path}"))?
+            .read_to_string(&mut text)?;
+    }
+    if text.ends_with('\n') {
+        text.pop();
+        if text.ends_with('\r') {
+            text.pop();
+        }
+    }
+    anyhow::ensure!(!text.is_empty(), "secret must not be empty");
+    anyhow::ensure!(text.len() <= 4096, "secret must not exceed 4096 bytes");
+    anyhow::ensure!(
+        !text.chars().any(char::is_control),
+        "secret must not contain control characters"
+    );
+    Ok(Secret::new(std::mem::take(&mut *text)))
+}
 fn print<T: Serialize>(value: &T) -> Result<()> {
     println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
@@ -305,12 +329,21 @@ async fn run(cli: &Cli) -> Result<()> {
             description,
             time_zone,
             signature,
+            secret_file,
             unsigned,
         } => {
             let mut signature = signature
                 .as_ref()
                 .map(|value| input::<Signature>(value))
                 .transpose()?;
+            if let Some(path) = secret_file {
+                let signature = signature.get_or_insert_with(Signature::default);
+                anyhow::ensure!(
+                    signature.secret.is_none(),
+                    "supply a secret in --signature or --secret-file, not both"
+                );
+                signature.secret = Some(read_secret(path)?);
+            }
             if *unsigned {
                 signature.get_or_insert_with(Signature::default).required = Some(false);
             }
@@ -329,6 +362,21 @@ async fn run(cli: &Cli) -> Result<()> {
                     .await?,
             )?;
         }
+        Command::SetSecret {
+            id,
+            secret_file,
+            secret_encoding,
+        } => print(
+            &client
+                .set_secret(
+                    &target(cli, &profile)?,
+                    *id,
+                    read_secret(secret_file)?,
+                    secret_encoding.clone(),
+                    &mutation,
+                )
+                .await?,
+        )?,
         Command::List { include_deleted } => print(
             &client
                 .list_hooks(&target(cli, &profile)?, *include_deleted)
@@ -695,4 +743,40 @@ fn docs(topic: &str) -> Result<()> {
     };
     println!("{text}");
     Ok(())
+}
+
+#[cfg(test)]
+mod byos_tests {
+    use super::read_secret;
+
+    #[test]
+    fn secret_files_preserve_spaces_and_reject_empty_or_multiline_values() -> anyhow::Result<()> {
+        let path = std::env::temp_dir().join(format!("hook-byos-{}", uuid::Uuid::new_v4()));
+        let result = (|| -> anyhow::Result<()> {
+            for ending in ["", "\n", "\r\n"] {
+                std::fs::write(&path, format!(" provider secret {ending}"))?;
+                assert_eq!(
+                    read_secret(
+                        path.to_str()
+                            .ok_or_else(|| anyhow::anyhow!("invalid path"))?
+                    )?
+                    .expose(),
+                    " provider secret "
+                );
+            }
+            for value in ["", "\n", "first\nsecond", "first\n\n"] {
+                std::fs::write(&path, value)?;
+                assert!(
+                    read_secret(
+                        path.to_str()
+                            .ok_or_else(|| anyhow::anyhow!("invalid path"))?
+                    )
+                    .is_err()
+                );
+            }
+            Ok(())
+        })();
+        std::fs::remove_file(path)?;
+        result
+    }
 }

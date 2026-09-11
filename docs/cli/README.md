@@ -215,3 +215,33 @@ Common recovery steps:
   after uncertain transport outcomes.
 
 `hook report` and the graphical UI are outside the current release scope.
+
+## Bring your own secret (BYOS)
+
+Create with your provider's secret, or set it after registration:
+
+```sh
+hook create Stripe --signature @stripe-policy.json --secret-file provider-secret.txt
+hook set-secret <hook-uuid> --secret-file provider-secret.txt
+hook set-secret <hook-uuid> --secret-file encoded-secret.txt --secret-encoding hex
+hook --test <environment-uuid> set-secret <hook-uuid> --secret-file -
+```
+
+`--secret-file -` reads stdin. Files preserve spaces and remove only one trailing
+LF/CRLF. Empty, multiline, control-character, or over-4096-byte secrets fail.
+`create --signature` configures verification and may itself contain `secret`;
+do not also supply `--secret-file` in that case. Omitting a secret at creation
+generates one. `set-secret` preserves the current encoding unless specified,
+and preserves the URL, verification scheme and enabled/required settings.
+The previous secret stops verifying immediately. Only creation/rotation prints
+a secret; `set-secret` returns public hook metadata.
+
+To update the scheme and secret together, use the existing merge patch:
+
+```sh
+hook update <hook-uuid> --patch @byos-patch.json
+```
+
+The file can contain `{"signature":{"secret":"provider-secret","secret_encoding":"utf8"}}`
+alongside `algorithm`, `payload`, `signature`, and other policy members. These
+commands work identically in production and paired testing environments.

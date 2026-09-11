@@ -67,7 +67,7 @@ and Docker contexts. Never put server secrets in `VITE_*` variables.
 |---|---|
 | Overview | Actual connection counts, latest request and recent events |
 | Webhooks | List/search, create, inspect, edit name/description/time zone, single and batch enable/disable, recoverable delete/restore, rotate endpoint and signing secret |
-| Signing editor | All twelve algorithms; all four signature and six secret encodings; full payload/locator expressions, custom shared secret and PEM public key; generated secret display/copy/download |
+| Signing editor | All twelve algorithms; all four signature and six secret encodings; full payload/locator expressions, explicit BYOS selection at creation and editing, custom shared secret and PEM public key; generated secret display/copy/download |
 | Events | Per-hook and account-wide history, selectable limits through 10000, opaque-cursor pagination, headers/body/metadata/full-JSON inspector, JSON export |
 | Blocked requests | Separate retained history with reason/detail, filtering, pagination, inspection and export |
 | Deliveries | Pull pending events, page by sequence, read the consumer cursor, explicitly acknowledge a contiguous sequence |

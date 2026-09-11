@@ -54,6 +54,33 @@ impl Client {
         )
         .await
     }
+
+    /// Set or replace a BYOS secret, preserving all other signing settings.
+    /// Pass `secret_encoding` when the supplied text uses a different encoding.
+    /// The previous secret stops verifying immediately; the response omits secrets.
+    pub async fn set_secret(
+        &self,
+        silicon: &str,
+        id: Uuid,
+        secret: Secret,
+        secret_encoding: Option<String>,
+        mutation: &Mutation,
+    ) -> Result<Hook> {
+        self.update_hook(
+            silicon,
+            id,
+            &UpdateHook {
+                signature: Some(Signature {
+                    secret: Some(secret),
+                    secret_encoding,
+                    ..Signature::default()
+                }),
+                ..UpdateHook::default()
+            },
+            mutation,
+        )
+        .await
+    }
     pub async fn delete_hook(&self, silicon: &str, id: Uuid, mutation: &Mutation) -> Result<()> {
         self.empty(
             Method::DELETE,

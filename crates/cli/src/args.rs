@@ -85,8 +85,24 @@ pub enum Command {
             help = "Signature policy JSON or @file; see hook docs signatures"
         )]
         signature: Option<String>,
+        #[arg(
+            long,
+            help = "BYOS secret file; '-' reads stdin. Preserves spaces; removes one trailing line ending"
+        )]
+        secret_file: Option<String>,
         #[arg(long, help = "Accept unsigned requests for this hook")]
         unsigned: bool,
+    },
+    /// Set or replace a BYOS secret without changing the hook URL or other settings.
+    SetSecret {
+        id: Uuid,
+        #[arg(
+            long,
+            help = "Secret file; '-' reads stdin. Preserves spaces; removes one trailing line ending"
+        )]
+        secret_file: String,
+        #[arg(long, value_parser = ["utf8", "ascii", "hex", "base64", "base64url", "raw"])]
+        secret_encoding: Option<String>,
     },
     /// List provider URLs, lifecycle state and latest receipt timestamps.
     List {
@@ -383,5 +399,38 @@ mod tests {
             assert!(cli.test.is_some());
             assert_eq!(cli.profile, "reviewer");
         }
+    }
+
+    #[test]
+    fn byos_commands_support_files_stdin_and_test_context() {
+        let id = "00000000-0000-4000-8000-000000000001";
+        for command in [
+            vec!["create", "Stripe", "--secret-file", "-"],
+            vec![
+                "set-secret",
+                id,
+                "--secret-file",
+                "provider.txt",
+                "--secret-encoding",
+                "hex",
+            ],
+        ] {
+            let mut args = vec!["hook", "--test", id];
+            args.extend(command);
+            assert!(Cli::try_parse_from(args).is_ok());
+        }
+        assert!(Cli::try_parse_from(["hook", "set-secret", id]).is_err());
+        assert!(
+            Cli::try_parse_from([
+                "hook",
+                "set-secret",
+                id,
+                "--secret-file",
+                "-",
+                "--secret-encoding",
+                "invalid"
+            ])
+            .is_err()
+        );
     }
 }

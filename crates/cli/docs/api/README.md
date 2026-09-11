@@ -79,6 +79,31 @@ Creates a hook.
 
 Omitting `signature` produces the Standard Webhooks policy with a generated secret of the form `v1.` followed by 32 alphanumeric characters. Give that secret to the provider. When the provider issues its own secret, supply it in `signature.secret` and describe its scheme; the response echoes the supplied secret once. Asymmetric algorithms take `public_key` instead and return `signing_secret: null`.
 
+### Bring your own secret (BYOS)
+
+Use `signature.secret` on creation or PATCH an existing hook at any time. The
+secret is stored verbatim and encrypted at rest; `secret_encoding` determines
+how it becomes verification key bytes. Changing only the secret preserves the
+URL, algorithm, payload, signature locator, and enabled/required settings.
+
+```json
+{"signature":{"secret":"your-provider-secret","secret_encoding":"utf8"}}
+```
+
+To configure the verification scheme in the same request, include the other
+`signature` members. You can create first with a generated secret, then set the
+provider's secret once registration completes. Verification uses the new secret
+immediately; the old secret stops working. PATCH/read/list responses contain no
+secret. The creation response returns the supplied or generated secret once.
+
+Omitting `secret` keeps the current secret on PATCH and generates one on POST
+for symmetric algorithms. Secrets must contain 1–4096 UTF-8 bytes without control
+characters and decode to a nonempty key using the selected encoding. Invalid
+secrets, incompatible encoding changes, or a secret supplied with an asymmetric
+algorithm return `422`. Asymmetric algorithms use `public_key` instead.
+Generated/rotated secrets respect the configured encoding: text encodings use
+`v1.` plus 32 random alphanumerics; hex/base64/base64url encode those key bytes.
+
 ### `GET /silicons/{silicon_id}/hooks/{hook_id}`
 
 Returns one hook. The signing secret is never returned after creation. An expired soft-deleted hook returns `404`.

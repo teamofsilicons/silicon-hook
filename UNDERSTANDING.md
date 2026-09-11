@@ -142,6 +142,11 @@ These configurations can be updated at any given time. The configurations of the
 
 It should also be possible to rotate the signing secret for any webhook. 
 
+### BYOS
+
+Bring your own secret, our system would also support bring your own secret, in which when creating a webhook you can select the verification configuration and then instead of us generating the secret you can also put in your own secret. This can be configured at the time of creation and also past the creation, so it's also possible to set the secret in case of BYOS after the registeration has happened.
+
+
 # Delete Webhook
 
 A webhook can be deleted by a silicon or org_admins and org_owners. Even deleted webhooks are stored in the delete history for 45 days where they can be recovered from. 

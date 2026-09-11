@@ -62,6 +62,7 @@ export function HookForm(p: {
     ...p.hook?.signature,
   });
   const [secret, setSecret] = createSignal("");
+  const [byos, setByos] = createSignal(false);
   const [busy, setBusy] = createSignal(false);
   const [error, setError] = createSignal<unknown>();
   let key = crypto.randomUUID();
@@ -87,7 +88,7 @@ export function HookForm(p: {
           signature: {
             ...signature,
             public_key: asymmetric() ? signature.public_key : null,
-            ...(secret() ? { secret: secret() } : {}),
+            ...(!asymmetric() && byos() ? { secret: secret() } : {}),
           },
         },
         key,
@@ -239,24 +240,49 @@ export function HookForm(p: {
                     </select>
                   </Field>
                   <Field
-                    label={
-                      p.hook
-                        ? "Replace secret (optional)"
-                        : "Provider secret (optional)"
-                    }
+                    label="Signing secret"
                     hint={
                       p.hook
-                        ? "Leave blank to keep the current secret."
-                        : "Leave blank to generate a signing secret."
+                        ? "Keep the stored secret or replace it with your own."
+                        : "Generate a secret now, or bring your own. You can replace it after creation."
                     }
                   >
-                    <input
-                      type="password"
-                      autocomplete="new-password"
-                      value={secret()}
-                      onInput={(e) => setSecret(e.currentTarget.value)}
-                    />
+                    <select
+                      value={byos() ? "byos" : "default"}
+                      onChange={(e) => {
+                        setByos(e.currentTarget.value === "byos");
+                        setSecret("");
+                        key = crypto.randomUUID();
+                      }}
+                    >
+                      <option value="default">
+                        {p.hook ? "Keep current secret" : "Generate a secret"}
+                      </option>
+                      <option value="byos">Bring your own secret (BYOS)</option>
+                    </select>
                   </Field>
+                  <Show when={byos()}>
+                    <Field
+                      label={p.hook ? "Replacement secret" : "Your secret"}
+                      hint={
+                        p.hook
+                          ? "The previous secret stops verifying as soon as you save. Match the secret encoding above."
+                          : "Paste the exact provider secret and choose its encoding above."
+                      }
+                    >
+                      <input
+                        type="password"
+                        autocomplete="new-password"
+                        required
+                        maxLength={4096}
+                        value={secret()}
+                        onInput={(e) => {
+                          setSecret(e.currentTarget.value);
+                          key = crypto.randomUUID();
+                        }}
+                      />
+                    </Field>
+                  </Show>
                 </div>
               }
             >

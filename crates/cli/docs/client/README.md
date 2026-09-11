@@ -181,3 +181,33 @@ Disable with `client.with_auto_update(false)` or
 `SILICON_HOOK_CLIENT_AUTO_UPDATE=false`. Authentication remains stateless;
 update timestamps for the SDK are in memory. The CLI handles its own persistent
 hourly check and disables per-client background checks.
+
+## Bring your own secret (BYOS)
+
+Version 0.4.0 adds `Client::set_secret`. Creation and updates also accept
+`Signature::secret` to configure the verification policy and secret together.
+
+```rust,no_run
+# async fn example(client: &silicon_hook_client::Client) -> silicon_hook_client::Result<()> {
+use silicon_hook_client::{Mutation, Secret, models::{CreateHook, Signature}};
+let created = client.create_hook("cos:tos", &CreateHook {
+    name: "Provider".into(),
+    signature: Some(Signature {
+        secret: Some(Secret::new("provider-secret")),
+        secret_encoding: Some("utf8".into()),
+        ..Signature::default()
+    }),
+    ..CreateHook::default()
+}, &Mutation::default()).await?;
+client.set_secret("cos:tos", created.hook.id,
+    Secret::new("replacement-secret"), None, &Mutation::default()).await?;
+# Ok(()) }
+```
+
+`None` retains the current secret encoding; pass `Some("hex".into())` (or another
+supported encoding) to change it. The previous secret stops verifying immediately.
+Replacement preserves the URL, other policy fields and activation state and
+returns no secret. You may create with a generated secret first, then set your
+own after provider registration. A client selected with `with_test_key` applies
+the same operations in the isolated testing environment. `Secret` redacts Debug
+output; do not log serialized requests, which necessarily contain the secret.
