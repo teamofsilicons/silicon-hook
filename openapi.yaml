@@ -791,11 +791,18 @@ paths:
         the `ready` frame the server replays every event after the consumer's
         acknowledged cursor, then streams live events. Frames are JSON text:
 
-        - server `ready`, `ping`, `event`, `ack_recorded`, `error`
+        - server `ready`, `ping`, `new_event`, `ack_recorded`, `error`
         - client `pong`, `ack`, `resume`
 
         The server pings every 30 seconds; two minutes without a matching pong
         closes the socket with code 4000 and reason `heartbeat-timeout`.
+
+        Each hook event has exactly two top-level fields: `type: new_event` and
+        `data`. The data object contains `sender` (the hook provider name at
+        receipt) and `metadata` (the complete Event schema, including silicon_id,
+        delivery_sequence, summary and captured request). This shape also applies
+        to replays and client/CLI recipient POSTs. Control frames and REST Event
+        objects retain their existing shapes.
 
         At most 32 outstanding events per Silicon. ACK releases capacity. Environment changes close with 4001 environment-changed; current IAM authorization failure closes with 4003 authorization-changed. Authorization is refreshed every 30 seconds and on cross-replica IAM webhook invalidation; a temporary IAM failure closes with 1013 iam-unavailable.
       parameters:

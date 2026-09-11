@@ -30,6 +30,19 @@ For any silicon that authenticates onto silicon hook, see if they have a valid s
 
 There should be an endpoint to get all the hooks, it should return the name of the hook, the hook url, and when it last reached out.
 
+For every single request sent it should be sent in the format:
+```
+"type": "new_event",
+"data": {
+	"sender": "stripe",
+	"metadata": {
+		metadata here
+	}
+}
+```
+
+Just these 2 feilds must be present in all sent. And metadata included inside data itself.
+
 
 # Rotate
 

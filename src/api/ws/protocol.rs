@@ -65,13 +65,9 @@ pub enum ServerFrame {
         ping_id: String,
     },
     /// One verified provider request in stream order.
-    Event {
-        /// Stream owner.
-        silicon_id: SiliconId,
-        /// Position in the Silicon stream.
-        delivery_sequence: i64,
-        /// The retained event, including its summary line and raw request.
-        event: Box<EventResponse>,
+    NewEvent {
+        /// Provider and retained event details.
+        data: EventData,
     },
     /// Confirms that an acknowledgment was stored.
     AckRecorded {
@@ -89,6 +85,15 @@ pub enum ServerFrame {
         /// Whether the connection remains usable.
         recoverable: bool,
     },
+}
+
+/// Contents of a hook delivery's `data` field.
+#[derive(Clone, Debug, Serialize)]
+pub struct EventData {
+    /// Hook provider name recorded when the request was received.
+    pub sender: String,
+    /// Retained event, including stream position, summary and raw request.
+    pub metadata: Box<EventResponse>,
 }
 
 impl ServerFrame {

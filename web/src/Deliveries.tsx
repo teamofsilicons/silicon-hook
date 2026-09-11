@@ -256,9 +256,12 @@ export function Live(p: { ctx: Context }) {
           setAttempt(0);
           setCursors(f.acknowledged_through);
         }
-        if (f.type === "event")
+        if (f.type === "new_event")
           setEvents((prev) =>
-            [f.event, ...prev.filter((x) => x.id !== f.event.id)].slice(0, 32),
+            [
+              f.data.metadata,
+              ...prev.filter((x) => x.id !== f.data.metadata.id),
+            ].slice(0, 32),
           );
         if (f.type === "ack_recorded")
           setCursors({ ...cursors(), [f.silicon_id]: f.acknowledged_through });

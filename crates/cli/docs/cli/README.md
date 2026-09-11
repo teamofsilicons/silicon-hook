@@ -132,6 +132,11 @@ help. `hook docs <topic>` bundles these guides for offline reading.
 | `config home <directory>` | Set the base home directory for local state |
 | `config set <key> <value>` | Set url, org, silicon, or auto-update |
 
+Hook deliveries printed by `listen` and posted to the configured webhook use
+`{"type":"new_event","data":{"sender":"<provider>","metadata":{...}}}`.
+Event details, including the ACK sequence and captured request, are inside
+`data.metadata`. See the [complete relay format](../client/relay.md).
+
 History limits are 1–10000, but a byte-bounded page may return fewer items.
 Follow `next_cursor` until null. Delivery pull limit is at most 1000.
 `listen` answers pings automatically. `listen --ack` ACKs after printing;

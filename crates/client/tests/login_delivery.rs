@@ -42,14 +42,14 @@ async fn stream(ws: WebSocketUpgrade, State(f): State<Fixture>) -> impl IntoResp
     ws.on_upgrade(move |mut socket| async move {
         let _ = f.notices.send("connected".into());
         let ping = json!({"type":"ping","ping_id":"heartbeat-1"});
-        let event = json!({"type":"event", "silicon_id":"cos:tos", "delivery_sequence":1,
-            "event":{"id":"00000000-0000-4000-8000-000000000001", "org_id":"tos",
+        let event = json!({"type":"new_event", "data":{"sender":"demo",
+            "metadata":{"id":"00000000-0000-4000-8000-000000000001", "org_id":"tos",
                 "silicon_id":"cos:tos","hook_id":"00000000-0000-4000-8000-000000000002",
                 "provider":"demo","summary":"demo triggered", "delivery_sequence":1,
                 "received_at":"2026-09-09T00:00:00Z", "request":{"method":"POST",
                     "url":"https://hook.example.test/silicon/cos:tos/ABCDEFGH", "path":"/silicon/cos:tos/ABCDEFGH",
                     "query_string":"","headers":[],"content_type":"application/json",
-                    "body":"{\"example\":true}","body_base64":null,"remote_ip":"127.0.0.1"}}});
+                    "body":"{\"example\":true}","body_base64":null,"remote_ip":"127.0.0.1"}}}});
         for frame in [ping, event] {
             if socket.send(Message::Text(frame.to_string().into())).await.is_err() { return; }
         }
@@ -58,6 +58,10 @@ async fn stream(ws: WebSocketUpgrade, State(f): State<Fixture>) -> impl IntoResp
                 let value: Value = serde_json::from_str(&text).unwrap();
                 let kind = value["type"].as_str().unwrap();
                 if kind == "pong" { assert_eq!(value["ping_id"], "heartbeat-1"); }
+                if kind == "ack" {
+                    assert_eq!(value["silicon_id"], "cos:tos");
+                    assert_eq!(value["through_sequence"], 1);
+                }
                 let _ = f.notices.send(kind.into());
             }
         }
@@ -95,8 +99,18 @@ async fn authenticate_then_attach_detach_and_replay_without_leaking_destination(
             let _ = f.notices.send("failed_delivery".into());
             StatusCode::SERVICE_UNAVAILABLE
         }))
-        .route("/recipient", post(|State(f): State<Fixture>, Json(body): Json<Value>| async move {
-            assert_eq!(body["event"]["request"]["body"], "{\"example\":true}");
+        .route("/recipient", post(|State(f): State<Fixture>, headers: HeaderMap, Json(body): Json<Value>| async move {
+            assert_eq!(body.as_object().map(serde_json::Map::len), Some(2));
+            assert_eq!(body["type"], "new_event");
+            assert_eq!(body["data"].as_object().map(serde_json::Map::len), Some(2));
+            assert_eq!(body["data"]["sender"], "demo");
+            let event = &body["data"]["metadata"];
+            assert_eq!(event["silicon_id"], "cos:tos");
+            assert_eq!(event["delivery_sequence"], 1);
+            assert_eq!(event["summary"], "demo triggered");
+            assert_eq!(event["request"]["body"], "{\"example\":true}");
+            assert_eq!(headers["silicon-hook-event-id"], event["id"].as_str().unwrap());
+            assert_eq!(headers["silicon-hook-delivery-sequence"], "1");
             let _ = f.notices.send("delivered".into());
             StatusCode::NO_CONTENT
         }))

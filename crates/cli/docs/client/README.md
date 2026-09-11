@@ -7,9 +7,9 @@ persist authentication, environment keys or recipient configuration. Your
 program owns those values. A login session refreshes tokens in memory and owns
 its relay tasks; your program controls its lifetime and shutdown.
 
-This source implementation targets version 0.2.0. The previous crates.io 0.1.0
-client was yanked; it cannot be overwritten with this implementation. A new
-publication is separate from building and testing these workspace packages.
+Version 0.3.0 uses the `new_event` delivery envelope with `data.sender` and
+`data.metadata`. Upgrade the client/CLI and backend together; consumers of
+0.2.x must update their event matching and field access to the new format.
 
 ## Sign in
 
@@ -150,7 +150,11 @@ identities when every consumer needs an independent copy.
 
 ## Streams and relay
 
-`stream(&[silicon_ids])` yields Ready, Ping, Event, AckRecorded and Error frames.
+`stream(&[silicon_ids])` yields Ready, Ping, NewEvent, AckRecorded and Error frames.
+`ServerFrame::NewEvent { data }` carries the hook name in `data.sender` and the
+complete event in `data.metadata`. On the wire it has exactly `type: new_event`
+and `data` at the top level. Use the metadata's `silicon_id` and
+`delivery_sequence` when acknowledging.
 `Stream::next` immediately answers application and protocol pings. Keep calling
 it while doing recipient work. `Stream::acknowledge` and `resume` send the
 corresponding frames. Closing a stream never acknowledges pending events.

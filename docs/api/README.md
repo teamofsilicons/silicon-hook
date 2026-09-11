@@ -206,7 +206,7 @@ Server frames:
 {"type":"ready","protocol_version":1,"connection_id":"...","silicon_ids":["cos:tos"],
  "acknowledged_through":{"cos:tos":41},"heartbeat_interval_seconds":30,"heartbeat_timeout_seconds":120}
 {"type":"ping","ping_id":"..."}
-{"type":"event","silicon_id":"cos:tos","delivery_sequence":42,"event":{...Event...}}
+{"type":"new_event","data":{"sender":"stripe","metadata":{...Event...}}}
 {"type":"ack_recorded","silicon_id":"cos:tos","acknowledged_through":42}
 {"type":"error","code":"invalid_frame","message":"...","recoverable":true}
 ```
@@ -218,6 +218,15 @@ Client frames:
 {"type":"ack","silicon_id":"cos:tos","through_sequence":42}
 {"type":"resume","silicon_id":"cos:tos","after_sequence":40}
 ```
+
+Hook event deliveries contain exactly `type` and `data` at the top level.
+`data.sender` is the provider name recorded at receipt; `data.metadata` is the
+complete Event object, including `silicon_id`, `delivery_sequence`, summary,
+receive timestamp and the captured request. The same shape is used by the
+client/CLI recipient POST and for replayed events. Read ACK positions from
+`data.metadata.delivery_sequence`. Heartbeat, ready, ACK and error control
+frames retain their documented shapes; REST history and polling continue to
+return Event objects in `items`.
 
 After `ready` the server sends every event after the acknowledged cursor, then live events as they arrive. The server sends `ping` every 30 seconds; the client answers with a `pong` carrying the same `ping_id`. If no valid pong arrives for two minutes the server closes with code `4000` and reason `heartbeat-timeout`. Pings and pongs are never stored, never acknowledged, and never consume sequences. `resume` replays from a client-held position without changing the cursor.
 
@@ -286,7 +295,7 @@ Provider POSTs to the endpoint URL
   -> Hook answers 200 webhook.ok
   -> verified: appended to the 14-day log and the Silicon's delivery stream
      withheld: appended to the blocked log and counted against the address
-  -> connected sessions receive {"type":"event",...} and acknowledge
+  -> connected sessions receive {"type":"new_event","data":{...}} and acknowledge
   -> unacknowledged events replay on the next connection
 ```
 

@@ -7,7 +7,16 @@ use tokio_tungstenite::{
     tungstenite::{Message, client::IntoClientRequest as _},
 };
 
-/// Application-level frames; receipt of Event does not acknowledge it.
+/// Contents of a hook delivery's `data` field.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EventData {
+    /// Hook provider name recorded when the request was received.
+    pub sender: String,
+    /// Retained event, including stream position, summary and raw request.
+    pub metadata: Box<Event>,
+}
+
+/// Application-level frames; receipt of NewEvent does not acknowledge it.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ServerFrame {
@@ -22,10 +31,8 @@ pub enum ServerFrame {
     Ping {
         ping_id: String,
     },
-    Event {
-        silicon_id: String,
-        delivery_sequence: i64,
-        event: Box<Event>,
+    NewEvent {
+        data: EventData,
     },
     AckRecorded {
         silicon_id: String,

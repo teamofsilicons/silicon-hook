@@ -283,13 +283,19 @@ async fn events_are_delivered_live_acknowledged_and_replayed_on_reconnect() -> R
     harness
         .send_webhook(&hook, "msg_1", r#"{"action":"opened"}"#)
         .await?;
-    let event = expect_type(&mut socket, "event").await?;
-    assert_eq!(event["silicon_id"], SILICON_ID);
-    assert_eq!(event["delivery_sequence"], 1);
-    assert_eq!(event["event"]["provider"], "GitHub");
-    assert_eq!(event["event"]["request"]["body"], r#"{"action":"opened"}"#);
-    assert_eq!(event["event"]["request"]["method"], "POST");
-    let summary = event["event"]["summary"]
+    let event = expect_type(&mut socket, "new_event").await?;
+    assert_eq!(event.as_object().map(serde_json::Map::len), Some(2));
+    assert_eq!(event["data"].as_object().map(serde_json::Map::len), Some(2));
+    assert_eq!(event["data"]["sender"], "GitHub");
+    assert_eq!(event["data"]["metadata"]["silicon_id"], SILICON_ID);
+    assert_eq!(event["data"]["metadata"]["delivery_sequence"], 1);
+    assert_eq!(event["data"]["metadata"]["provider"], "GitHub");
+    assert_eq!(
+        event["data"]["metadata"]["request"]["body"],
+        r#"{"action":"opened"}"#
+    );
+    assert_eq!(event["data"]["metadata"]["request"]["method"], "POST");
+    let summary = event["data"]["metadata"]["summary"]
         .as_str()
         .context("events carry a summary line")?;
     assert!(summary.starts_with("GitHub triggered at "));
@@ -319,16 +325,20 @@ async fn events_are_delivered_live_acknowledged_and_replayed_on_reconnect() -> R
     harness
         .send_webhook(&hook, "msg_2", r#"{"action":"closed"}"#)
         .await?;
-    let second = expect_type(&mut socket, "event").await?;
-    assert_eq!(second["delivery_sequence"], 2);
+    let second = expect_type(&mut socket, "new_event").await?;
+    assert_eq!(second["data"]["metadata"]["delivery_sequence"], 2);
     socket.close(None).await?;
 
     let mut reconnected = harness.connect().await?;
     let ready = expect_type(&mut reconnected, "ready").await?;
     assert_eq!(ready["acknowledged_through"][SILICON_ID], 1);
-    let replayed = expect_type(&mut reconnected, "event").await?;
+    let replayed = expect_type(&mut reconnected, "new_event").await?;
     assert_eq!(
-        replayed["delivery_sequence"], 2,
+        replayed, second,
+        "replay preserves the complete delivery envelope"
+    );
+    assert_eq!(
+        replayed["data"]["metadata"]["delivery_sequence"], 2,
         "the unacknowledged event is attached to the next connection"
     );
 

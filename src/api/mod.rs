@@ -33,7 +33,8 @@ use crate::{
 pub use dto::{CapturedRequestResponse, EventResponse};
 pub use version::{API_VERSION_HEADER, SUPPORTED_API_VERSIONS, SUPPORTED_API_VERSIONS_HEADER};
 pub use ws::{
-    ClientFrame, HEARTBEAT_CLOSE_CODE, HEARTBEAT_CLOSE_REASON, PROTOCOL_VERSION, ServerFrame,
+    ClientFrame, EventData, HEARTBEAT_CLOSE_CODE, HEARTBEAT_CLOSE_REASON, PROTOCOL_VERSION,
+    ServerFrame,
 };
 
 use crate::config::{RealtimeSettings, ServerSettings};

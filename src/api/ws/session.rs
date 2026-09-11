@@ -11,7 +11,8 @@ use tokio::{
 use uuid::Uuid;
 
 use super::protocol::{
-    ClientFrame, HEARTBEAT_CLOSE_CODE, HEARTBEAT_CLOSE_REASON, PROTOCOL_VERSION, ServerFrame,
+    ClientFrame, EventData, HEARTBEAT_CLOSE_CODE, HEARTBEAT_CLOSE_REASON, PROTOCOL_VERSION,
+    ServerFrame,
 };
 use crate::{
     api::dto::EventResponse,
@@ -317,10 +318,11 @@ impl SessionRuntime {
             let sequence = event.delivery_sequence().get();
             send_frame(
                 socket,
-                &ServerFrame::Event {
-                    silicon_id: silicon_id.clone(),
-                    delivery_sequence: sequence,
-                    event: Box::new(EventResponse::from(&event)),
+                &ServerFrame::NewEvent {
+                    data: EventData {
+                        sender: event.provider().as_str().to_owned(),
+                        metadata: Box::new(EventResponse::from(&event)),
+                    },
                 },
             )
             .await?;

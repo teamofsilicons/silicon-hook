@@ -1,6 +1,6 @@
 [package]
 name = "silicon-hook-cli"
-version = "0.2.0"
+version = "0.3.0"
 edition = "2024"
 rust-version = "1.98"
 description = "Silicon Hook CLI and local webhook relay"
@@ -18,7 +18,7 @@ clap = { version = "4.5", features = ["derive", "env"] }
 fs2 = "0.4.3"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
-silicon-hook-client = { path = "../client", version = "0.2.0" }
+silicon-hook-client = { path = "../client", version = "0.3.0" }
 tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal", "process", "io-util"] }
 url = "2.5.7"
 uuid = { version = "1.26.0", features = ["serde", "v7", "v4"] }

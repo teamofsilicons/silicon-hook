@@ -21,4 +21,4 @@ pub use session::{LoginOptions, RelaySession};
 
 pub use client::{Client, Error, Mutation, Result};
 pub use models::Secret;
-pub use stream::{ServerFrame, Stream};
+pub use stream::{EventData, ServerFrame, Stream};

@@ -32,11 +32,47 @@ relay.run(current, shutdown, None).await?;
 # drop((credentials, stop)); Ok(()) }
 ```
 
-The recipient receives POST JSON containing `type: event`, `silicon_id`,
-`delivery_sequence`, and the full `event` object. The latter includes event ID,
-hook ID, provider name, formatted summary, received timestamp and original
-captured request. Headers `silicon-hook-event-id` and
-`silicon-hook-delivery-sequence` make deduplication convenient.
+Every recipient POST has exactly two top-level fields: `type` and `data`.
+`type` is `new_event`. `data` contains `sender` (the hook's provider name at
+receipt) and `metadata` (the complete retained event). For example:
+
+```json
+{
+  "type": "new_event",
+  "data": {
+    "sender": "stripe",
+    "metadata": {
+      "id": "00000000-0000-4000-8000-000000000001",
+      "org_id": "tos",
+      "silicon_id": "cos:tos",
+      "hook_id": "00000000-0000-4000-8000-000000000002",
+      "provider": "stripe",
+      "summary": "stripe triggered at 12:00:00 11-09-2026 UTC",
+      "delivery_sequence": 42,
+      "received_at": "2026-09-11T12:00:00Z",
+      "request": {
+        "method": "POST",
+        "url": "https://hook.teamofsilicons.com/silicon/cos:tos/ABCDEFGH/",
+        "path": "/silicon/cos:tos/ABCDEFGH/",
+        "query_string": "",
+        "headers": [["content-type", "application/json"]],
+        "content_type": "application/json",
+        "body": "{\"example\":true}",
+        "body_base64": null,
+        "remote_ip": "203.0.113.1"
+      }
+    }
+  }
+}
+```
+
+This is also the WebSocket event delivery shape, including replays. Event ID,
+Silicon ID, sequence, summary, timestamp and original request are all nested
+under `data.metadata`; none are extra top-level fields. Non-UTF-8 request bytes
+remain available in `data.metadata.request.body_base64`.
+Headers `silicon-hook-event-id` and `silicon-hook-delivery-sequence` make
+HTTP deduplication convenient. Consumers of the previous `type: event` shape
+must switch to `type: new_event` and read event details from `data.metadata`.
 
 A 2xx status acknowledges receipt. Redirects are not followed; 3xx, 4xx, 5xx,
 connection failures and the 20-second timeout all retry, with exponential delays

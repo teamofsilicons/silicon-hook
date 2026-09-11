@@ -439,7 +439,7 @@ async fn run(cli: &Cli) -> Result<()> {
                 tokio::select! {
                     _=tokio::signal::ctrl_c()=>{stream.close().await?;break;},
                     frame=stream.next()=>match frame? {
-                        Some(frame)=>{print(&frame)?;if *ack && let silicon_hook_client::ServerFrame::Event{silicon_id,delivery_sequence,..}=frame {stream.acknowledge(&silicon_id,delivery_sequence).await?;}},
+                        Some(frame)=>{print(&frame)?;if *ack && let silicon_hook_client::ServerFrame::NewEvent{data}=frame {stream.acknowledge(&data.metadata.silicon_id,data.metadata.delivery_sequence).await?;}},
                         None=>break,
                     }
                 }

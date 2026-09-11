@@ -17,7 +17,8 @@ use axum::{
 };
 
 pub use protocol::{
-    ClientFrame, HEARTBEAT_CLOSE_CODE, HEARTBEAT_CLOSE_REASON, PROTOCOL_VERSION, ServerFrame,
+    ClientFrame, EventData, HEARTBEAT_CLOSE_CODE, HEARTBEAT_CLOSE_REASON, PROTOCOL_VERSION,
+    ServerFrame,
 };
 
 use super::{

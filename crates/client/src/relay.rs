@@ -1,5 +1,5 @@
 //! In-memory delivery relay. Persistence and credential refresh belong to the caller.
-use crate::{Client, Error, Result, ServerFrame, models::Event};
+use crate::{Client, Error, EventData, Result, ServerFrame, models::Event};
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
 use tokio::sync::{mpsc, watch};
@@ -127,8 +127,9 @@ impl Relay {
             }
             tokio::select! {
                 frame = stream.next() => match frame? {
-                    Some(ServerFrame::Event { silicon_id, delivery_sequence, event }) => {
-                        if silicon_id != self.silicon_id || delivery_sequence != event.delivery_sequence || event.silicon_id != silicon_id {
+                    Some(ServerFrame::NewEvent { data }) => {
+                        let event = data.metadata;
+                        if event.silicon_id != self.silicon_id || data.sender != event.provider {
                             return Err(Error::Protocol("relay event does not match its stream".into()));
                         }
                         if queue.len() >= 32 { return Err(Error::Protocol("relay outstanding window exceeded".into())); }
@@ -156,13 +157,23 @@ impl Relay {
         event: Box<Event>,
         notices: &Option<mpsc::Sender<RelayNotice>>,
     ) -> Result<()> {
+        let event_id = event.id;
+        let delivery_sequence = event.delivery_sequence;
+        let frame = ServerFrame::NewEvent {
+            data: EventData {
+                sender: event.provider.clone(),
+                metadata: event,
+            },
+        };
         let mut retry = 1u64;
         loop {
-            let response = http.post(self.recipient.url().clone())
-                .header("silicon-hook-event-id", event.id.to_string())
-                .header("silicon-hook-delivery-sequence", event.delivery_sequence)
-                .json(&serde_json::json!({"type":"event","silicon_id":self.silicon_id,"delivery_sequence":event.delivery_sequence,"event":event}))
-                .send().await;
+            let response = http
+                .post(self.recipient.url().clone())
+                .header("silicon-hook-event-id", event_id.to_string())
+                .header("silicon-hook-delivery-sequence", delivery_sequence)
+                .json(&frame)
+                .send()
+                .await;
             let reason = match response {
                 Ok(response) if response.status().is_success() => return Ok(()),
                 Ok(response) => format!("recipient returned HTTP {}", response.status().as_u16()),
