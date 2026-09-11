@@ -215,3 +215,9 @@ Common recovery steps:
   after uncertain transport outcomes.
 
 `hook report` and the graphical UI are outside the current release scope.
+
+## Multiple Silicons on one host
+
+Each Silicon keeps credentials under its own `SILICON_HOME`. Assign a different local port in each home with `hook config set relay-port 18480` (valid range 1–65535), then restart that home's daemon. The default remains 18479. `hook daemon token` reports the running daemon's actual port.
+
+`SILICON_HOOK_TEST` supplies the default `--test` environment for a dedicated runtime; an explicit flag overrides it. Set this in service configuration when pairing a Silicon's IAM and Hook environments. Native `http://<silicon>.<org>.localhost/` recipients are supported directly; the relay adds Silicon's required root metadata without a bridge process.

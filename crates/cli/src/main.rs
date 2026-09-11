@@ -614,6 +614,9 @@ fn configuration(cli: &Cli, action: &Config, stored: &mut LockedStore) -> Result
         }
         Config::Set { key, value } => {
             match key.as_str() {
+                "relay-port" => {
+                    stored.data.relay_port = value.parse().context("relay-port must be between 1 and 65535; restart the daemon after changing it")?;
+                }
                 "url" => {
                     Client::new(value)?;
                     let profile = stored.profile(&cli.profile);

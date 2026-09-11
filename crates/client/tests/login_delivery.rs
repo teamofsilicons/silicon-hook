@@ -114,6 +114,15 @@ async fn authenticate_then_attach_detach_and_replay_without_leaking_destination(
             let _ = f.notices.send("delivered".into());
             StatusCode::NO_CONTENT
         }))
+        .route("/silicon-recipient", post(|State(f): State<Fixture>, headers: HeaderMap, Json(body): Json<Value>| async move {
+            assert!(headers["host"].to_str().unwrap().starts_with("cos.tos.localhost:"));
+            assert_eq!(body["type"], "new_event");
+            assert!(body["data"].is_object());
+            assert_eq!(body["metadata"]["app"], "tos>hook");
+            assert_eq!(body["metadata"]["event_id"], body["data"]["metadata"]["id"]);
+            let _ = f.notices.send("silicon-delivered".into());
+            Json(json!({"status":"ok", "event_id":"00000000-0000-4000-8000-000000000099"}))
+        }))
         .with_state(fixture.clone());
     let (url, server_task) = server(app).await;
     let base = Client::new(&url)?.with_auto_update(false);
@@ -163,6 +172,14 @@ async fn authenticate_then_attach_detach_and_replay_without_leaking_destination(
     );
     session.webhook(&format!("{url}/recipient"))?;
     notice(&mut notices, "delivered").await;
+    notice(&mut notices, "ack").await;
+    session.unhook();
+    notice(&mut notices, "disconnected").await;
+    let port = url::Url::parse(&url)?.port().unwrap();
+    session.webhook(&format!(
+        "http://cos.tos.localhost:{port}/silicon-recipient"
+    ))?;
+    notice(&mut notices, "silicon-delivered").await;
     notice(&mut notices, "ack").await;
     session.shutdown().await?;
     server_task.abort();

@@ -32,7 +32,7 @@ relay.run(current, shutdown, None).await?;
 # drop((credentials, stop)); Ok(()) }
 ```
 
-Every recipient POST has exactly two top-level fields: `type` and `data`.
+Generic recipient POSTs have exactly two top-level fields: `type` and `data`.
 `type` is `new_event`. `data` contains `sender` (the hook's provider name at
 receipt) and `metadata` (the complete retained event). For example:
 
@@ -136,3 +136,7 @@ a watch channel of `LocalIdentity` values, a random control secret and a stop
 channel. The separate control secret authenticates `/health` and
 `POST /control/stop`. No network destination beyond loopback can be bound by
 this server API.
+
+## Native Silicon recipients
+
+For a recipient on a reserved `*.localhost` host, the relay resolves the host directly to IPv4 loopback while preserving its HTTP Host header. It includes the root `metadata` object required by Silicon, containing `app: "tos>hook"`, the retained event ID, and delivery sequence. `type: "new_event"` and the complete `data` remain unchanged. Generic recipients and the backend WebSocket contract retain their two-field envelope. Silicon's successful HTTP response acknowledges receipt through the normal 2xx rule.

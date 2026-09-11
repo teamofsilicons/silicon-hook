@@ -102,7 +102,7 @@ pub async fn command(cli: &Cli, action: &Daemon) -> Result<()> {
                 )
             } else {
                 crate::print(
-                    &serde_json::json!({"url":"http://hook.localhost:18479/request","token":token}),
+                    &serde_json::json!({"url":format!("http://hook.localhost:{}/request", descriptor()?.port),"token":token}),
                 )
             }
         }
@@ -175,7 +175,7 @@ async fn run() -> Result<()> {
     lock.try_lock_exclusive()
         .context("A Hook relay already holds the daemon lock")?;
     let descriptor = Descriptor {
-        port: local::DEFAULT_RELAY_PORT,
+        port: LockedStore::open()?.data.relay_port.get(),
         token: Secret::new(Uuid::new_v4().simple().to_string()),
         pid: std::process::id(),
     };

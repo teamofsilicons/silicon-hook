@@ -14,6 +14,15 @@ impl Recipient {
         let mut origin = url.clone();
         origin.set_path("/");
         origin.set_query(None);
+        // Silicon's local virtual hosts are reserved loopback names.
+        if url
+            .host_str()
+            .is_some_and(|host| host.ends_with(".localhost"))
+        {
+            origin
+                .set_host(Some("localhost"))
+                .map_err(|e| Error::Invalid(e.to_string()))?;
+        }
         crate::client::validate_origin(&origin).map_err(|_| Error::Invalid(
             "recipient must be HTTPS (or HTTP on loopback), without embedded credentials or a fragment".into(),
         ))?;
@@ -21,6 +30,12 @@ impl Recipient {
     }
     pub fn url(&self) -> &url::Url {
         &self.0
+    }
+
+    fn silicon_host(&self) -> Option<&str> {
+        self.0
+            .host_str()
+            .filter(|host| host.ends_with(".localhost"))
     }
 }
 
@@ -59,11 +74,20 @@ impl Relay {
         mut stop: watch::Receiver<bool>,
         notices: Option<mpsc::Sender<RelayNotice>>,
     ) -> Result<()> {
-        let http = reqwest::Client::builder()
+        let mut http = reqwest::Client::builder()
             .timeout(Duration::from_secs(20))
             .redirect(reqwest::redirect::Policy::none())
-            .no_proxy()
-            .build()?;
+            .no_proxy();
+        if let Some(host) = self.recipient.silicon_host() {
+            http = http.resolve(
+                host,
+                std::net::SocketAddr::from((
+                    [127, 0, 0, 1],
+                    self.recipient.url().port_or_known_default().unwrap_or(80),
+                )),
+            );
+        }
+        let http = http.build()?;
         let mut backoff = 1u64;
         loop {
             if *stop.borrow() {
@@ -165,6 +189,10 @@ impl Relay {
                 metadata: event,
             },
         };
+        let mut frame = serde_json::to_value(frame)?;
+        if self.recipient.silicon_host().is_some() {
+            frame["metadata"] = serde_json::json!({"app":"tos>hook","event_id":event_id,"delivery_sequence":delivery_sequence});
+        }
         let mut retry = 1u64;
         loop {
             let response = http
@@ -196,5 +224,23 @@ impl Relay {
 fn notice(sender: &Option<mpsc::Sender<RelayNotice>>, value: RelayNotice) {
     if let Some(sender) = sender {
         let _ = sender.try_send(value);
+    }
+}
+
+#[cfg(test)]
+mod recipient_tests {
+    use super::Recipient;
+    #[test]
+    fn reserved_local_hosts_do_not_relax_other_url_checks() {
+        assert!(Recipient::new("http://ceo.org.localhost/events").is_ok());
+        for url in [
+            "http://ceo.localhost.evil.test/events",
+            "http://example.com/events",
+            "http://user:pass@ceo.org.localhost/events",
+            "http://ceo.org.localhost/events#fragment",
+            "http://ceo.org.localhost:0/",
+        ] {
+            assert!(Recipient::new(url).is_err(), "accepted {url}");
+        }
     }
 }

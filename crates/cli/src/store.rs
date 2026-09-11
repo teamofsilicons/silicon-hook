@@ -60,6 +60,8 @@ impl Default for Profile {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Store {
+    #[serde(default = "default_relay_port")]
+    pub relay_port: std::num::NonZeroU16,
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
     #[serde(default = "enabled")]
@@ -67,12 +69,16 @@ pub struct Store {
     #[serde(default)]
     pub last_update_check: u64,
 }
+fn default_relay_port() -> std::num::NonZeroU16 {
+    std::num::NonZeroU16::new(silicon_hook_client::local::DEFAULT_RELAY_PORT).unwrap()
+}
 fn enabled() -> bool {
     true
 }
 impl Default for Store {
     fn default() -> Self {
         Self {
+            relay_port: default_relay_port(),
             profiles: BTreeMap::new(),
             auto_update: true,
             last_update_check: 0,

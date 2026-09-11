@@ -40,7 +40,8 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Test environment UUID; its root key is stored separately"
+        help = "Test environment UUID; its root key is stored separately",
+        env = "SILICON_HOOK_TEST"
     )]
     pub test: Option<Uuid>,
     #[arg(
@@ -302,9 +303,9 @@ pub enum Config {
     Profiles,
     /// Set the base home directory; Hook stores state below .silicon-hook.
     Home { location: String },
-    /// Set url, org, silicon or auto-update for the selected profile.
+    /// Set url, org, silicon, auto-update, or the local relay port.
     Set {
-        #[arg(value_parser=["url","org","silicon","auto-update"])]
+        #[arg(value_parser=["url","org","silicon","auto-update","relay-port"])]
         key: String,
         value: String,
     },
