@@ -100,7 +100,10 @@ async fn authenticate_then_attach_detach_and_replay_without_leaking_destination(
             StatusCode::SERVICE_UNAVAILABLE
         }))
         .route("/recipient", post(|State(f): State<Fixture>, headers: HeaderMap, Json(body): Json<Value>| async move {
-            assert_eq!(body.as_object().map(serde_json::Map::len), Some(2));
+            assert_eq!(body.as_object().map(serde_json::Map::len), Some(3));
+            assert_eq!(body["metadata"]["app"], "tos>hook");
+            assert_eq!(body["metadata"]["event_id"], body["data"]["metadata"]["id"]);
+            assert_eq!(body["metadata"]["delivery_sequence"], 1);
             assert_eq!(body["type"], "new_event");
             assert_eq!(body["data"].as_object().map(serde_json::Map::len), Some(2));
             assert_eq!(body["data"]["sender"], "demo");

@@ -132,10 +132,14 @@ help. `hook docs <topic>` bundles these guides for offline reading.
 | `config home <directory>` | Set the base home directory for local state |
 | `config set <key> <value>` | Set url, org, silicon, or auto-update |
 
-Hook deliveries printed by `listen` and posted to the configured webhook use
+Hook deliveries printed by `listen` use
 `{"type":"new_event","data":{"sender":"<provider>","metadata":{...}}}`.
 Event details, including the ACK sequence and captured request, are inside
-`data.metadata`. See the [complete relay format](../client/relay.md).
+`data.metadata`. HTTP callbacks additionally include root `metadata` with
+`app: "tos>hook"`, `event_id`, and `delivery_sequence`. Every callback URL uses
+this same envelope; no format flag is needed. Consumers enforcing a closed
+two-field callback schema must allow `metadata` before upgrading to 0.3.2.
+See the [complete relay format](../client/relay.md).
 
 History limits are 1–10000, but a byte-bounded page may return fewer items.
 Follow `next_cursor` until null. Delivery pull limit is at most 1000.
@@ -220,4 +224,4 @@ Common recovery steps:
 
 Each Silicon keeps credentials under its own `SILICON_HOME`. Assign a different local port in each home with `hook config set relay-port 18480` (valid range 1–65535), then restart that home's daemon. The default remains 18479. `hook daemon token` reports the running daemon's actual port.
 
-`SILICON_HOOK_TEST` supplies the default `--test` environment for a dedicated runtime; an explicit flag overrides it. Set this in service configuration when pairing a Silicon's IAM and Hook environments. Native `http://<silicon>.<org>.localhost/` recipients are supported directly; the relay adds Silicon's required root metadata without a bridge process.
+`SILICON_HOOK_TEST` supplies the default `--test` environment for a dedicated runtime; an explicit flag overrides it. Set this in service configuration when pairing a Silicon's IAM and Hook environments. Native `http://<silicon>.<org>.localhost/` recipients are supported directly. Remote HTTPS callbacks receive the same event envelope, including Silicon's required root metadata, without a bridge process or format flag.

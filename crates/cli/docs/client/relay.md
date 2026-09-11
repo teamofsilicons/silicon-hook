@@ -32,13 +32,19 @@ relay.run(current, shutdown, None).await?;
 # drop((credentials, stop)); Ok(()) }
 ```
 
-Generic recipient POSTs have exactly two top-level fields: `type` and `data`.
+All recipient POSTs have three top-level fields: `type`, `data`, and `metadata`.
+The envelope is the same for local and remote callback URLs; no format option is needed.
 `type` is `new_event`. `data` contains `sender` (the hook's provider name at
 receipt) and `metadata` (the complete retained event). For example:
 
 ```json
 {
   "type": "new_event",
+  "metadata": {
+    "app": "tos>hook",
+    "event_id": "00000000-0000-4000-8000-000000000001",
+    "delivery_sequence": 42
+  },
   "data": {
     "sender": "stripe",
     "metadata": {
@@ -66,13 +72,15 @@ receipt) and `metadata` (the complete retained event). For example:
 }
 ```
 
-This is also the WebSocket event delivery shape, including replays. Event ID,
-Silicon ID, sequence, summary, timestamp and original request are all nested
-under `data.metadata`; none are extra top-level fields. Non-UTF-8 request bytes
+The backend WebSocket stream retains its `type` and `data` envelope, including
+replays. The relay adds root `metadata` to every HTTP callback. Complete event
+details remain under `data.metadata`. Non-UTF-8 request bytes
 remain available in `data.metadata.request.body_base64`.
 Headers `silicon-hook-event-id` and `silicon-hook-delivery-sequence` make
 HTTP deduplication convenient. Consumers of the previous `type: event` shape
 must switch to `type: new_event` and read event details from `data.metadata`.
+Consumers that enforce a closed two-field HTTP schema must allow the new root
+`metadata` field before upgrading to 0.3.2. Existing callback URLs need no reconfiguration.
 
 A 2xx status acknowledges receipt. Redirects are not followed; 3xx, 4xx, 5xx,
 connection failures and the 20-second timeout all retry, with exponential delays
@@ -137,6 +145,12 @@ channel. The separate control secret authenticates `/health` and
 `POST /control/stop`. No network destination beyond loopback can be bound by
 this server API.
 
-## Native Silicon recipients
+## Callback destinations
 
-For a recipient on a reserved `*.localhost` host, the relay resolves the host directly to IPv4 loopback while preserving its HTTP Host header. It includes the root `metadata` object required by Silicon, containing `app: "tos>hook"`, the retained event ID, and delivery sequence. `type: "new_event"` and the complete `data` remain unchanged. Generic recipients and the backend WebSocket contract retain their two-field envelope. Silicon's successful HTTP response acknowledges receipt through the normal 2xx rule.
+Use any valid HTTPS callback URL, or HTTP on loopback. For a reserved
+`*.localhost` host, the relay resolves directly to IPv4 loopback while preserving
+its HTTP Host header. This routing does not change the event envelope: every
+recipient gets the root metadata required by Silicon, along with `type` and
+complete `data`. Silicon and other receivers acknowledge through the normal
+2xx rule. Receivers must implement this Hook event contract; a URL alone does
+not adapt delivery to a third-party API's custom payload schema.

@@ -32,7 +32,7 @@ impl Recipient {
         &self.0
     }
 
-    fn silicon_host(&self) -> Option<&str> {
+    fn loopback_host(&self) -> Option<&str> {
         self.0
             .host_str()
             .filter(|host| host.ends_with(".localhost"))
@@ -78,7 +78,7 @@ impl Relay {
             .timeout(Duration::from_secs(20))
             .redirect(reqwest::redirect::Policy::none())
             .no_proxy();
-        if let Some(host) = self.recipient.silicon_host() {
+        if let Some(host) = self.recipient.loopback_host() {
             http = http.resolve(
                 host,
                 std::net::SocketAddr::from((
@@ -190,9 +190,8 @@ impl Relay {
             },
         };
         let mut frame = serde_json::to_value(frame)?;
-        if self.recipient.silicon_host().is_some() {
-            frame["metadata"] = serde_json::json!({"app":"tos>hook","event_id":event_id,"delivery_sequence":delivery_sequence});
-        }
+        // Every callback uses the same envelope, regardless of its hostname.
+        frame["metadata"] = serde_json::json!({"app":"tos>hook","event_id":event_id,"delivery_sequence":delivery_sequence});
         let mut retry = 1u64;
         loop {
             let response = http
@@ -233,6 +232,7 @@ mod recipient_tests {
     #[test]
     fn reserved_local_hosts_do_not_relax_other_url_checks() {
         assert!(Recipient::new("http://ceo.org.localhost/events").is_ok());
+        assert!(Recipient::new("https://example.com/events").is_ok());
         for url in [
             "http://ceo.localhost.evil.test/events",
             "http://example.com/events",
