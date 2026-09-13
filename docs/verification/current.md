@@ -31,3 +31,5 @@ A pre-upgrade database/configuration backup is stored in the private release buc
 The bug-report workflow is published with its Postmark server secret and the existing verified `iam@teamofsilicons.com` sender configured through `POSTMARK_FROM_EMAIL`. No real bug report or email was submitted during deployment checks. See [deployment instructions](../deployment.md).
 
 A fresh hosted IAM login and organization selection passed after configuring Hook’s required read permissions. The scoped directory regression covers pagination and exclusion of invisible targets. Automated IAM, isolation, WebSocket and delivery checks passed. No customer webhook was sent during deployment verification.
+
+The upstream IAM directory filter was corrected and deployed as `15e98aec5d261e27908650fa2ede2bf5cc428634`; the same scoped request changed from HTTP 500 to HTTP 200. The authorized production directory is currently empty, and nonexistent Silicon IDs remain rejected. Browser diagnostics now forward the selected organization for unscoped IAM sessions; this is covered by the gateway regression test.

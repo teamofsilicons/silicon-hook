@@ -118,6 +118,7 @@ export function allowed(path: string, method: string): boolean {
   return new RegExp(base + "deliveries/ack$").test(p) && method === "POST";
 }
 async function bounded(response: Response) {
+  if (!response.body) return Buffer.alloc(0);
   const chunks: Uint8Array[] = [];
   let size = 0;
   for await (const chunk of response.body as unknown as AsyncIterable<Uint8Array>) {
@@ -411,7 +412,7 @@ export function gateway(cfg: Config) {
         for (const saved of Object.values(session.planes)) saved.telemetry = req.headers["x-hook-telemetry"] !== "off";
         if (url.pathname === "/console/telemetry" && req.method === "POST") {
           if (plane?.telemetry !== false && plane?.tokens) {
-            await upstream("/api/v1/telemetry", "POST", plane, plane.tokens.org_id || "", body);
+            await upstream("/api/v1/telemetry", "POST", plane, String(req.headers["x-org-id"] || plane.tokens.org_id || ""), body);
           }
           return { accepted: true };
         }

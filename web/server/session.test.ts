@@ -198,6 +198,11 @@ test("organization discovery uses the selected private session and IAM grant pag
       calls++;
       const url = new URL(input);
       const headers = init.headers as Record<string, string>;
+      if (url.pathname === "/api/v1/telemetry") {
+        assert.equal(headers["x-org-id"], "first");
+        assert.equal(headers.authorization, "Bearer private-production-token");
+        return new Response(null, { status: 202 });
+      }
       if (url.pathname === "/api/v1/testing-session") {
         assert.equal(headers["x-hook-telemetry"], "off");
         assert.equal(headers["x-hook-test-key"], "sandbox-root");
@@ -229,18 +234,20 @@ test("organization discovery uses the selected private session and IAM grant pag
     server = createServer(app.handle);
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   const port = (server.address() as { port: number }).port;
-  const call = (plane = "production", cookie = true) =>
+  const call = (plane = "production", cookie = true, telemetry = false) =>
     new Promise<{ status: number; data: any }>((resolve, reject) => {
       const req = httpRequest(
         {
           host: "127.0.0.1",
           port,
-          path: "/console/organizations?plane=" + plane,
+          path: (telemetry ? "/console/telemetry?plane=" : "/console/organizations?plane=") + plane,
+          method: telemetry ? "POST" : "GET",
           headers: {
             host: "hook.example",
             origin: cfg.origin,
             "x-hook-frontend": "1",
-            "x-hook-telemetry": "off",
+            "x-hook-telemetry": telemetry ? "on" : "off",
+            ...(telemetry ? { "x-org-id": "first", "content-type": "application/json" } : {}),
             ...(cookie ? { cookie: "__Host-hook-session=" + id } : {}),
           },
         },
@@ -253,7 +260,7 @@ test("organization discovery uses the selected private session and IAM grant pag
         },
       );
       req.on("error", reject);
-      req.end();
+      req.end(telemetry ? "{}" : undefined);
     });
   try {
     assert.equal((await call("production", false)).status, 401);
@@ -271,6 +278,8 @@ test("organization discovery uses the selected private session and IAM grant pag
       items: [{ id: "sandbox-org", name: "sandbox-org" }],
     });
     assert.equal(calls, 3);
+    assert.equal((await call("production", true, true)).status, 200);
+    assert.equal(calls, 4);
   } finally {
     fetchMock.mock.restore();
     await new Promise<void>((resolve) => server.close(() => resolve()));

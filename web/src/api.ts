@@ -214,6 +214,6 @@ export async function track(ctx: Context, step: "page_view" | "interaction" | "e
     await request("/console/telemetry?plane=" + encodeURIComponent(ctx.plane), "POST", {
       event_id: crypto.randomUUID(), trace_id: crypto.randomUUID(), source: "web", step,
       outcome: step === "error" ? "failed" : "succeeded", operation, version: "0.5.0", progress: 1,
-    });
+    }, undefined, ctx.org);
   } catch { /* Diagnostics must never interrupt the product. */ }
 }
