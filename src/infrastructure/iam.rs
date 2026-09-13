@@ -517,6 +517,15 @@ impl IamClient {
             };
             (actor, role)
         };
+        if actor.kind() == ActorKind::Carbon && request.token.expose_secret().starts_with("oat_") {
+            let visible = application_visible_targets(&bearer, request).await?;
+            return Ok(AuthorizationContext::new(
+                request.org_id.clone(),
+                actor,
+                role,
+                visible,
+            ));
+        }
         let mut visible = Vec::new();
         for target in &request.targets {
             validate_target(target, &request.org_id)?;
@@ -650,6 +659,54 @@ impl IamClient {
     fn app_id(&self) -> Result<&str, IamError> {
         self.inner.app_id.as_deref().ok_or(IamError::NotConfigured)
     }
+}
+
+async fn application_visible_targets(
+    bearer: &SdkClient,
+    request: &AuthorizationRequest,
+) -> Result<Vec<SiliconId>, IamError> {
+    for target in &request.targets {
+        validate_target(target, &request.org_id)?;
+    }
+    if request.targets.is_empty() {
+        return Ok(Vec::new());
+    }
+    // IAM's scoped directory contains only active, visible memberships. Its
+    // projection avoids requiring unrelated profile fields from Silicon::get.
+    let mut paging = silicon_iam_client::Paging::new().limit(100);
+    let mut cursors = std::collections::HashSet::new();
+    let mut visible = Vec::new();
+    for _ in 0..1000 {
+        let page = bearer
+            .members()
+            .directory(request.org_id.as_str(), Some("id,org"), &paging)
+            .await
+            .map_err(sdk_error)?;
+        for entry in page.items {
+            if entry
+                .org
+                .as_ref()
+                .is_none_or(|org| org.id != request.org_id.as_str())
+            {
+                return Err(IamError::InvalidResponse);
+            }
+            let id = entry.id.ok_or(IamError::InvalidResponse)?;
+            if let Some(target) = request.targets.iter().find(|target| target.as_str() == id)
+                && !visible.contains(target)
+            {
+                visible.push(target.clone());
+            }
+        }
+        if !page.page.has_more || visible.len() == request.targets.len() {
+            return Ok(visible);
+        }
+        let cursor = page.page.next_cursor.ok_or(IamError::InvalidResponse)?;
+        if !cursors.insert(cursor.clone()) {
+            return Err(IamError::InvalidResponse);
+        }
+        paging = paging.after(cursor);
+    }
+    Err(IamError::InvalidResponse)
 }
 
 fn mutation(key: &str) -> Result<Mutation, IamError> {
@@ -1016,14 +1073,23 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/api/v1/organizations/tos/silicons/cos:tos"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(silicon_profile()))
+            .and(path("/api/v1/organizations/tos/directory/members"))
+            .and(query_param("fields", "id,org"))
+            .and(query_param("limit", "100"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [], "page": {"has_more": true, "next_cursor": "next-page"}
+            })))
             .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/api/v1/organizations/tos/silicons/hidden:tos"))
-            .respond_with(iam_failure(404))
+            .and(path("/api/v1/organizations/tos/directory/members"))
+            .and(query_param("cursor", "next-page"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
+                "items": [{"id": "cos:tos", "org": {"id": "tos", "name": "Team of Silicons"}}],
+                "page": {"has_more": false, "next_cursor": null}
+            })))
+            .with_priority(1)
             .expect(1)
             .mount(&server)
             .await;

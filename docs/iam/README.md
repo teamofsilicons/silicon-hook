@@ -45,16 +45,11 @@ An IAM failure denies management actions; it does not silently fall back to a
 local identity. Development-only local authorization requires explicit
 non-production configuration and cannot be enabled in production.
 
-## Per-Silicon authority: integration gate
+## Per-Silicon authority
 
-The current published application-token authorization snapshot discloses the
-actor's organization role, but does not provide an application-authorized
-lookup for a Carbon's target Silicon visibility. This is a tracked integration
-gap: Carbon access and authoritative target-Silicon existence must
-be resolved before this implementation is considered complete. Do not treat
-an organization suffix alone as proof that a Silicon exists. Hook requires an
-authoritative visibility result for every Carbon, including owners and admins;
-it denies target access when IAM cannot supply that result.
+Hook's application registration declares `self.identity.read`, `self.profile.read`, `self.organizations.read`, `self.membership.read`, `self.silicon_access.read`, and the reviewed `directory.silicons.read` permission. Users consent to the selected organizations during IAM login. Existing sessions need to sign in again after permission changes.
+
+For Carbon application tokens, Hook pages through the SDK's scoped directory requesting only `id,org`. IAM returns active, visible memberships and enforces application consent. Hook validates each organization and exact target ID; missing targets, malformed projections, repeated cursors and unavailable IAM responses fail closed. This projection works with IAM's scoped responses without requiring unrelated Silicon profile fields. Native IAM credentials retain their direct Silicon lookup.
 
 The first-party Silicon webhook configuration API also needs its documented
 credential/step-up authority. An application token alone must not be assumed
