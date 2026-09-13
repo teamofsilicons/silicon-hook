@@ -1,0 +1,545 @@
+[
+  {
+    "slug": "overview",
+    "name": "Hook Overview",
+    "subtitle": "Traffic signals, failures and telemetry freshness",
+    "queries": {
+      "totals": "SELECT toInt32(count()) AS events,toInt32(uniqExact(source)) AS sources,toInt32(countIf(outcome='failed')) AS failures,quantileExact(0.95)(lag_ms) AS lag_ms FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) ",
+      "sources": "SELECT source,toInt32(count()) AS events,toInt32(countIf(outcome='failed')) AS failures,toFloat64(max(at_ms)) AS last_seen_ms,quantileExact(0.95)(lag_ms) AS lag_ms FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) GROUP BY source ORDER BY events DESC",
+      "trend": "SELECT toFloat64(intDiv(toInt64(at_ms),3600000)*3600000) AS at_ms,toInt32(count()) AS value FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) GROUP BY at_ms ORDER BY at_ms",
+      "worker": "SELECT event,version,outcome,toInt32(count()) AS events,avg(latency_ms) AS avg_ms,toInt32(max(progress)) AS failed_tasks,toFloat64(max(at_ms)) AS last_seen_ms FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) WHERE source='worker' GROUP BY event,version,outcome ORDER BY last_seen_ms DESC LIMIT 20",
+      "issues": "SELECT at_ms,source,event,outcome,operation,route,status,latency_ms,request_id FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) WHERE outcome='failed' ORDER BY at_ms DESC LIMIT 35"
+    },
+    "cards": [
+      {
+        "label": "Recorded events",
+        "key": "events",
+        "detail": "Unique production event IDs",
+        "tone": "neutral",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "Reporting sources",
+        "key": "sources",
+        "detail": "Observed in the last 24 hours",
+        "tone": "neutral",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "Failed events",
+        "key": "failures",
+        "detail": "Includes expected request refusals",
+        "tone": "danger",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "P95 arrival delay",
+        "key": "lag_ms",
+        "detail": "Event creation to first station receipt",
+        "tone": "neutral",
+        "unit": "ms",
+        "group": "totals"
+      }
+    ],
+    "tables": [
+      {
+        "rows_key": "sources",
+        "id": "sources",
+        "title": "Source freshness",
+        "note": "Last seen is telemetry freshness, not service availability.",
+        "columns": [
+          {
+            "key": "source",
+            "label": "Source",
+            "kind": "text"
+          },
+          {
+            "key": "events",
+            "label": "Events",
+            "kind": "number"
+          },
+          {
+            "key": "failures",
+            "label": "Failures",
+            "kind": "number"
+          },
+          {
+            "key": "lag_ms",
+            "label": "P95 arrival",
+            "kind": "ms"
+          },
+          {
+            "key": "last_seen_ms",
+            "label": "Last seen",
+            "kind": "time"
+          }
+        ]
+      },
+      {
+        "rows_key": "worker",
+        "id": "worker",
+        "title": "Worker maintenance",
+        "note": "Signals are maintenance runs, not webhook deliveries. Failed tasks is the maximum per run.",
+        "columns": [
+          {
+            "key": "event",
+            "label": "Step",
+            "kind": "text"
+          },
+          {
+            "key": "version",
+            "label": "Version",
+            "kind": "text"
+          },
+          {
+            "key": "outcome",
+            "label": "Outcome",
+            "kind": "text"
+          },
+          {
+            "key": "events",
+            "label": "Runs",
+            "kind": "number"
+          },
+          {
+            "key": "avg_ms",
+            "label": "Average",
+            "kind": "ms"
+          },
+          {
+            "key": "failed_tasks",
+            "label": "Max failed tasks",
+            "kind": "number"
+          },
+          {
+            "key": "last_seen_ms",
+            "label": "Last seen",
+            "kind": "time"
+          }
+        ]
+      },
+      {
+        "rows_key": "issues",
+        "id": "issues",
+        "title": "Recent failed events",
+        "note": "Latest 35 failures. A failure event is not necessarily a unique incident.",
+        "columns": [
+          {
+            "key": "at_ms",
+            "label": "Recorded",
+            "kind": "time"
+          },
+          {
+            "key": "source",
+            "label": "Source",
+            "kind": "text"
+          },
+          {
+            "key": "event",
+            "label": "Step",
+            "kind": "text"
+          },
+          {
+            "key": "outcome",
+            "label": "Outcome",
+            "kind": "text"
+          },
+          {
+            "key": "operation",
+            "label": "Operation",
+            "kind": "text"
+          },
+          {
+            "key": "status",
+            "label": "Status",
+            "kind": "status"
+          },
+          {
+            "key": "latency_ms",
+            "label": "Duration",
+            "kind": "ms"
+          },
+          {
+            "key": "request_id",
+            "label": "Trace ID",
+            "kind": "trace"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "requests",
+    "name": "Hook Requests",
+    "subtitle": "Application traffic, response codes and route latency",
+    "queries": {
+      "totals": "SELECT toInt32(count()) AS requests,toInt32(countIf(status>=400 AND status<500)) AS client_errors,toInt32(countIf(status>=500)) AS server_errors,quantileExact(0.95)(latency_ms) AS p95_ms FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) WHERE source = 'backend' AND event = 'request' AND status >= 100 AND route NOT IN ('/healthz','/readyz','/api/version','/api/v1/version')",
+      "routes": "SELECT method,route,toInt32(count()) AS requests,toInt32(countIf(status>=400 AND status<500)) AS client_errors,toInt32(countIf(status>=500)) AS server_errors,avg(latency_ms) AS avg_ms,quantileExact(0.95)(latency_ms) AS p95_ms FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) WHERE source = 'backend' AND event = 'request' AND status >= 100 AND route NOT IN ('/healthz','/readyz','/api/version','/api/v1/version') GROUP BY method,route ORDER BY requests DESC LIMIT 45",
+      "recent": "SELECT at_ms,method,route,status,latency_ms,request_id FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) WHERE source = 'backend' AND event = 'request' AND status >= 100 AND route NOT IN ('/healthz','/readyz','/api/version','/api/v1/version') ORDER BY at_ms DESC LIMIT 40"
+    },
+    "cards": [
+      {
+        "label": "App requests",
+        "key": "requests",
+        "detail": "Health, readiness and version probes excluded",
+        "tone": "neutral",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "Client errors \u00b7 4xx",
+        "key": "client_errors",
+        "detail": "Includes expected authorization refusals",
+        "tone": "warn",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "Server errors \u00b7 5xx",
+        "key": "server_errors",
+        "detail": "Completed backend request failures",
+        "tone": "danger",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "P95 latency",
+        "key": "p95_ms",
+        "detail": "Across all included requests",
+        "tone": "neutral",
+        "unit": "ms",
+        "group": "totals"
+      }
+    ],
+    "tables": [
+      {
+        "rows_key": "routes",
+        "id": "routes",
+        "title": "Route performance",
+        "note": "Top 45 routes. Nullable latency remains unknown when absent.",
+        "columns": [
+          {
+            "key": "method",
+            "label": "Method",
+            "kind": "text"
+          },
+          {
+            "key": "route",
+            "label": "Route",
+            "kind": "text"
+          },
+          {
+            "key": "requests",
+            "label": "Requests",
+            "kind": "number"
+          },
+          {
+            "key": "client_errors",
+            "label": "4xx",
+            "kind": "number"
+          },
+          {
+            "key": "server_errors",
+            "label": "5xx",
+            "kind": "number"
+          },
+          {
+            "key": "avg_ms",
+            "label": "Average",
+            "kind": "ms"
+          },
+          {
+            "key": "p95_ms",
+            "label": "P95",
+            "kind": "ms"
+          }
+        ]
+      },
+      {
+        "rows_key": "recent",
+        "id": "recent",
+        "title": "Recent requests",
+        "note": "Latest 40 completed requests. Route templates contain no private URL values.",
+        "columns": [
+          {
+            "key": "at_ms",
+            "label": "Recorded",
+            "kind": "time"
+          },
+          {
+            "key": "method",
+            "label": "Method",
+            "kind": "text"
+          },
+          {
+            "key": "route",
+            "label": "Route",
+            "kind": "text"
+          },
+          {
+            "key": "status",
+            "label": "Status",
+            "kind": "status"
+          },
+          {
+            "key": "latency_ms",
+            "label": "Latency",
+            "kind": "ms"
+          },
+          {
+            "key": "request_id",
+            "label": "Trace ID",
+            "kind": "trace"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "deliveries",
+    "name": "Hook Deliveries",
+    "subtitle": "Client delivery attempts, retries and acknowledgements",
+    "queries": {
+      "totals": "SELECT toInt32(countIf(event='deliver' AND outcome='succeeded')) AS delivered,toInt32(countIf(event='deliver' AND outcome='failed')) AS failed,toInt32(countIf(outcome='retrying')) AS retries,toInt32(countIf(event='ack' AND outcome='succeeded')) AS acknowledged FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) WHERE source IN ('daemon','client') AND event IN ('connect','subscribe','deliver','ack','refresh')",
+      "activity": "SELECT source,event,outcome,toInt32(count()) AS events,avg(latency_ms) AS avg_ms,toFloat64(max(at_ms)) AS last_seen_ms FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) WHERE source IN ('daemon','client') AND event IN ('connect','subscribe','deliver','ack','refresh') GROUP BY source,event,outcome ORDER BY events DESC LIMIT 45",
+      "recent": "SELECT at_ms,source,event,outcome,operation,route,status,latency_ms,request_id FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) WHERE source IN ('daemon','client') AND event IN ('connect','subscribe','deliver','ack','refresh') ORDER BY at_ms DESC LIMIT 40"
+    },
+    "cards": [
+      {
+        "label": "Successful attempts",
+        "key": "delivered",
+        "detail": "Client-reported deliver succeeded",
+        "tone": "neutral",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "Failed attempts",
+        "key": "failed",
+        "detail": "Client-reported deliver failed",
+        "tone": "danger",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "Retry signals",
+        "key": "retries",
+        "detail": "Across delivery lifecycle steps",
+        "tone": "warn",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "Acknowledgements",
+        "key": "acknowledged",
+        "detail": "Client-reported ack succeeded",
+        "tone": "neutral",
+        "unit": "",
+        "group": "totals"
+      }
+    ],
+    "tables": [
+      {
+        "rows_key": "activity",
+        "id": "activity",
+        "title": "Delivery lifecycle",
+        "note": "Attempts and signals are not unique webhook totals. Data appears when updated clients send telemetry.",
+        "columns": [
+          {
+            "key": "source",
+            "label": "Source",
+            "kind": "text"
+          },
+          {
+            "key": "event",
+            "label": "Step",
+            "kind": "text"
+          },
+          {
+            "key": "outcome",
+            "label": "Outcome",
+            "kind": "text"
+          },
+          {
+            "key": "events",
+            "label": "Signals",
+            "kind": "number"
+          },
+          {
+            "key": "avg_ms",
+            "label": "Average",
+            "kind": "ms"
+          },
+          {
+            "key": "last_seen_ms",
+            "label": "Last seen",
+            "kind": "time"
+          }
+        ]
+      },
+      {
+        "rows_key": "recent",
+        "id": "recent",
+        "title": "Recent delivery activity",
+        "note": "No recorded activity means no telemetry in this range, not proof that no deliveries occurred.",
+        "columns": [
+          {
+            "key": "at_ms",
+            "label": "Recorded",
+            "kind": "time"
+          },
+          {
+            "key": "source",
+            "label": "Source",
+            "kind": "text"
+          },
+          {
+            "key": "event",
+            "label": "Step",
+            "kind": "text"
+          },
+          {
+            "key": "outcome",
+            "label": "Outcome",
+            "kind": "text"
+          },
+          {
+            "key": "operation",
+            "label": "Operation",
+            "kind": "text"
+          },
+          {
+            "key": "status",
+            "label": "Status",
+            "kind": "status"
+          },
+          {
+            "key": "latency_ms",
+            "label": "Duration",
+            "kind": "ms"
+          },
+          {
+            "key": "request_id",
+            "label": "Trace ID",
+            "kind": "trace"
+          }
+        ]
+      }
+    ]
+  },
+  {
+    "slug": "clients",
+    "name": "Hook Web & CLI",
+    "subtitle": "Browser pages, command outcomes and client versions",
+    "queries": {
+      "totals": "SELECT toInt32(countIf(source='web' AND event='page_view')) AS views,toInt32(countIf(source='cli' AND event='command' AND outcome IN ('succeeded','failed'))) AS commands,toInt32(countIf(source IN ('cli','daemon','client') AND outcome='failed')) AS failures,toInt32(countIf(source='web' AND event='error')) AS errors FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) ",
+      "pages": "SELECT operation,toInt32(count()) AS views,toFloat64(max(at_ms)) AS last_seen_ms FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) WHERE source='web' AND event='page_view' GROUP BY operation ORDER BY views DESC LIMIT 20",
+      "activity": "SELECT source,event,operation,outcome,version,toInt32(count()) AS events,toFloat64(max(at_ms)) AS last_seen_ms FROM (SELECT record.event.event_id::String AS event_id, any(record.recorded_at_ms::Float64) AS at_ms, any(record.event.source::String) AS source, any(record.event.step::String) AS event, any(record.event.outcome::String) AS outcome, any(record.event.operation::String) AS operation, any(record.event.route::String) AS route, any(record.event.method::String) AS method, any(record.event.status::Nullable(Int32)) AS status, any(record.event.duration_ms::Nullable(Float64)) AS latency_ms, any(record.event.progress::Nullable(Int32)) AS progress, any(record.event.version::String) AS version, any(record.event.trace_id::String) AS request_id, greatest(0., toFloat64(min(registered_ts_ms)) - at_ms) AS lag_ms FROM siliconhook WHERE record.service::String = 'silicon-hook' AND record.environment_id::String = '00000000-0000-0000-0000-000000000000' AND record.recorded_at_ms::Float64 >= toUnixTimestamp64Milli(now64()) - 86400000 AND record.event.event_id::String != '' AND record.event.step::String != 'verification' GROUP BY event_id) WHERE source IN ('web','cli','daemon','client') GROUP BY source,event,operation,outcome,version ORDER BY events DESC LIMIT 60"
+    },
+    "cards": [
+      {
+        "label": "Page views",
+        "key": "views",
+        "detail": "Browser-reported views, not unique visitors",
+        "tone": "neutral",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "CLI commands",
+        "key": "commands",
+        "detail": "Succeeded and failed completions",
+        "tone": "neutral",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "Native failures",
+        "key": "failures",
+        "detail": "CLI, daemon and client signals",
+        "tone": "danger",
+        "unit": "",
+        "group": "totals"
+      },
+      {
+        "label": "Browser errors",
+        "key": "errors",
+        "detail": "Reported error events",
+        "tone": "danger",
+        "unit": "",
+        "group": "totals"
+      }
+    ],
+    "tables": [
+      {
+        "rows_key": "pages",
+        "id": "pages",
+        "title": "Browser pages",
+        "note": "Only allowlisted page names are collected.",
+        "columns": [
+          {
+            "key": "operation",
+            "label": "Page",
+            "kind": "text"
+          },
+          {
+            "key": "views",
+            "label": "Views",
+            "kind": "number"
+          },
+          {
+            "key": "last_seen_ms",
+            "label": "Last seen",
+            "kind": "time"
+          }
+        ]
+      },
+      {
+        "rows_key": "activity",
+        "id": "activity",
+        "title": "Client activity",
+        "note": "Top 60 source, step, operation, outcome and version groups. No command arguments are collected.",
+        "columns": [
+          {
+            "key": "source",
+            "label": "Source",
+            "kind": "text"
+          },
+          {
+            "key": "event",
+            "label": "Step",
+            "kind": "text"
+          },
+          {
+            "key": "operation",
+            "label": "Operation",
+            "kind": "text"
+          },
+          {
+            "key": "outcome",
+            "label": "Outcome",
+            "kind": "text"
+          },
+          {
+            "key": "version",
+            "label": "Version",
+            "kind": "text"
+          },
+          {
+            "key": "events",
+            "label": "Events",
+            "kind": "number"
+          },
+          {
+            "key": "last_seen_ms",
+            "label": "Last seen",
+            "kind": "time"
+          }
+        ]
+      }
+    ]
+  }
+]
