@@ -10,6 +10,9 @@ import {
 } from "solid-js";
 import {
   api,
+  telemetryEnabled,
+  setTelemetry,
+  track,
   request,
   scoped,
   date,
@@ -146,6 +149,7 @@ export default function App() {
         });
     }
   });
+  createEffect(() => { if (ready()) void track(ctx(), "page_view", route()); });
   const needsTarget = () =>
     ["hooks", "events", "blocked", "deliveries", "live"].includes(route());
   return (
@@ -279,7 +283,8 @@ export default function App() {
               value={ctx().plane === "production" ? "Production" : "Test"}
             />
             <Show when={ctx().plane !== "production"}>
-              <span class="small muted truncate">{current()?.name}</span>
+              <span class="small muted truncate">Test environment: {current()?.name} · {current()?.actor?.id || "Not signed in"}</span>
+              <Button onClick={() => context({ plane: "production", org: "", silicon: "" })}>Exit testing mode</Button>
             </Show>
           </div>
           <Button onClick={() => setDialog("login")}>
@@ -316,10 +321,11 @@ export default function App() {
                     </Empty>
                     <Show when={!ready()}>
                       <div class="actions centered">
+                        <Button onClick={() => setDialog("attach")}>Use test app_secret</Button>
                         <Button primary onClick={() => setDialog("login")}>
                           {ctx().plane === "production"
                             ? "Continue with IAM"
-                            : "Sign in with IAM test token"}
+                            : "Sign in to sandbox"}
                         </Button>
                       </div>
                     </Show>
@@ -492,7 +498,7 @@ function TokenLogin(p: {
           Use an IAM short-lived token issued for <code>tos&gt;hook</code>.
         </p>
         <div class="notice subtle">
-          Signing in to <strong>{p.name}</strong>. Use a token from the IAM test
+          Signing in to <strong>{p.name}</strong>. Use a test SLT or an existing Carbon/Silicon ID from the IAM test
           world linked to this sandbox.
         </div>
         <Field label="Short-lived token">
@@ -555,7 +561,7 @@ function Attach(p: { close: () => void; done: (id: string) => Promise<void> }) {
           setError(undefined);
           try {
             const r = await request<{ id: string }>("/console/attach", "POST", {
-              key: key(),
+              app_secret: key(),
             });
             setKey("");
             await p.done(r.id);
@@ -567,25 +573,24 @@ function Attach(p: { close: () => void; done: (id: string) => Promise<void> }) {
         }}
       >
         <p class="muted">
-          Enter the Hook root key to open an existing sandbox. You’ll sign in
-          separately with an IAM test token.
+          Enter the IAM test application app_secret to select its sandbox. Then sign in with a test SLT or an existing test identity ID.
         </p>
         <Field
-          label="Hook test key"
-          hint="The 32-character Hook key, not the IAM testing key."
+          label="IAM test app_secret"
+          hint="Use the application secret from your IAM sandbox. No root key or manual pairing is needed."
         >
           <input
             autofocus
             required
             type="password"
             autocomplete="off"
-            minLength={32}
-            maxLength={32}
+            minLength={47}
+            maxLength={47}
             value={key()}
             onInput={(e) => setKey(e.currentTarget.value)}
           />
         </Field>
-        <CredentialFile label="Or load a Hook test key file" receive={setKey} />
+        <CredentialFile label="Or load an app_secret file" receive={setKey} />
         <ErrorBox error={error()} />
         <div class="actions end">
           <Button disabled={busy()} onClick={p.close}>
@@ -820,10 +825,12 @@ function Connections(p: {
       },
     });
   }
+  const [telemetry, changeTelemetry] = createSignal(telemetryEnabled());
   const command = () =>
     `hook ${p.ctx.plane !== "production" ? "--test " + p.ctx.plane + " " : ""}login --slt-file ./iam-token --webhook-url http://127.0.0.1:8080/events`;
   return (
     <>
+      <section class="panel"><h2>Diagnostic telemetry</h2><p>Share operational events to help diagnose Hook. Events exclude credentials, webhook payloads and form contents. This setting applies to this browser.</p><label><input type="checkbox" checked={telemetry()} onChange={(e) => { const enabled = e.currentTarget.checked; setTelemetry(enabled); changeTelemetry(enabled); void request("/console/session"); }} /> Share diagnostic events</label></section>
       <div class="page-heading">
         <div>
           <p class="eyebrow">SETUP</p>
@@ -857,7 +864,7 @@ function Connections(p: {
             <Button primary onClick={p.login}>
               {current()?.authenticated ? "Switch identity" : "Sign in"}
             </Button>
-            <Button onClick={p.attach}>Attach test key</Button>
+            <Button onClick={p.attach}>Select test environment</Button>
             <Show when={current()?.authenticated}>
               <Button onClick={() => action("refresh")}>Refresh session</Button>
               <Button onClick={() => action("logout")}>Sign out</Button>
@@ -906,7 +913,7 @@ function Connections(p: {
             <p class="small muted">
               First attach the sandbox with{" "}
               <code>
-                hook env attach {p.ctx.plane} --key-file ./hook-test-key
+                hook env use --app-secret-file ./hook-test-app-secret
               </code>
               .
             </p>

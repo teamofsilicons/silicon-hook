@@ -1,5 +1,6 @@
 //! HTTP API composition root: management, ingress, history, and realtime.
 
+mod contracts;
 mod dto;
 mod environments;
 mod extractors;
@@ -7,6 +8,7 @@ mod handlers;
 mod middleware;
 mod routes;
 mod state;
+mod telemetry_events;
 mod version;
 mod ws;
 

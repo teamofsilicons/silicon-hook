@@ -33,7 +33,52 @@ pub(super) struct SessionAuthority {
 
 /// Runs one already-authorized WebSocket until disconnect or heartbeat timeout.
 pub(super) async fn serve_socket(
-    mut socket: WebSocket,
+    socket: WebSocket,
+    application: HookApplication,
+    wakeups: DeliveryWakeups,
+    settings: RealtimeSettings,
+    streams: Vec<StreamAccess>,
+    authority: SessionAuthority,
+) {
+    serve(
+        SessionSocket::Native(Box::new(socket)),
+        application,
+        wakeups,
+        settings,
+        streams,
+        authority,
+    )
+    .await;
+}
+
+pub(super) enum SessionSocket {
+    Native(Box<WebSocket>),
+    Shared {
+        id: String,
+        incoming: tokio::sync::mpsc::Receiver<Message>,
+        outgoing: tokio::sync::mpsc::Sender<(String, Message)>,
+    },
+}
+impl SessionSocket {
+    async fn next(&mut self) -> Option<Result<Message, axum::Error>> {
+        match self {
+            Self::Native(socket) => socket.next().await,
+            Self::Shared { incoming, .. } => incoming.recv().await.map(Ok),
+        }
+    }
+    async fn send(&mut self, message: Message) -> anyhow::Result<()> {
+        match self {
+            Self::Native(socket) => socket.send(message).await.map_err(Into::into),
+            Self::Shared { id, outgoing, .. } => outgoing
+                .send((id.clone(), message))
+                .await
+                .map_err(Into::into),
+        }
+    }
+}
+
+pub(super) async fn serve(
+    mut socket: SessionSocket,
     application: HookApplication,
     wakeups: DeliveryWakeups,
     settings: RealtimeSettings,
@@ -151,7 +196,7 @@ enum SessionEvent {
 }
 
 impl SessionRuntime {
-    async fn run(&mut self, socket: &mut WebSocket) -> Result<SocketExit, ApplicationError> {
+    async fn run(&mut self, socket: &mut SessionSocket) -> Result<SocketExit, ApplicationError> {
         if let Some(exit) = self.refresh_authority_if_due().await {
             return Ok(exit);
         }
@@ -227,6 +272,18 @@ impl SessionRuntime {
         {
             return None;
         }
+        match sqlx::query_scalar::<_, String>(
+            "SELECT status FROM hook_private.contract_status('v1', true)",
+        )
+        .fetch_one(self.application.store().pool())
+        .await
+        {
+            Ok(status) if status == "sunset" => {
+                return Some(SocketExit::server(4004, "api-version-sunset"));
+            }
+            Err(_) => return Some(SocketExit::server(1013, "contract-unavailable")),
+            _ => {}
+        }
         let context = match self.authority.iam.authorize(&self.authority.request).await {
             Ok(context) => context,
             Err(
@@ -250,7 +307,7 @@ impl SessionRuntime {
         None
     }
 
-    async fn send_ready(&mut self, socket: &mut WebSocket) -> Result<(), ApplicationError> {
+    async fn send_ready(&mut self, socket: &mut SessionSocket) -> Result<(), ApplicationError> {
         let mut acknowledged_through = BTreeMap::new();
         for (silicon_id, stream) in &mut self.streams {
             let cursor = self.application.stream_cursor(&stream.access).await?;
@@ -272,7 +329,7 @@ impl SessionRuntime {
         .await
     }
 
-    async fn send_ping(&mut self, socket: &mut WebSocket) -> Result<(), ApplicationError> {
+    async fn send_ping(&mut self, socket: &mut SessionSocket) -> Result<(), ApplicationError> {
         let ping_id = Uuid::now_v7().to_string();
         if self.outstanding_pings.len() >= MAX_OUTSTANDING_PINGS {
             self.outstanding_pings.pop_front();
@@ -283,7 +340,7 @@ impl SessionRuntime {
 
     async fn deliver_all_pending(
         &mut self,
-        socket: &mut WebSocket,
+        socket: &mut SessionSocket,
     ) -> Result<(), ApplicationError> {
         for silicon_id in self.streams.keys().cloned().collect::<Vec<_>>() {
             self.deliver_pending(socket, &silicon_id).await?;
@@ -295,7 +352,7 @@ impl SessionRuntime {
     /// processing or force the client to buffer the entire retained history.
     async fn deliver_pending(
         &mut self,
-        socket: &mut WebSocket,
+        socket: &mut SessionSocket,
         silicon_id: &SiliconId,
     ) -> Result<(), ApplicationError> {
         let Some(stream) = self.streams.get(silicon_id) else {
@@ -336,7 +393,7 @@ impl SessionRuntime {
 
     async fn handle_message(
         &mut self,
-        socket: &mut WebSocket,
+        socket: &mut SessionSocket,
         message: Message,
     ) -> Result<Option<SocketExit>, ApplicationError> {
         let text = match message {
@@ -407,7 +464,7 @@ impl SessionRuntime {
 
     async fn acknowledge(
         &mut self,
-        socket: &mut WebSocket,
+        socket: &mut SessionSocket,
         silicon_id: &SiliconId,
         through_sequence: i64,
     ) -> Result<(), ApplicationError> {
@@ -450,7 +507,7 @@ impl SessionRuntime {
     }
 }
 
-async fn send_unknown_stream(socket: &mut WebSocket) -> Result<(), ApplicationError> {
+async fn send_unknown_stream(socket: &mut SessionSocket) -> Result<(), ApplicationError> {
     send_frame(
         socket,
         &ServerFrame::recoverable_error(
@@ -461,7 +518,10 @@ async fn send_unknown_stream(socket: &mut WebSocket) -> Result<(), ApplicationEr
     .await
 }
 
-async fn send_frame(socket: &mut WebSocket, frame: &ServerFrame) -> Result<(), ApplicationError> {
+async fn send_frame(
+    socket: &mut SessionSocket,
+    frame: &ServerFrame,
+) -> Result<(), ApplicationError> {
     let encoded = serde_json::to_string(frame).map_err(|error| {
         ApplicationError::Internal(anyhow::Error::new(error).context("encode realtime frame"))
     })?;
@@ -473,5 +533,5 @@ async fn send_frame(socket: &mut WebSocket, frame: &ServerFrame) -> Result<(), A
     .map_err(|error| {
         ApplicationError::Internal(anyhow::Error::new(error).context("realtime write timed out"))
     })?
-    .map_err(|error| ApplicationError::Internal(anyhow::Error::new(error).context("send frame")))
+    .map_err(|error| ApplicationError::Internal(error.context("send frame")))
 }

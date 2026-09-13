@@ -6,7 +6,7 @@ use anyhow::{Context as _, Result};
 use fs2::FileExt as _;
 use serde::{Deserialize, Serialize};
 use silicon_hook_client::{
-    Recipient, Relay, Secret,
+    Recipient, RelayRegistration, Secret,
     local::{self, LocalClient, LocalIdentity},
 };
 use std::{fs::OpenOptions, io::Write as _, process::Stdio, time::Duration};
@@ -215,6 +215,7 @@ async fn manage(
     identities: watch::Sender<Vec<LocalIdentity>>,
     mut shutdown: watch::Receiver<bool>,
 ) -> Result<()> {
+    let (registrations, registration_rx) = watch::channel(Vec::new());
     let mut workers = Workers(Vec::new());
     let mut last = zeroize::Zeroizing::new(String::new());
     let (notices, mut updates) = tokio::sync::mpsc::channel(256);
@@ -228,6 +229,30 @@ async fn manage(
         }
     });
     let _logging = Workers(vec![logging]);
+    let base = {
+        let mut stored = LockedStore::open()?;
+        let profile = stored.profile("default");
+        silicon_hook_client::Client::new(&profile.url)?.with_auto_update(false)
+    };
+    let relay_stop = shutdown.clone();
+    let relay_notices = notices.clone();
+    workers.0.push(tokio::spawn(async move {
+        if let Err(error) = silicon_hook_client::run_shared_relay(
+            base,
+            registration_rx,
+            relay_stop,
+            Some(relay_notices),
+        )
+        .await
+        {
+            eprintln!("Shared relay stopped: {error}");
+        }
+    }));
+    let update_stop = shutdown.clone();
+    workers
+        .0
+        .push(tokio::spawn(crate::updater::daemon_updates(update_stop)));
+
     loop {
         let mut stored = LockedStore::open()?;
         let names: Vec<_> = stored.data.profiles.keys().cloned().collect();
@@ -261,11 +286,9 @@ async fn manage(
             zeroize::Zeroizing::new(serde_json::to_string(&(&stored.data.profiles, validity))?);
         if *current != *last {
             stored.save()?;
-            for task in workers.0.drain(..) {
-                task.abort();
-            }
             let mut selected = Vec::new();
-            for profile in stored.data.profiles.values() {
+            let mut subscribed = Vec::new();
+            for (profile_name, profile) in &stored.data.profiles {
                 for (env, session) in profile
                     .session
                     .iter()
@@ -290,30 +313,51 @@ async fn manage(
                         continue;
                     };
                     let recipient = match Recipient::new(url) {
-                        Ok(recipient) => recipient,
+                        Ok(recipient) => {
+                            let mut recipient = recipient
+                                .with_isi(session.isi.clone())
+                                .with_test_destination(session.test_destination);
+                            if let Some(secret) = &session.webhook_secret {
+                                recipient = recipient.with_secret(secret.clone());
+                            }
+                            recipient
+                        }
                         Err(error) => {
                             eprintln!("Skipping invalid recipient: {error}");
                             continue;
                         }
                     };
-                    for silicon_id in &session.silicons {
-                        let relay = Relay {
-                            silicon_id: silicon_id.clone(),
-                            recipient: recipient.clone(),
-                        };
-                        let (sender, credentials) = watch::channel(client.clone());
-                        let stop = shutdown.clone();
-                        let notices = notices.clone();
-                        workers.0.push(tokio::spawn(async move {
-                            let _keep_credentials_alive = sender;
-                            if let Err(error) = relay.run(credentials, stop, Some(notices)).await {
-                                eprintln!("Relay stopped: {error}");
-                            }
-                        }));
+                    if !session.silicons.is_empty() {
+                        // IDs are opaque transport labels, never credentials or actor authority.
+                        let id = uuid::Uuid::new_v4().simple().to_string();
+                        if client.base_url().as_str()
+                            != stored
+                                .data
+                                .profiles
+                                .get("default")
+                                .map_or("https://backend.hook.teamofsilicons.com/", |p| {
+                                    p.url.as_str()
+                                })
+                                .trim_end_matches('/')
+                                .to_owned()
+                                + "/"
+                        {
+                            eprintln!(
+                                "Profile {profile_name} must use the default daemon's Hook origin"
+                            );
+                            continue;
+                        }
+                        subscribed.push(RelayRegistration {
+                            id,
+                            client,
+                            silicons: session.silicons.clone(),
+                            recipient,
+                        });
                     }
                 }
             }
             identities.send_replace(selected);
+            registrations.send_replace(subscribed);
             last = current;
         }
         drop(stored);

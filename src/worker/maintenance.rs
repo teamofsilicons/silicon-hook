@@ -8,6 +8,18 @@ use crate::{
 };
 
 pub(super) async fn run_maintenance_cycle(store: &PostgresStore, settings: &MaintenanceSettings) {
+    if let Err(error) = sqlx::query("SELECT * FROM hook_private.contract_status('v1', false)")
+        .execute(store.pool())
+        .await
+    {
+        tracing::warn!(%error, "contract lifecycle check failed");
+    }
+    if let Err(error) = crate::telemetry::station::export_pending(store.pool()).await {
+        tracing::debug!(%error, "Space Station export deferred");
+    }
+    // Retain at most thirty days; delete in bounded batches inside this environment.
+    if let Err(error) = sqlx::query("DELETE FROM hook_private.telemetry_events WHERE environment_id = hook_private.environment_id() AND event_id IN (SELECT event_id FROM hook_private.telemetry_events WHERE recorded_at < clock_timestamp() - INTERVAL '30 days' ORDER BY recorded_at LIMIT 1000)").execute(store.pool()).await { tracing::warn!(%error, "telemetry retention failed"); }
+    let started = std::time::Instant::now();
     let batch_size = match u32::try_from(settings.batch_size.get()) {
         Ok(batch_size) => batch_size,
         Err(_error) => {
@@ -48,6 +60,18 @@ pub(super) async fn run_maintenance_cycle(store: &PostgresStore, settings: &Main
         tokio::task::yield_now().await;
     }
 
+    let mut event = crate::telemetry::events::Event::new(
+        "worker",
+        "maintenance",
+        if failed_tasks == 0 {
+            "succeeded"
+        } else {
+            "failed"
+        },
+    );
+    event.duration_ms = Some(u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+    event.progress = Some(u32::from(failed_tasks));
+    crate::telemetry::events::record(store.pool().clone(), event, None);
     log_result(
         result,
         active_tasks.iter().copied().any(std::convert::identity),

@@ -7,7 +7,54 @@ use tokio::sync::{mpsc, watch};
 /// Local event consumer. A successful HTTP status acknowledges an event.
 /// Redirects are never followed. Consumers must deduplicate by event ID.
 #[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct Recipient(url::Url);
+#[serde(try_from = "RecipientWire", into = "RecipientWire")]
+pub struct Recipient {
+    url: url::Url,
+    secret: Option<crate::Secret>,
+    isi: Option<String>,
+    test_destination: bool,
+}
+#[derive(Deserialize, Serialize)]
+#[serde(untagged)]
+enum RecipientWire {
+    Legacy(String),
+    Options {
+        url: String,
+        secret: Option<crate::Secret>,
+        isi: Option<String>,
+        #[serde(default)]
+        test_destination: bool,
+    },
+}
+impl TryFrom<RecipientWire> for Recipient {
+    type Error = Error;
+    fn try_from(value: RecipientWire) -> Result<Self> {
+        match value {
+            RecipientWire::Legacy(url) => Self::new(&url),
+            RecipientWire::Options {
+                url,
+                secret,
+                isi,
+                test_destination,
+            } => Ok(Self {
+                secret,
+                isi,
+                test_destination,
+                ..Self::new(&url)?
+            }),
+        }
+    }
+}
+impl From<Recipient> for RecipientWire {
+    fn from(value: Recipient) -> Self {
+        Self::Options {
+            url: value.url.to_string(),
+            secret: value.secret,
+            isi: value.isi,
+            test_destination: value.test_destination,
+        }
+    }
+}
 impl Recipient {
     pub fn new(value: &str) -> Result<Self> {
         let url = url::Url::parse(value).map_err(|e| Error::Invalid(e.to_string()))?;
@@ -17,10 +64,45 @@ impl Recipient {
         crate::client::validate_origin(&origin).map_err(|_| Error::Invalid(
             "recipient must be HTTPS (or HTTP on loopback), without embedded credentials or a fragment".into(),
         ))?;
-        Ok(Self(url))
+        Ok(Self {
+            url,
+            secret: None,
+            isi: None,
+            test_destination: false,
+        })
+    }
+    /// Sign exact delivery bytes with a local HMAC key; it is never sent to Hook.
+    pub fn with_secret(mut self, secret: crate::Secret) -> Self {
+        self.secret = Some(secret);
+        self
+    }
+    /// Optional internal Silicon metadata; delivery never requires an ISI.
+    pub fn with_isi(mut self, isi: Option<String>) -> Self {
+        self.isi = isi;
+        self
+    }
+    /// Explicitly identify a remote endpoint as a test destination.
+    pub fn with_test_destination(mut self, enabled: bool) -> Self {
+        self.test_destination = enabled;
+        self
+    }
+    /// Refuses production effects from sandbox deliveries unless explicitly marked.
+    pub fn validate_plane(&self, testing: bool) -> Result<()> {
+        let local = self.url.host_str().is_some_and(|host| {
+            host == "localhost"
+                || host.ends_with(".localhost")
+                || host
+                    .trim_matches(['[', ']'])
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|ip| ip.is_loopback())
+        });
+        if testing && !local && !self.test_destination {
+            return Err(Error::Invalid("test delivery requires loopback or an explicitly marked test destination; use --test-destination".into()));
+        }
+        Ok(())
     }
     pub fn url(&self) -> &url::Url {
-        &self.0
+        &self.url
     }
 }
 
@@ -102,6 +184,7 @@ impl Relay {
         http: &reqwest::Client,
         notices: &Option<mpsc::Sender<RelayNotice>>,
     ) -> Result<()> {
+        self.recipient.validate_plane(client.is_testing())?;
         let mut stream = client
             .stream(std::slice::from_ref(&self.silicon_id))
             .await?;
@@ -123,7 +206,7 @@ impl Relay {
                 && let Some(event) = queue.pop_front()
             {
                 current = Some(event.clone());
-                delivery = Some(Box::pin(self.deliver(http, event, notices)));
+                delivery = Some(Box::pin(self.deliver(http, event, notices, client)));
             }
             tokio::select! {
                 frame = stream.next() => match frame? {
@@ -151,29 +234,56 @@ impl Relay {
         }
     }
 
-    async fn deliver(
+    pub(crate) async fn deliver(
         &self,
         http: &reqwest::Client,
         event: Box<Event>,
         notices: &Option<mpsc::Sender<RelayNotice>>,
+        telemetry: &Client,
     ) -> Result<()> {
         let event_id = event.id;
         let delivery_sequence = event.delivery_sequence;
+        let silicon_id = event.silicon_id.clone();
         let frame = ServerFrame::NewEvent {
             data: EventData {
                 sender: event.provider.clone(),
                 metadata: event,
             },
         };
+        let mut payload = serde_json::to_value(&frame)?;
+        payload["metadata"] = serde_json::json!({"event_id":event_id,"delivery_sequence":delivery_sequence,"silicon_id":silicon_id});
+        if let Some(isi) = &self.recipient.isi {
+            payload["metadata"]["isi"] = serde_json::json!(isi);
+        }
+        let body = serde_json::to_vec(&payload)?;
         let mut retry = 1u64;
+        let mut attempts = 0u32;
         loop {
-            let response = http
+            let mut request = http
                 .post(self.recipient.url().clone())
                 .header("silicon-hook-event-id", event_id.to_string())
                 .header("silicon-hook-delivery-sequence", delivery_sequence)
-                .json(&frame)
-                .send()
-                .await;
+                .header("content-type", "application/json")
+                .body(body.clone());
+            if let Some(secret) = &self.recipient.secret {
+                use hmac::Mac as _;
+                let timestamp = time::OffsetDateTime::now_utc().unix_timestamp().to_string();
+                let mut mac =
+                    hmac::Hmac::<sha2::Sha256>::new_from_slice(secret.expose().as_bytes())
+                        .map_err(|_| Error::Invalid("invalid recipient signing key".into()))?;
+                mac.update(timestamp.as_bytes());
+                mac.update(b".");
+                mac.update(&body);
+                request = request.header(
+                    "silicon-hook-signature",
+                    format!(
+                        "t={timestamp},v1={}",
+                        hex::encode(mac.finalize().into_bytes())
+                    ),
+                );
+            }
+            attempts = attempts.saturating_add(1);
+            let response = request.send().await;
             let reason = match response {
                 Ok(response) if response.status().is_success() => return Ok(()),
                 Ok(response) => format!("recipient returned HTTP {}", response.status().as_u16()),
@@ -188,6 +298,16 @@ impl Relay {
                     reason,
                 },
             );
+            telemetry
+                .emit_telemetry(
+                    "client",
+                    "deliver",
+                    "retrying",
+                    "relay",
+                    retry * 1000,
+                    attempts,
+                )
+                .await;
             tokio::time::sleep(Duration::from_secs(retry)).await;
             retry = (retry * 2).min(30);
         }

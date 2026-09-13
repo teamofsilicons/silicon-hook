@@ -193,7 +193,9 @@ struct Inner {
     base_url: Url,
     app_id: Option<String>,
     accept_local_tokens: bool,
-    webhook_verifier: Option<WebhookVerifier>,
+    webhook_verifier: Option<Arc<WebhookVerifier>>,
+    testing_id: Option<uuid::Uuid>,
+    webhook_key_digest: Option<String>,
 }
 
 impl fmt::Debug for IamClient {
@@ -229,10 +231,12 @@ impl IamClient {
     /// Whether this adapter is strictly bound to an IAM test environment.
     #[must_use]
     pub fn is_testing(&self) -> bool {
-        self.inner
-            .sdk
-            .as_ref()
-            .is_some_and(|sdk| sdk.environment().is_some())
+        self.inner.testing_id.is_some()
+            || self
+                .inner
+                .sdk
+                .as_ref()
+                .is_some_and(|sdk| sdk.environment().is_some())
     }
 
     /// Connects and negotiates compatibility using the official SDK.
@@ -259,9 +263,64 @@ impl IamClient {
                 base_url: settings.base_url.clone(),
                 app_id: settings.app_id.clone(),
                 accept_local_tokens: settings.local_auth,
-                webhook_verifier: settings.webhook.as_ref().map(build_verifier).transpose()?,
+                webhook_verifier: settings
+                    .webhook
+                    .as_ref()
+                    .map(build_verifier)
+                    .transpose()?
+                    .map(Arc::new),
+                testing_id: None,
+                webhook_key_digest: None,
             }),
         })
+    }
+
+    /// Validates an application selector online without acquiring root authority.
+    ///
+    /// # Errors
+    /// Rejects production, revoked, foreign application and unavailable sandbox secrets.
+    pub async fn select_testing_application(
+        &self,
+        secret: &str,
+    ) -> Result<(Self, models::ApplicationTestingContext), IamError> {
+        let app_id = self.app_id()?;
+        let sdk = self
+            .sdk()?
+            .with_testing_application(app_id, secret)
+            .map_err(sdk_error)?
+            .with_credential(Credential::application(app_id, secret));
+        let context = sdk
+            .applications()
+            .testing_context()
+            .await
+            .map_err(sdk_error)?;
+        if context.application.app_id != app_id
+            || context
+                .environment
+                .as_ref()
+                .is_none_or(|e| e.environment_id != context.environment_id)
+        {
+            return Err(IamError::InvalidResponse);
+        }
+        let digest = context
+            .webhook_key_digest
+            .clone()
+            .filter(|s| s.len() == 64 && s.bytes().all(|b| b.is_ascii_hexdigit()))
+            .ok_or(IamError::InvalidResponse)?;
+        Ok((
+            Self {
+                inner: Arc::new(Inner {
+                    sdk: Some(sdk),
+                    base_url: self.inner.base_url.clone(),
+                    app_id: Some(app_id.to_owned()),
+                    accept_local_tokens: false,
+                    webhook_verifier: self.inner.webhook_verifier.clone(),
+                    testing_id: Some(context.environment_id),
+                    webhook_key_digest: Some(digest),
+                }),
+            },
+            context,
+        ))
     }
 
     /// Confirms that a root key selects a live IAM test environment.
@@ -313,7 +372,9 @@ impl IamClient {
                 base_url: self.inner.base_url.clone(),
                 app_id: Some(app_id.to_owned()),
                 accept_local_tokens: false,
-                webhook_verifier: Some(build_verifier(webhook)?),
+                webhook_verifier: Some(Arc::new(build_verifier(webhook)?)),
+                testing_id: None,
+                webhook_key_digest: None,
             }),
         })
     }
@@ -375,6 +436,10 @@ impl IamClient {
     ///
     /// # Errors
     /// Rejects inactive sessions, undisclosed roles and cross-organization actors.
+    #[allow(
+        clippy::too_many_lines,
+        reason = "keep the complete fail-closed IAM authorization decision visible together"
+    )]
     pub async fn authorize(
         &self,
         request: &AuthorizationRequest,
@@ -398,18 +463,28 @@ impl IamClient {
                 .ok_or(IamError::InvalidCredential)?;
             if snapshot.audience != self.app_id()?
                 || snapshot.org_id != request.org_id.as_str()
-                || snapshot.testing_environment_id.is_some() != sdk.environment().is_some()
+                || snapshot.testing_environment_id.is_some() != self.is_testing()
+                || self
+                    .inner
+                    .testing_id
+                    .is_some_and(|id| snapshot.testing_environment_id != Some(id))
             {
                 return Err(IamError::InvalidCredential);
             }
-            let kind = match snapshot.actor_type {
+            let kind = match snapshot.actor_type.ok_or(IamError::InvalidResponse)? {
                 models::ApplicationAuthorizationActorType::Carbon => ActorKind::Carbon,
                 models::ApplicationAuthorizationActorType::Silicon => ActorKind::Silicon,
                 models::ApplicationAuthorizationActorType::Other(_) => {
                     return Err(IamError::InvalidResponse);
                 }
             };
-            let actor = actor_from_directory(&snapshot.public_id, &request.org_id)?;
+            let actor = actor_from_directory(
+                snapshot
+                    .public_id
+                    .as_deref()
+                    .ok_or(IamError::InvalidResponse)?,
+                &request.org_id,
+            )?;
             if actor.kind() != kind {
                 return Err(IamError::InvalidResponse);
             }
@@ -549,6 +624,19 @@ impl IamClient {
             verified
                 .verify_testing_environment(key)
                 .map_err(IamError::WebhookRejected)?;
+        } else if let Some(expected) = &self.inner.webhook_key_digest {
+            use subtle::ConstantTimeEq as _;
+            let envelope: serde_json::Value =
+                serde_json::from_slice(body).map_err(|_| IamError::InvalidResponse)?;
+            let key = envelope
+                .get("test")
+                .and_then(|t| t.get("testing_key"))
+                .and_then(serde_json::Value::as_str)
+                .ok_or(IamError::Forbidden)?;
+            let digest = hex::encode(Sha256::digest(key.as_bytes()));
+            if !bool::from(digest.as_bytes().ct_eq(expected.as_bytes())) {
+                return Err(IamError::Forbidden);
+            }
         } else if verified.is_testing() {
             return Err(IamError::Forbidden);
         }
@@ -583,7 +671,8 @@ fn organization_role(value: &str) -> Result<OrganizationRole, IamError> {
 }
 
 fn issued_tokens(tokens: models::OAuthTokenResponse) -> Result<IssuedTokens, IamError> {
-    let kind = match tokens.actor.type_field {
+    let actor = tokens.actor.ok_or(IamError::InvalidResponse)?;
+    let kind = match actor.type_field {
         models::ActorRefType::Carbon => ActorKind::Carbon,
         models::ActorRefType::Silicon => ActorKind::Silicon,
         _ => return Err(IamError::InvalidResponse),
@@ -595,8 +684,7 @@ fn issued_tokens(tokens: models::OAuthTokenResponse) -> Result<IssuedTokens, Iam
             u64::try_from(tokens.expires_in).map_err(|_| IamError::InvalidResponse)?,
         ),
         scopes: tokens.scope.split_whitespace().map(str::to_owned).collect(),
-        actor: ActorRef::try_new(kind, tokens.actor.public_id)
-            .map_err(|_| IamError::InvalidResponse)?,
+        actor: ActorRef::try_new(kind, actor.public_id).map_err(|_| IamError::InvalidResponse)?,
         organization_id: tokens
             .org_id
             .map(OrganizationId::new)

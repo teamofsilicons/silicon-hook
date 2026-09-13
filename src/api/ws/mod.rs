@@ -6,7 +6,9 @@
 //! follow in stream order. The server pings every 30 seconds and closes with
 //! code 4000 after two minutes without a valid pong.
 
+mod multiplex;
 mod protocol;
+pub(super) use multiplex::upgrade as upgrade_relay;
 mod session;
 
 use axum::{

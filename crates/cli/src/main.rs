@@ -13,9 +13,57 @@ use store::{LockedStore, Session};
 
 #[tokio::main]
 async fn main() {
-    let matches = Cli::command().get_matches();
-    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    let matches = match Cli::command().try_get_matches() {
+        Ok(matches) => matches,
+        Err(error) => {
+            let _ = error.print();
+            let raw: Vec<String> = std::env::args().collect();
+            let option = |name: &str| {
+                raw.iter().enumerate().find_map(|(i, arg)| {
+                    arg.strip_prefix(&format!("{name}="))
+                        .map(str::to_owned)
+                        .or_else(|| (arg == name).then(|| raw.get(i + 1).cloned()).flatten())
+                })
+            };
+            let profile = option("--profile").unwrap_or_else(|| "default".into());
+            let test = option("--test").and_then(|value| value.parse().ok());
+            testing_footer(&profile, test, raw.iter().any(|p| p == "--production"));
+            std::process::exit(error.exit_code());
+        }
+    };
+    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    if !cli.production && cli.test.is_none() {
+        cli.test = LockedStore::open()
+            .ok()
+            .and_then(|mut s| s.profile(&cli.profile).selected_test);
+    }
+    let started = std::time::Instant::now();
     let result = run(&cli).await;
+    let telemetry_client = LockedStore::open().ok().and_then(|mut stored| {
+        store::select_client(
+            stored.profile(&cli.profile),
+            cli.test,
+            cli.url.as_deref(),
+            cli.org.as_deref(),
+        )
+        .ok()
+    });
+    if let Some(client) = telemetry_client {
+        client
+            .emit_telemetry(
+                "cli",
+                "command",
+                if result.is_ok() {
+                    "succeeded"
+                } else {
+                    "failed"
+                },
+                matches.subcommand_name().unwrap_or("commands"),
+                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+                1,
+            )
+            .await;
+    }
     if !matches!(
         cli.command,
         Command::Daemon {
@@ -25,6 +73,7 @@ async fn main() {
     {
         eprintln!("Hook update check was skipped: {error}");
     }
+    let failed = result.is_err();
     if let Err(error) = result {
         if cli.json {
             eprintln!("{}", serde_json::json!({"error":error.to_string()}));
@@ -34,7 +83,40 @@ async fn main() {
                 command_path(&matches)
             );
         }
+    }
+    testing_footer(
+        &cli.profile,
+        if matches!(
+            cli.command,
+            Command::Env {
+                action: Environment::Exit | Environment::Use { .. }
+            }
+        ) {
+            None
+        } else {
+            cli.test
+        },
+        cli.production,
+    );
+    if failed {
         std::process::exit(1);
+    }
+}
+
+fn testing_footer(profile: &str, explicit: Option<uuid::Uuid>, production: bool) {
+    if production {
+        return;
+    }
+    let stored = LockedStore::open().ok();
+    let p = stored.as_ref().and_then(|s| s.data.profiles.get(profile));
+    if let Some(id) = explicit.or_else(|| p.and_then(|p| p.selected_test)) {
+        let name = p
+            .and_then(|p| p.test_names.get(&id))
+            .map_or("unnamed sandbox", String::as_str);
+        let actor = p
+            .and_then(|p| p.test_sessions.get(&id))
+            .map_or("not signed in", |s| s.tokens.actor.id.as_str());
+        eprintln!("TEST ENVIRONMENT: {name} ({id}) · identity: {actor} · exit: hook env exit");
     }
 }
 
@@ -117,6 +199,27 @@ fn target(cli: &Cli, profile: &store::Profile) -> Result<String> {
 }
 
 async fn run(cli: &Cli) -> Result<()> {
+    if let Command::Report { message, pr } = &cli.command {
+        anyhow::ensure!(
+            cli.test.is_none(),
+            "Bug reports create a real GitHub issue and email notification. Use hook --production report to submit explicitly outside the sandbox."
+        );
+        let url = silicon_hook_client::support::report(message, pr.as_deref())
+            .map_err(anyhow::Error::msg)?;
+        print(&serde_json::json!({"submitted": true, "url":url}))?;
+        if pr.is_none() {
+            eprintln!(
+                "You can also propose a fix: https://github.com/teamofsilicons/silicon-hook/pulls"
+            );
+        }
+        return Ok(());
+    }
+    if matches!(cli.command, Command::About) {
+        return print(
+            &serde_json::json!({"repository":silicon_hook_client::support::REPOSITORY,"docs":silicon_hook_client::support::DOCUMENTATION,"rust_package":silicon_hook_client::support::PACKAGE,"cli_package":"https://crates.io/crates/silicon-hook-cli","version":env!("CARGO_PKG_VERSION")}),
+        );
+    }
+
     if matches!(cli.command, Command::Commands) {
         return commands(cli.json);
     }
@@ -127,6 +230,30 @@ async fn run(cli: &Cli) -> Result<()> {
         return daemon::command(cli, action).await;
     }
     let mut stored = LockedStore::open()?;
+    if let Command::Env {
+        action: Environment::Use { app_secret_file },
+    } = &cli.command
+    {
+        let secret = read_secret(app_secret_file)?;
+        let p = stored.profile(&cli.profile);
+        let client = store::select_client(p, None, cli.url.as_deref(), None)?
+            .with_test_app_secret(secret.expose())?;
+        let env = client.selected_environment().await?;
+        p.test_app_secrets.insert(env.id, secret);
+        p.test_names.insert(env.id, env.name.clone());
+        p.test_orgs.insert(env.id, env.org_id.clone());
+        p.selected_test = Some(env.id);
+        stored.save()?;
+        return print(&env);
+    }
+    if let Command::Env {
+        action: Environment::Exit,
+    } = &cli.command
+    {
+        stored.profile(&cli.profile).selected_test = None;
+        stored.save()?;
+        return print(&serde_json::json!({"testing":false,"next":"hook login status --json"}));
+    }
     if let Command::Config { action } = &cli.command {
         return configuration(cli, action, &mut stored);
     }
@@ -135,7 +262,7 @@ async fn run(cli: &Cli) -> Result<()> {
     }
     if matches!(cli.command, Command::Webhook { .. } | Command::Unhook) {
         let recipient = match &cli.command {
-            Command::Webhook { webhook_url } => {
+            Command::Webhook { webhook_url, .. } => {
                 Some(silicon_hook_client::Recipient::new(webhook_url)?)
             }
             _ => None,
@@ -148,6 +275,24 @@ async fn run(cli: &Cli) -> Result<()> {
             None => p.session.as_mut(),
         }
         .context("Not signed in; run hook login <slt> first")?;
+        if let Command::Webhook {
+            secret_file,
+            test_destination,
+            ..
+        } = &cli.command
+        {
+            session.webhook_secret = secret_file.as_deref().map(read_secret).transpose()?;
+            session.test_destination = *test_destination;
+            session.isi = cli.isi.clone().or(session.isi.clone());
+            if let Some(recipient) = &recipient {
+                recipient
+                    .clone()
+                    .with_test_destination(*test_destination)
+                    .validate_plane(cli.test.is_some())?;
+            }
+        } else {
+            session.webhook_secret = None;
+        }
         session.webhook_url = recipient.as_ref().map(|r| r.url().to_string());
         let destination = session.webhook_url.clone();
         stored.save()?;
@@ -259,6 +404,9 @@ async fn run(cli: &Cli) -> Result<()> {
             }
             let org = cli.org.clone().or(tokens.org_id.clone());
             let session = Session {
+                webhook_secret: None,
+                isi: cli.isi.clone(),
+                test_destination: false,
                 expires_at: store::now() + tokens.expires_in,
                 silicons: cli
                     .silicon
@@ -498,6 +646,8 @@ async fn run(cli: &Cli) -> Result<()> {
         | Command::Unhook
         | Command::Whoami
         | Command::Commands
+        | Command::Report { .. }
+        | Command::About
         | Command::Docs { .. }
         | Command::Config { .. }
         | Command::Daemon { .. } => {
@@ -633,7 +783,8 @@ async fn environments(
         }
         Environment::Delete { id } => print(&client.delete_environment(*id, mutation).await?)?,
         Environment::Restore { id } => print(&client.restore_environment(*id, mutation).await?)?,
-        Environment::Current => print(&client.current_environment().await?)?,
+        Environment::Use { .. } | Environment::Exit => unreachable!(),
+        Environment::Current => print(&client.selected_environment().await?)?,
         Environment::Clean => print(&client.clean_environment(mutation).await?)?,
         Environment::ConfigureIam { file } => print(
             &client
@@ -657,7 +808,7 @@ fn configuration(cli: &Cli, action: &Config, stored: &mut LockedStore) -> Result
         Config::Show => {
             let p = stored.profile(&cli.profile);
             print(
-                &serde_json::json!({"profile":cli.profile,"home":store::folder()?,"url":p.url,"test":cli.test,"org":cli.test.and_then(|id| p.test_orgs.get(&id)).or(p.org.as_ref()),"silicon":match cli.test {Some(id)=>p.test_silicons.get(&id),None=>p.silicon.as_ref()},"signed_in":match cli.test {Some(id)=>p.test_sessions.contains_key(&id),None=>p.session.is_some()},"test_environments":p.test_keys.keys().collect::<Vec<_>>()}),
+                &serde_json::json!({"profile":cli.profile,"telemetry":p.telemetry,"home":store::folder()?,"url":p.url,"test":cli.test,"org":cli.test.and_then(|id| p.test_orgs.get(&id)).or(p.org.as_ref()),"silicon":match cli.test {Some(id)=>p.test_silicons.get(&id),None=>p.silicon.as_ref()},"signed_in":match cli.test {Some(id)=>p.test_sessions.contains_key(&id),None=>p.session.is_some()},"test_environments":p.test_keys.keys().collect::<Vec<_>>()}),
             )
         }
         Config::Set { key, value } => {
@@ -668,7 +819,8 @@ fn configuration(cli: &Cli, action: &Config, stored: &mut LockedStore) -> Result
                     anyhow::ensure!(
                         profile.session.is_none()
                             && profile.test_sessions.is_empty()
-                            && profile.test_keys.is_empty(),
+                            && profile.test_keys.is_empty()
+                            && profile.test_app_secrets.is_empty(),
                         "Use a new --profile to change the backend without mixing credentials"
                     );
                     profile.url = value.clone();
@@ -688,6 +840,13 @@ fn configuration(cli: &Cli, action: &Config, stored: &mut LockedStore) -> Result
                     } else {
                         p.silicon = Some(value.clone());
                     }
+                }
+                "telemetry" => {
+                    stored.profile(&cli.profile).telemetry = match value.as_str() {
+                        "on" | "true" => true,
+                        "off" | "false" => false,
+                        _ => anyhow::bail!("Use on or off"),
+                    };
                 }
                 "auto-update" => {
                     stored.data.auto_update = match value.as_str() {
@@ -727,6 +886,10 @@ fn commands(json: bool) -> Result<()> {
 
 fn docs(topic: &str) -> Result<()> {
     let text = match topic {
+        "telemetry" => include_str!("../docs/telemetry.md"),
+        "contracts" => include_str!("../docs/contracts.md"),
+        "configuration" => include_str!("../docs/configuration.md"),
+        "deployment" => include_str!("../docs/deployment.md"),
         "overview" => include_str!("../docs/README.md"),
         "api" | "signatures" => include_str!("../docs/api/README.md"),
         "client" => include_str!("../docs/client/README.md"),
@@ -738,7 +901,7 @@ fn docs(topic: &str) -> Result<()> {
         "testing-cli" => include_str!("../docs/testing/cli.md"),
         "delivery" | "relay" => include_str!("../docs/client/relay.md"),
         _ => anyhow::bail!(
-            "Unknown guide; choose overview, api, client, cli, iam, signatures, testing, testing-api, testing-client, testing-cli or relay"
+            "Unknown guide; choose overview, api, client, cli, iam, signatures, testing, testing-api, testing-client, testing-cli, relay, contracts, configuration, telemetry or deployment"
         ),
     };
     println!("{text}");

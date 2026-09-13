@@ -48,7 +48,7 @@ const OTHER_IP: IpAddr = IpAddr::V4(Ipv4Addr::new(198, 51, 100, 20));
 
 struct TestDatabase {
     store: PostgresStore,
-    _container: ContainerAsync<Postgres>,
+    container: ContainerAsync<Postgres>,
 }
 
 impl TestDatabase {
@@ -69,7 +69,7 @@ impl TestDatabase {
 
         Ok(Self {
             store: PostgresStore::new(pool),
-            _container: container,
+            container,
         })
     }
 
@@ -149,7 +149,7 @@ impl TestDatabase {
         Ok((
             Self {
                 store: PostgresStore::new(owner),
-                _container: container,
+                container,
             },
             PostgresStore::new(api),
             PostgresStore::new(worker),
@@ -361,7 +361,7 @@ async fn migrations_apply_and_readiness_proves_the_schema_contract() -> Result<(
     let applied = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _sqlx_migrations")
         .fetch_one(pool)
         .await?;
-    assert_eq!(applied, 5);
+    assert_eq!(applied, 8);
 
     let mut absent_environment = pool.begin().await?;
     sqlx::query("SELECT set_config('hook.environment_id', $1, true)")
@@ -1691,5 +1691,237 @@ async fn encoded_secrets_verify_after_creation_and_rotation() -> Result<()> {
             assert_eq!(matches!(outcome, ReceiveOutcome::Accepted(_)), accepted);
         }
     }
+    Ok(())
+}
+
+#[tokio::test]
+async fn deprecated_contract_sunsets_only_after_seven_request_free_days() -> Result<()> {
+    let database = TestDatabase::start().await?;
+    let pool = database.store.pool();
+    let status: String =
+        sqlx::query_scalar("SELECT status FROM hook_private.contract_status('v1',true)")
+            .fetch_one(pool)
+            .await?;
+    assert_eq!(status, "active");
+    sqlx::query("UPDATE hook_private.contract_versions SET status='deprecated', deprecated_at=clock_timestamp()-INTERVAL '8 days', last_requested_at=clock_timestamp()-INTERVAL '6 days'").execute(pool).await?;
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM hook_private.contract_status('v1',false)"
+        )
+        .fetch_one(pool)
+        .await?,
+        "deprecated"
+    );
+    sqlx::query("SELECT * FROM hook_private.contract_status('v1',true)")
+        .execute(pool)
+        .await?;
+    let recent: bool = sqlx::query_scalar("SELECT last_requested_at > clock_timestamp()-INTERVAL '1 minute' FROM hook_private.contract_versions").fetch_one(pool).await?;
+    assert!(recent);
+    sqlx::query("UPDATE hook_private.contract_versions SET last_requested_at=clock_timestamp()-INTERVAL '7 days'").execute(pool).await?;
+    assert_eq!(
+        sqlx::query_scalar::<_, String>(
+            "SELECT status FROM hook_private.contract_status('v1',true)"
+        )
+        .fetch_one(pool)
+        .await?,
+        "sunset"
+    );
+    let count: i64 = sqlx::query_scalar("SELECT request_count FROM hook_private.contract_versions")
+        .fetch_one(pool)
+        .await?;
+    assert_eq!(count, 2, "rejected calls cannot revive a sunset contract");
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one lifecycle fixture checks selection, reset and revocation together"
+)]
+async fn application_secret_selects_empty_isolated_storage_and_revalidates_lifecycle() -> Result<()>
+{
+    use silicon_hook::{
+        application::environments::EnvironmentService,
+        config::{DatabaseSettings, IamSettings},
+        infrastructure::iam::IamClient,
+    };
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
+    };
+    let database = TestDatabase::start().await?;
+    let server = MockServer::start().await;
+    Mock::given(method("GET")).and(path("/api/version")).respond_with(ResponseTemplate::new(200).insert_header("silicon-iam-api-version","v1").insert_header("vary","Silicon-IAM-Supported-API-Versions").set_body_json(serde_json::json!({"service":"silicon-iam","selected_api_version":"v1","supported_api_versions":["v1"],"build":"test","commit":"test"}))).mount(&server).await;
+    let secret = format!("ask_{}", "A".repeat(43));
+    let selector = format!("Basic {}", STANDARD.encode(format!("tos>hook:{secret}")));
+    let id = uuid::Uuid::now_v7();
+    let context = |version, cleaned: Option<&str>| {
+        serde_json::json!({
+            "environment_id":id,"webhook_key_digest":"ab".repeat(32),
+            "environment":{"environment_id":id,"org_id":"tos","name":"SDK sandbox","description":null,"version":version,"key_generation":1,"cleaned_at":cleaned,"created_at":"2026-09-13T00:00:00Z","creator_type":"carbon","creator_id":"alice"},
+            "application":{"app_id":"tos>hook","base_url":"https://backend.hook.teamofsilicons.com","app_scope":{"iam":[],"external":[]},"webhook_scope":[],"testing_idle_days":15}
+        })
+    };
+    let selected = Mock::given(method("GET"))
+        .and(path("/api/v1/application/testing-context"))
+        .and(header("x-testing-application", selector.as_str()))
+        .respond_with(ResponseTemplate::new(200).set_body_json(context(1, None)))
+        .mount_as_scoped(&server)
+        .await;
+    let iam = IamClient::connect(&IamSettings {
+        base_url: Url::parse(&server.uri())?,
+        app_id: Some("tos>hook".into()),
+        app_secret: Some(secrecy::SecretString::from(format!(
+            "ask_{}",
+            "P".repeat(43)
+        ))),
+        connect_timeout: StdDuration::from_secs(2),
+        request_timeout: StdDuration::from_secs(2),
+        max_response_bytes: 1024 * 1024,
+        allow_insecure_local_http: true,
+        local_auth: false,
+        webhook: None,
+    })
+    .await?;
+    let db = DatabaseSettings {
+        url: secrecy::SecretString::from(format!(
+            "postgres://postgres:postgres@{}:{}/postgres",
+            database.container.get_host().await?,
+            database.container.get_host_port_ipv4(5432).await?
+        )),
+        max_connections: std::num::NonZeroU32::new(4).context("pool size")?,
+        min_connections: 0,
+        acquire_timeout: StdDuration::from_secs(3),
+        statement_timeout: StdDuration::from_secs(10),
+    };
+    let key = EncryptionKeyId::new("1")?;
+    let cipher = Arc::new(SecretCipher::new(SecretKeyring::new(
+        key.clone(),
+        [(key, SecretKey::from_bytes([7; 32]))],
+    )?));
+    let service = EnvironmentService::connect(db, cipher, iam).await?;
+    let first = service.resolve_app_secret(&secret).await?;
+    assert_eq!(first.environment.id, id);
+    assert_eq!(first.environment.generation, 1);
+    assert!(first.iam.is_testing());
+    let again = service.resolve_app_secret(&secret).await?;
+    assert_eq!(again.environment.id, id);
+    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM hook_control.environments")
+        .fetch_one(database.store.pool())
+        .await?;
+    assert_eq!(count, 1, "repeated selection does not fork storage");
+    sqlx::query("INSERT INTO hook_private.telemetry_events(environment_id,event_id,source,step,trace_id,data) VALUES($1,$2,'client','command',$3,'{}')")
+        .bind(id).bind(uuid::Uuid::now_v7()).bind(uuid::Uuid::now_v7()).execute(database.store.pool()).await?;
+    let stored: String = sqlx::query_scalar(
+        "SELECT encrypted_credentials::text FROM hook_control.environments WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(database.store.pool())
+    .await?;
+    assert!(!stored.contains(&secret));
+    drop(selected);
+    let cleaned = Mock::given(method("GET"))
+        .and(path("/api/v1/application/testing-context"))
+        .and(header("x-testing-application", selector.as_str()))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(context(2, Some("2026-09-13T01:00:00Z"))),
+        )
+        .mount_as_scoped(&server)
+        .await;
+    let after_clean = service.resolve_app_secret(&secret).await?;
+    assert_eq!(after_clean.environment.generation, 2);
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM hook_private.telemetry_events WHERE environment_id=$1"
+        )
+        .bind(id)
+        .fetch_one(database.store.pool())
+        .await?,
+        0,
+        "sandbox clean purges telemetry"
+    );
+    assert_eq!(
+        service
+            .resolve_app_secret(&secret)
+            .await?
+            .environment
+            .generation,
+        2,
+        "clean is applied once"
+    );
+    drop(cleaned);
+    assert!(
+        service.resolve_app_secret(&secret).await.is_err(),
+        "cached pools cannot bypass revoked selectors"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn telemetry_runtime_grants_deduplicate_and_keep_payloads_private() -> Result<()> {
+    let (owner, api, worker) = TestDatabase::start_with_runtime_roles().await?;
+    let id = uuid::Uuid::now_v7();
+    for _ in 0..2 {
+        sqlx::query("INSERT INTO hook_private.telemetry_events(event_id,source,step,trace_id,data) VALUES($1,'cli','command',$1,'{}') ON CONFLICT DO NOTHING")
+            .bind(id).execute(api.pool()).await?;
+    }
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM hook_private.telemetry_events")
+            .fetch_one(owner.store.pool())
+            .await?,
+        1
+    );
+    assert!(
+        sqlx::query("SELECT data FROM hook_private.telemetry_events")
+            .execute(api.pool())
+            .await
+            .is_err()
+    );
+    assert!(
+        sqlx::query("SELECT data FROM hook_private.telemetry_events")
+            .execute(worker.pool())
+            .await
+            .is_ok()
+    );
+    assert!(
+        sqlx::query("DELETE FROM hook_private.telemetry_events")
+            .execute(api.pool())
+            .await
+            .is_err()
+    );
+    assert!(sqlx::query("INSERT INTO hook_private.telemetry_events(environment_id,event_id,source,step,trace_id,data) VALUES($1,$2,'cli','command',$2,'{}')")
+        .bind(uuid::Uuid::now_v7()).bind(uuid::Uuid::now_v7()).execute(api.pool()).await.is_err());
+    sqlx::query(
+        "UPDATE hook_private.telemetry_events SET recorded_at=clock_timestamp()-INTERVAL '31 days'",
+    )
+    .execute(owner.store.pool())
+    .await?;
+    let deleted = sqlx::query("DELETE FROM hook_private.telemetry_events WHERE environment_id=hook_private.environment_id() AND event_id IN (SELECT event_id FROM hook_private.telemetry_events WHERE recorded_at < clock_timestamp()-INTERVAL '30 days' LIMIT 1000)").execute(worker.pool()).await?;
+    assert_eq!(deleted.rows_affected(), 1);
+    Ok(())
+}
+
+#[tokio::test]
+#[ignore = "requires explicit HOOK_TELEMETRY_TABLE_KEY and sends a synthetic diagnostic"]
+async fn telemetry_reaches_configured_space_station_table() -> Result<()> {
+    anyhow::ensure!(
+        std::env::var("HOOK_TELEMETRY_TABLE_KEY").is_ok(),
+        "configure the Hook table key explicitly"
+    );
+    let (owner, api, worker) = TestDatabase::start_with_runtime_roles().await?;
+    let id = uuid::Uuid::now_v7();
+    let event = serde_json::json!({"event_id":id,"trace_id":id,"source":"backend","step":"verification","outcome":"succeeded","version":"0.5.0","operation":"telemetry_integration_check","progress":1});
+    sqlx::query("INSERT INTO hook_private.telemetry_events(event_id,source,step,trace_id,data) VALUES($1,'backend','verification',$1,$2)")
+        .bind(id).bind(event).execute(api.pool()).await?;
+    silicon_hook::telemetry::flush_events(worker.pool()).await?;
+    assert!(
+        sqlx::query_scalar::<_, bool>(
+            "SELECT exported_at IS NOT NULL FROM hook_private.telemetry_events WHERE event_id=$1"
+        )
+        .bind(id)
+        .fetch_one(owner.store.pool())
+        .await?
+    );
+    println!("Space Station accepted synthetic Hook diagnostic {id}");
     Ok(())
 }

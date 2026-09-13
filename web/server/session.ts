@@ -11,8 +11,10 @@ export interface Tokens {
   scopes: string[];
 }
 export interface Plane {
+  telemetry?: boolean;
   name: string;
   key?: string;
+  appSecret?: string;
   tokens?: Tokens;
   expiresAt?: number;
   refresh?: { key: string; started: number };

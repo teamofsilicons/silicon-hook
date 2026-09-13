@@ -217,7 +217,15 @@ async fn forward(client: &Client, input: &LocalRequest) -> Result<serde_json::Va
         .http
         .request(method, client.url(&path)?)
         .query(&input.query)
-        .header("silicon-hook-api-version", "v1");
+        .header("silicon-hook-api-version", "v1")
+        .header(
+            "x-hook-telemetry",
+            if client.telemetry_enabled() {
+                "on"
+            } else {
+                "off"
+            },
+        );
     for (name, value) in &input.headers {
         if !["content-type", "idempotency-key", "accept"]
             .contains(&name.to_ascii_lowercase().as_str())
@@ -227,6 +235,11 @@ async fn forward(client: &Client, input: &LocalRequest) -> Result<serde_json::Va
             ));
         }
         request = request.header(name, value);
+    }
+    if input.path.starts_with("/api/v1/")
+        && let Some(secret) = &client.test_app_secret
+    {
+        request = request.header("x-hook-test-app-secret", secret.expose());
     }
     if let Some(token) = &client.token {
         request = request.bearer_auth(token.expose());

@@ -25,6 +25,27 @@ use crate::{
 };
 
 pub(super) const TEST_KEY_HEADER: &str = "x-hook-test-key";
+pub(super) const TEST_APP_HEADER: &str = "x-hook-test-app-secret";
+
+pub(super) fn app_secret(headers: &HeaderMap) -> Result<Option<&str>, AppError> {
+    let mut values = headers.get_all(TEST_APP_HEADER).iter();
+    let Some(value) = values.next() else {
+        return Ok(None);
+    };
+    if values.next().is_some() || headers.contains_key(TEST_KEY_HEADER) {
+        return Err(AppError::bad_request("ambiguous_test_selector"));
+    }
+    let value = value.to_str().map_err(|_| AppError::Unauthenticated)?;
+    if value.len() != 47
+        || !value.starts_with("ask_")
+        || !value[4..]
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+    {
+        return Err(AppError::Unauthenticated);
+    }
+    Ok(Some(value))
+}
 
 pub(super) fn test_key(headers: &HeaderMap) -> Result<Option<&str>, AppError> {
     let mut values = headers.get_all(TEST_KEY_HEADER).iter();
@@ -65,10 +86,23 @@ pub(super) async fn scope(
 ) -> Response {
     match resolve(&mut state, request.uri().path(), request.headers()).await {
         Ok(()) => {
+            let contract_headers = if request.uri().path().starts_with("/api/v1/")
+                && request.uri().path() != "/api/v1/relay/ws"
+            {
+                match super::contracts::admit(&state).await {
+                    Ok(headers) => headers,
+                    Err(error) => return error.into_response(),
+                }
+            } else {
+                HeaderMap::new()
+            };
+            let telemetry = super::telemetry_events::RequestEvent::start(&state, &request);
             let identity = state.application.environment_identity();
             let environments = state.environments.clone();
             request.extensions_mut().insert(state);
-            let response = next.run(request).await;
+            let mut response = next.run(request).await;
+            response.headers_mut().extend(contract_headers);
+            telemetry.finish(response.status());
             if (response.status().is_success()
                 || response.status() == StatusCode::SWITCHING_PROTOCOLS)
                 && let Some((id, generation)) = identity
@@ -83,8 +117,20 @@ pub(super) async fn scope(
     }
 }
 
-async fn resolve(state: &mut ApiState, path: &str, headers: &HeaderMap) -> Result<(), AppError> {
+pub(crate) async fn resolve(
+    state: &mut ApiState,
+    path: &str,
+    headers: &HeaderMap,
+) -> Result<(), AppError> {
     let key = test_key(headers)?;
+    let selector = app_secret(headers)?;
+    if selector.is_some()
+        && (!path.starts_with("/api/v1/")
+            || path.contains("/silicon/")
+            || path.starts_with("/api/v1/testing-environment"))
+    {
+        return Err(AppError::Forbidden);
+    }
     // Root administration must work before IAM application bootstrap. Its
     // handlers validate the test key directly without creating an actor session.
     if path.starts_with("/api/v1/testing-environment/") || path == "/api/v1/testing-environment" {
@@ -112,6 +158,8 @@ async fn resolve(state: &mut ApiState, path: &str, headers: &HeaderMap) -> Resul
                 .resolve_endpoint(&silicon, &parts[1].to_ascii_uppercase())
                 .await?,
         )
+    } else if let Some(secret) = selector {
+        Some(service(state)?.resolve_app_secret(secret).await?)
     } else if let Some(key) = key {
         if !path.starts_with("/api/v1/") {
             return Err(AppError::bad_request("test_key_not_allowed_on_ingress"));
@@ -129,6 +177,20 @@ async fn resolve(state: &mut ApiState, path: &str, headers: &HeaderMap) -> Resul
         state.iam = context.iam;
     }
     Ok(())
+}
+
+/// Public sandbox metadata; the application selector is not an actor login.
+pub(super) async fn selected(
+    Extension(state): Extension<ApiState>,
+) -> Result<(HeaderMap, Json<TestEnvironment>), AppError> {
+    let (id, _) = state
+        .application
+        .environment_identity()
+        .ok_or_else(|| AppError::validation("test_environment_required"))?;
+    Ok((
+        secret_response_headers(),
+        Json(service(&state)?.selected_metadata(id).await?),
+    ))
 }
 
 #[derive(serde::Serialize)]

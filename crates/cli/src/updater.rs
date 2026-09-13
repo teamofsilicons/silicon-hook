@@ -48,3 +48,15 @@ pub async fn after_command() -> Result<()> {
     }
     Ok(())
 }
+
+/// The daemon checks on startup and every hour, independently of CLI traffic.
+pub async fn daemon_updates(mut stop: tokio::sync::watch::Receiver<bool>) {
+    let mut timer = tokio::time::interval(std::time::Duration::from_secs(3600));
+    timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        tokio::select! {
+            _ = timer.tick() => if let Err(error) = after_command().await { eprintln!("Hourly Hook update failed: {error}"); },
+            _ = stop.changed() => return,
+        }
+    }
+}

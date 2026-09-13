@@ -22,7 +22,13 @@ path = "src/bin/hook_worker.rs"
 name = "hook-migrate"
 path = "src/bin/hook_migrate.rs"
 
+[[bin]]
+name = "hook-contract"
+path = "src/bin/hook_contract.rs"
+
 [dependencies]
+space-station = "0.1.1"
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 aes-gcm = "0.10.3"
 anyhow = "1.0.100"
 async-trait = "0.1.89"
@@ -63,7 +69,7 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 url = { version = "2.5.7", features = ["serde"] }
 uuid = { version = "1.26.0", features = ["serde", "v4", "v7"] }
 zeroize = { version = "1.8.2", features = ["derive"] }
-silicon-iam-client = "1.4.0"
+silicon-iam-client = "1.8.0"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"

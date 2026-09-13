@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Silicon Hook API
-  version: 0.3.0
+  version: 0.5.0
   summary: Signed webhook endpoints with ordered, acknowledged delivery to Silicons.
   description: |
     Silicon Hook gives each Silicon signed webhook endpoints at
@@ -13,7 +13,10 @@ info:
     polling `/api/v1/silicons/{silicon_id}/deliveries`; requests that do not
     verify are withheld and kept in a separate 14-day blocked log. Timestamps
     are UTC RFC 3339 values. Endpoint keys route requests but never
-    authenticate them.
+    authenticate them. IAM test app_secret selectors choose isolated sandboxes via
+    X-Hook-Test-App-Secret; they never grant actor authority. Deprecated API v1
+    contracts sunset only after seven request-free days. Contract accounting is
+    independent of optional diagnostic telemetry.
   contact:
     email: engineering@teamofsilicons.com
   license:
@@ -144,6 +147,7 @@ paths:
           "$ref": "#/components/responses/InternalError"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks":
     get:
       tags:
@@ -277,12 +281,14 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks/{hook_id}":
     parameters:
     - "$ref": "#/components/parameters/OrgId"
     - "$ref": "#/components/parameters/SiliconId"
     - "$ref": "#/components/parameters/HookId"
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
     get:
       tags:
       - Hooks
@@ -424,6 +430,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/secret/rotate":
     post:
       tags:
@@ -466,6 +473,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/endpoint/rotate":
     post:
       tags:
@@ -509,6 +517,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/events":
     get:
       tags:
@@ -542,6 +551,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/events":
     get:
       tags:
@@ -579,6 +589,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/blocked-requests":
     get:
       tags:
@@ -612,6 +623,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/blocked-requests":
     get:
       tags:
@@ -649,6 +661,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/deliveries":
     get:
       tags:
@@ -698,6 +711,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/deliveries/ack":
     post:
       tags:
@@ -745,6 +759,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/deliveries/cursor":
     get:
       tags:
@@ -779,6 +794,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/ws":
     get:
       tags:
@@ -841,6 +857,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/silicon/{silicon_id}/{endpoint_key}":
     parameters:
     - "$ref": "#/components/parameters/SiliconId"
@@ -937,6 +954,7 @@ paths:
       security: []
       parameters:
       - "$ref": "#/components/parameters/TestKey"
+      - "$ref": "#/components/parameters/TestAppSecret"
       responses:
         '200':
           description: Public application configuration (app_id is null in local auth mode).
@@ -970,6 +988,7 @@ paths:
       parameters:
       - "$ref": "#/components/parameters/OrgId"
       - "$ref": "#/components/parameters/TestKey"
+      - "$ref": "#/components/parameters/TestAppSecret"
       responses:
         '200':
           description: Authenticated Carbon or Silicon in the selected organization.
@@ -1046,6 +1065,7 @@ paths:
       - "$ref": "#/components/parameters/IdempotencyKey"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/auth/refresh":
     post:
       tags:
@@ -1090,6 +1110,7 @@ paths:
       - "$ref": "#/components/parameters/IdempotencyKey"
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/auth/logout":
     post:
       tags:
@@ -1115,11 +1136,13 @@ paths:
         an access token to revoke that token. The body is empty.
     parameters:
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks/iam":
     parameters:
     - "$ref": "#/components/parameters/OrgId"
     - "$ref": "#/components/parameters/SiliconId"
     - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
     post:
       tags:
       - IAM
@@ -1632,6 +1655,106 @@ paths:
           application/json:
             schema:
               "$ref": "#/components/schemas/TestIamConfiguration"
+  /api/v1/testing-session:
+    get:
+      operationId: selectedTestingSession
+      summary: Validate an IAM app_secret and inspect its selected sandbox
+      tags: [Testing]
+      security: []
+      parameters:
+      - $ref: '#/components/parameters/TestAppSecret'
+      responses:
+        '200':
+          description: Sandbox selected with no actor login or root authority
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestEnvironment'
+        '401':
+          description: Invalid or revoked selector
+        '422':
+          description: Test selector required
+  /api/contracts:
+    get:
+      operationId: contractCatalog
+      summary: Discover API and relay lifecycle compatibility
+      tags: [System]
+      security: []
+      responses:
+        '200':
+          description: Public lifecycle status, policy and compatibility matrix
+          content:
+            application/json:
+              schema:
+                type: object
+                additionalProperties: true
+        '400':
+          description: Invalid request
+        '503':
+          description: Contract state unavailable
+  /api/v1/contracts:
+    get:
+      operationId: versionedContractCatalog
+      summary: Discover lifecycle compatibility in the selected environment
+      tags: [System]
+      security: []
+      parameters:
+      - $ref: '#/components/parameters/TestAppSecret'
+      responses:
+        '200':
+          description: Public lifecycle status and compatibility matrix
+        '410':
+          description: API contract has sunset
+  /api/v1/relay/ws:
+    get:
+      operationId: multiplexedRelay
+      summary: Prewarm one physical socket and independently authorize subscriptions
+      description: >-
+        Upgrade to a WebSocket with relay protocol 1. The server sends relay_ready.
+        Submit subscribe frames with a unique subscription_id, bearer token, org_id,
+        silicon_ids and optional app_secret or test_key. Per-identity messages are
+        wrapped as type frame with subscription_id and the ordinary v1 frame.
+        Authorization failures affect only the logical subscription. The prewarm
+        connection grants no access. Limit 256 subscriptions and 64 KiB client frames.
+        See https://docs.hook.teamofsilicons.com/client/relay/ for heartbeats and ACKs.
+      tags: [Deliveries]
+      security: []
+      responses:
+        '101':
+          description: Physical socket ready; each subscription still requires authorization
+        '400':
+          description: Invalid upgrade
+  /api/v1/telemetry:
+    post:
+      operationId: recordTelemetryEvent
+      summary: Append a bounded diagnostic event to Hook-owned storage
+      description: >-
+        Requires a live IAM actor in the selected environment. Maximum 8 KiB.
+        Credentials, free-form text and payload fields are rejected. Event IDs
+        deduplicate within the environment. Accepted writes may be dropped under
+        load or during shutdown. Send X-Hook-Telemetry off to opt out.
+      tags: [System]
+      parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - $ref: '#/components/parameters/TestAppSecret'
+      - name: X-Hook-Telemetry
+        in: header
+        schema: {type: string, enum: [on, off]}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelemetryEvent'
+      responses:
+        '202':
+          description: Accepted for best-effort persistence
+        '204':
+          description: Collection disabled
+        '401':
+          description: Invalid actor or environment credentials
+        '422':
+          description: Invalid event shape or value
 components:
   securitySchemes:
     bearerAuth:
@@ -1639,6 +1762,17 @@ components:
       scheme: bearer
       bearerFormat: IAM opaque access token
   parameters:
+    TestAppSecret:
+      name: X-Hook-Test-App-Secret
+      in: header
+      required: false
+      description: >-
+        IAM test application selector, validated online on each request. Mutually
+        exclusive with X-Hook-Test-Key. Never send on ingress or root administration
+        routes. Invalid selectors fail closed; they never select production.
+      schema:
+        type: string
+        pattern: '^ask_[A-Za-z0-9_-]{43}$'
     OrgId:
       name: X-Org-ID
       in: header
@@ -1805,6 +1939,25 @@ components:
           schema:
             "$ref": "#/components/schemas/Error"
   schemas:
+    TelemetryEvent:
+      type: object
+      additionalProperties: false
+      required: [event_id, trace_id, source, step, outcome, version]
+      properties:
+        event_id: {type: string, format: uuid}
+        trace_id: {type: string, format: uuid}
+        source: {type: string, enum: [cli, daemon, client, web]}
+        step: {type: string, enum: [command, connect, subscribe, deliver, ack, refresh, update, page_view, interaction, error]}
+        outcome: {type: string, enum: [started, succeeded, failed, retrying, skipped]}
+        version: {type: string, minLength: 1, maxLength: 32, pattern: '^[0-9.]+$'}
+        operation:
+          type: string
+          enum: [login, logout, whoami, refresh, webhook, unhook, hooks, events, blocked, deliveries, env, config, daemon, docs, commands, system, report, about, overview, live, testing, connections, relay, iam, create, set-secret, list, show, update, delete, restore, enable, disable, rotate, connect-iam, listen]
+        duration_ms: {type: integer, minimum: 0}
+        progress: {type: integer, minimum: 0, maximum: 4294967295}
+        status: {type: integer, minimum: 0, maximum: 65535}
+        os: {type: string, enum: [linux, macos, windows, freebsd, openbsd, netbsd, android, ios, unknown]}
+        arch: {type: string, enum: [x86_64, aarch64, x86, arm, riscv64, wasm32, unknown]}
     OrganizationId:
       type: string
       minLength: 1

@@ -71,6 +71,10 @@ impl Client {
         }
         let mut request = url.as_str().into_client_request()?;
         let headers = request.headers_mut();
+        headers.insert(
+            "x-hook-telemetry",
+            http_header_value(self.telemetry_enabled()),
+        );
         if let Some(token) = &self.token {
             headers.insert(
                 "authorization",
@@ -99,6 +103,15 @@ impl Client {
             "v1".parse()
                 .map_err(|_| Error::Invalid("invalid version".into()))?,
         );
+        if let Some(secret) = &self.test_app_secret {
+            headers.insert(
+                "x-hook-test-app-secret",
+                secret
+                    .expose()
+                    .parse()
+                    .map_err(|_| Error::Invalid("invalid test selector".into()))?,
+            );
+        }
         let config = tokio_tungstenite::tungstenite::protocol::WebSocketConfig::default()
             .max_message_size(Some(4 * 1024 * 1024))
             .max_frame_size(Some(4 * 1024 * 1024));
@@ -172,4 +185,12 @@ impl Stream {
             .map_err(|_| Error::Protocol("WebSocket write timed out".into()))??;
         Ok(())
     }
+}
+
+fn http_header_value(enabled: bool) -> tokio_tungstenite::tungstenite::http::HeaderValue {
+    tokio_tungstenite::tungstenite::http::HeaderValue::from_static(if enabled {
+        "on"
+    } else {
+        "off"
+    })
 }

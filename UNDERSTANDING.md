@@ -1,3 +1,6 @@
+# This file is only meant to be changed by carbons (humans), if you are an agent DONT EDIT THIS FILE.  
+
+
 # UNDERSTANIDNG.md - HOOK
 
 This understanding contains everything about how silicon hook would work, and what all is expected from the system. 
@@ -194,6 +197,8 @@ The server sends an application-level JSON `ping` every 30 seconds. The adapte
 
 The rust client for hook installed for silicon(s) on a local server, starts a daemon locally that would setup the listening endpoint at the time of authentication, this listening endpoint is not sent to the backend this is just for the client/cli to know which port to redirect the requests to for the said silicon. This link is required for client and cli login's. This would be the endpoint that the said silicon listens to so all the messages are reached, for each said message acknowledgment event is send, for each message that silicon desires to send we acknowledge the send along with repeating their exact request.) 
 
+Prewarm the websocket for each websocket connection maintiained. 
+
 
 # Acknowledgment
 
@@ -205,55 +210,68 @@ For each hook event that was recieved and sent via websocket or even normal api 
 Hook exposes no OBO endpoints. 
 
 
-# Testing
 
-We will have an test enviorment for hook itself, this would be an exact replica of the main application, so when the test enviorment is created it would be initiated empty, for the said test enviorment actions can be performed, as this is an exact same replica of the main prod.
+# Backend Versioning
 
-Refer to this to know how to create testing enviorment compatible with iam. 
-https://github.com/teamofsilicons/silicon-iam/blob/main/docs/client/testing-environments.html
+For versioning we have Contract Governance/API/service contract lifecycle management. We will have:
 
-For creating a test enviorment on hook, it would require the name of the test enviorment and also the test enviroment key of iam, this test iam key would be used in the each request it sends to the IAm as this is in test enviorment, it would in no way be possible to send request to it without attaching the test enviorment. 
-
-So hook testing wouldn't support hook testing on the prod IAm, it would only support it in the testing enviorment of IAm. 
-
-Once the name and the test-key to silicon iam is given, the dm would also generate a test key, this test key can be used by any one to perform any action in silicon-hook. 
-
-For each testing enviorment they would be sharing a shared test database, this would just be an isolated table in the db storing the linking for all the test enviorments.
-
-A test enviorment is basically the exact same hook with all the functions and everything else, so this is the hook where i can test creating a hook, seeing if listening is working, rotating keys, etc.
-
-For each hook in test enviorment would be at hook.teamofsilicons.com/test/silicon/{silicon_id}/{8_digit_alphanumerical}/ 
-
-A maximum of 10 hooks can be created in test enviorment, be clear to mention this is just a test enviorment limitation. 
+1) Contract versioning / API versioning
+2) Protocol Negotiation
+3) Backward compatibility
+4) Consumer-driven contract testing
+5) Deprecation and sunset management - if 0 requests for 7 days, sunset that version
+6) Compatibility matrix
+7) Version policy
 
 
-### Creating Test Env
 
-For creating a test enviorment, it can be created by any carbon or silicon in the organisation and it would be owned by the organisation with the user marked as the creator of the test enviorment. The test enviorment is created at the silicon-hook level itself. For creating a test enviorment it would need the name, an optional description, and the iam test enviorment. 
 
-In return it would return the key for the test enviorment, this key is what's gonna be used to be able to access that test enviorment, anyone with this key would be able to access the test enviorment as the god of the test enviorment, this key would be stored along side with the test enviorment, and can anytime be retrieved by the said carbon/silicon/org_admin/org_owner. The key would be 32 digit alpha numeric. 
+# Testing Environment
 
-### Rotate Key
+We will have a test environment for hook itself. This would work exactly like the main application, with the same functions, APIs, permission checks, and workflows, but with completely isolated data.
 
-The creator of the test enviorment and org_admin/org_head should be able to rotate the key of the test enviroment, which would give them a new key to the test enviorment.  
+When a test environment is created, it would start empty.
 
-### Clean Test Enviorment
+Refer to [how IAM manages testing environments](https://docs.iam.teamofsilicons.com/api/testing-environments/) for environment creation, test identities, application imports, authentication, webhooks, and lifecycle.
 
-There should be an option to clean the test enviorment, which would allow the test enviorment to be there, but would clear every signle data stored for the said test enviorment. Anyone with the key should be able to execute this action. 
+A test environment is basically the same hook where creating hooks, testing them, etc is possible. It uses test IAM and test hook together, so the entire flow can be tested inside one sandbox.
 
-### Delete Test Env
+### Using a Test Environment
 
-The org admins, owners or the creator should be able to delete the test enviorment, deleting a test enviorment would delete the key, and the instance that the test enviorment even existed. For all the logs it should also be limited to the test enviorment itself. Each deleted Test Env would have a ttl of 30 days before getting deleted permanently. From this point the test env should be recoverable.
+In the client app, website, CLI, or API, passing the test environment’s `app_secret` would select that application’s test environment. No manual pairing or separately entering the IAM environment root key should be needed. Hook should validate the secret with IAM and identify the correct environment automatically.
 
-### Auto Delete Test Env
+For logging in, it would ask for an SLT. In a test environment, this can either be an IAM-issued test SLT or the public ID of an existing Carbon/Silicon in the test sandbox. Entering the ID would sign me in as that test user. Unknown or inactive identities should be rejected. This shortcut must never work in production.
 
-If there's no new activity in the test enviorment for 15 days, auto delete the test enviorment. 
+The IAM environment root key gives administrative control over the test world. The application’s `app_secret` selects its sandbox. Once signed in as a particular user, actions must follow that user’s actual permissions. Possessing the secret must not make every signed-in user bypass permission checks.
 
-### Using a Test Enviorment
+If an administrative or god view is provided, it should be separate and clearly labelled so it cannot be confused with testing what a normal user is allowed to do.
 
-For using a test enviorment anyone with the key would have the god view for that test enviorment, they should be able to access hook as the signed in user from IAm, and now as the signed in user it should be able to perform the set of allowed actions, so this is an exact replica of how hook would have worked with the actual iam, instead it has the test hook and the test iam, so an sandboxed enviorment to test it all out. 
+### Website and CLI
 
-Read [(https://github.com/teamofsilicons/silicon-iam/blob/main/docs/client/testing-environments.html)] to understand how exactly are webhooks gonna work for this, etc. 
+On the website, I should be able to enter the `app_secret` from settings or the sign-in screen. Without a selected test environment, the application would use production.
+
+When in a test environment, always show a banner at the top saying that I am currently in a test environment, along with its name, the signed-in test identity, and a button to exit testing mode.
+
+Production and testing sessions should remain separate. Exiting testing mode should return me to the production session or ask me to sign in.
+
+In the CLI, always display the selected test environment at the end, including when a command fails. This message should go to stderr so it does not interfere with JSON output, downloaded files, or commands used in scripts.
+
+### Isolation
+
+Everything belonging to a test environment must stay inside that environment, including files, permissions, versions, deleted items, search results, caches, notifications, background jobs, and audit logs.
+
+Production credentials must not work in testing, and credentials from one test environment must not work in another.
+
+If a supplied test secret is invalid, revoked, or belongs to an unavailable environment, return an error. Never silently continue in production.
+
+
+### Webhooks and External Actions
+
+Test webhooks should follow IAM’s documented format. Verify the signature over the complete raw body, identify the correct test environment, and apply the event only there. Duplicate or out-of-order events must not corrupt the current state.
+
+Test actions should not send real emails, SMS messages, payments, or other production effects. These should use test destinations or simulated delivery.
+
+Secrets must not appear in URLs, logs, audit records, or stored webhook payloads.
 
 
 ---
@@ -313,25 +331,107 @@ It should also expose these specific endpoints:
 4) `webhook <webhook-url>` the user should be able to run `hook webhook <webhook-url>` to configure the webhook endpoint in case of silicon hook, this is the webhook you send all the requests to for that silicon. 
 5) `unhook` the user should be able to run `hook unhook` to unhook the configured webhook connection which would simply unhook the said user.
 
-### Cli experience
 
-Cli is an interface on it's own, it's an interface used by our fellow dear agents, and sometimes humans. What we would want this interface to serve as is it should give the correct information at correct time, and can write texts to explain what exactly is happening. 
+# Email
 
-A few things that would be needed to ensure good cli experience: the cli alone should have enough information to use Hook correctly! Surfacing the right set of things when needed, giving suggestions at the correct times. Like for eg: when someone runs a command then show them the exact help for it if the information is not enough, and when the app has been created, show them the other related commands that they might need to run after it. For each command a good description, the entire docs, etc. 
+We use postmark as our mail provider. You have an email at [hook@teamofsilicons.com], currently this email wont be used for anything more than sending bug reports. 
 
-So the overall cli experience needs to be super good. It needs to give the relevant informations, help should be detailed, and suggested commands, etc should also happen. 
+
+# Cli experience
+
+CLI is the primary way to interact with IAM Apps. It should be built for both Carbons & Silicons. Any other interface (like website) will be a subset of the CLI.
+
+The cli should never ask for credentials from either silicon or carbon. it should just ask for short lived tokens that the user can generate from the official iam cli, or from the web where the the user is sent to auth concent screen.
+
+CLIs get SILICON_HOME env variable where it should store all the details. Its home, so you should use that as base, and make their own hidden folders to keep their information.
+
+ISI are internal silicons. If silicon is a brain, then isi are parts of the brain. store this inside metadata, or main data if its super useful. ISI may or may not be present. make sure to not rely on it in such a way that things break. consider ISI as useful additional information.
+
+every app cli must support the following commands:
+
+`app iam --json` gives {app_id: "...", ...}
+
+`app login "..."` takes in a short lived auth token generated by silicon interpretter.
+
+`app login status --json` tells if its {authenticated: true, ...}
+
+If your app is not just reactive, but also proactive (sends msg upfront to a silicon), it must also support the following commands:
+`app webhook "..."` takes in the URL to send updates to. optionally a secret.
+`app unhook` to remove receiving updates.
+
+App Internals:
+All apps are suggested to make a rust library which is stateless. then 2 things that uses the rust library: always running daemon, and a cli interface that talks to the daemon.
+
+At the end, on the docs page, there should be one curl + sh command to run to install and get everything setup to start using it. not auth, just technical setup on the system like installing the right set of things.
+
+CLI design should be focused on giving details and helping finding the right command to use. CLI will often have lots of commands and it should be like a tree that can be traversed using --help.
+
+CLI documentation should be bundled inside the cli itself. On each print of the cli documentation using --help or otherwise, it should show what this command is for, how its often used (perhaps in conjunction with other commands if applicable) and then a list of flags etc it takes in.
+
+Follow the CLI grammar. These CLIs can be used by humans, but more often than not, it'll be used by an agent who prefers to know why something broke and so it can figure out ways to fix it. Don't just say something went wrong... tell it exactly what & why.
+
+A good rule of thumb is: these CLIs are being made for someone who understands ins-and-outs of technology. Make like a programming language that gives very specific and helpful errors and outputs compared to a web interface where all errors are hidden until absolutely critical.
+
+All CLIs must have a report bug feature that also optionally takes in a PR ref if the agent did not just find a bug but also patched it. 
+
+hook report `<report-message>` --pr `<pr-link>` and if someone just reports the bug, without the pr, show them a message, you can also put a pr in the repo (`repo-link`). 
+
+Everytime a bug is reported use postmark to mail [saketdev12@gmail.com, shubhastro2@gmails.com, bugs@teamofsilicons.com]
+
+Since all TOS applications are open sourced, any bug can be discovered, replicated, patched and a pr can be raised. Allow all such edge cases be figured out by the agent instead of fixing it ourselves based on a bug report.
+
+Only a bug report submitting is possible, but its encouraged to give a lot more details and also attach a PR if possible.
+
+Give the information of the github repo, online docs, rust package, etc inside the cli itself.
+
+The CLI as i told before is a tree of documentation. Show possible paths, and then let someone go deeper along with documentation.
+
+for webhooks, the daemon prewarms ONE websocket with server and subscribes to updates for all the silicons that have registered with the daemon. DO NOT CONNECT MULTIPLE WEBSOCKETS FOR SILICONS ON THE SAME SYSTEM.
+
+send the request to the silicon over at the webhook link in the following shape:
+{
+	"type": "...",
+	"data": {...},
+	"metadata": {...}
+}
+
 
 # Docs
 
-The API, Rust-client, CLI, IAM integration, and testing-environment guides are
-maintained in [docs/].
+There are two kinds of documentations: informative & instructive.
 
-For the docs keep it as detailed and mention all the details, this is the only thing the other apps can use as their source of knowledge and how they can use hook exactly. 
+Always keep instructive documentation up front, easy to use, direct with clear instructions & link to informative documents to know why its done this way. Instructive documents should be the landing point of the product for both carbons & silicons.
 
-Write detailed guides.
+It can give carbon the instructions on how to install & use it, or how to ask their silicon to use it.
 
-Write very good detailed instructions on how test enviorment for silicon-hook works. Write docs on all 3 cli, api, client. Keep it segregated and clear. Write all the documentations in docs/ folder in the main directory of silicon-hook.  
+For silicons, it can be that, but also how to do a lot more with it. Esp. things like building on top of it. Make it very clear what is expected, what is mandatory and how does the system work.
 
-# Later to do
+Then the silicon can dig deeper into the informative documentation to know all the possible ways to do it, & why its done the way its done.
 
-hook report `<report-message>`, this should send an report message to the user. 
+While both carbons and silicons can read the documentation, it'll likely be more silicon. So design it for silicons. The more reasons you give, the better a silicon would be at making a judgement call of how to do something.
+
+Since all IAM apps can both be used as is, and also built on top of... its imp to write documentation for both. Usage docs & Development docs.
+
+# Telemetry
+
+All IAM apps use Space Station [https://spacestation.teamofsilicons.com/docs] for telemetry. Telemetry is opted-in by default but can be opted out from settings if the user wants.
+
+Space Station is also a rust package which can be used from within the backend, or daemon, or cli to send telemetry.
+
+Record as many things as you think might be useful to diagnose or follow traces later.
+
+Since space station is just an event store, make sure to include all the source, step, progress, etc information inside each event. some of the system information is automatically added to the metadata so you need not add that.
+
+push context-rich, self-contained events.
+
+Space Station also support web, for web it has 2 possible pathways: analytics & events. Most of the Analytics is self captured and you can define a seperate event store from the web. Its possible that both web analytics and web events go to separate tables.
+
+
+# Configurability
+
+We ship highly configurable apps with sensible defaults. Very much like VS Code. flags to toggle / customize behaviors.
+
+
+# Updates
+
+All CLIs when installed, within their daemon run a update checker hourly. Update the CLI to the newest one if a update is found. Don't rely on user usage to check for updates.

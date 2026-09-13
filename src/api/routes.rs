@@ -17,8 +17,16 @@ use crate::config::ServerSettings;
 
 const IAM_EVENT_BODY_LIMIT: usize = 1024 * 1024;
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "declarative route and middleware ordering kept together"
+)]
 pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
     let system = Router::new()
+        .route(
+            "/api/v1/telemetry",
+            post(super::telemetry_events::ingest).layer(DefaultBodyLimit::max(8192)),
+        )
         .route("/healthz", get(handlers::liveness))
         .route("/readyz", get(handlers::readiness))
         .route("/api/version", get(handlers::negotiate_api_version))
@@ -69,6 +77,9 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
         .layer(DefaultBodyLimit::max(settings.max_ingress_body_bytes));
 
     let testing = Router::new()
+        .route("/api/contracts", get(super::contracts::catalog))
+        .route("/api/v1/contracts", get(super::contracts::catalog))
+        .route("/api/v1/testing-session", get(environments::selected))
         .route(
             "/api/v1/testing-environments",
             get(environments::list).post(environments::create),
@@ -118,6 +129,7 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
             header::AUTHORIZATION,
             header::COOKIE,
             http::HeaderName::from_static("x-hook-test-key"),
+            http::HeaderName::from_static("x-hook-test-app-secret"),
         ]))
         .layer(ConcurrencyLimitLayer::new(settings.concurrency_limit))
         .layer(axum_middleware::from_fn_with_state(
@@ -187,6 +199,7 @@ fn management_router(settings: &ServerSettings) -> Router<ApiState> {
             post(handlers::connect_iam_hook),
         )
         .route("/api/v1/ws", get(ws::upgrade))
+        .route("/api/v1/relay/ws", get(ws::upgrade_relay))
         .layer(DefaultBodyLimit::max(settings.max_management_body_bytes))
 }
 
@@ -223,8 +236,18 @@ mod tests {
     };
 
     async fn test_router() -> Result<axum::Router, Box<dyn std::error::Error>> {
-        let database_url = "postgres://hook:hook@127.0.0.1:9/hook";
-        let pool = PgPoolOptions::new().connect_lazy(database_url)?;
+        use testcontainers::{ImageExt as _, runners::AsyncRunner as _};
+        let container = testcontainers_modules::postgres::Postgres::default()
+            .with_tag("16-alpine")
+            .start()
+            .await?;
+        let database_url = format!(
+            "postgres://postgres:postgres@{}:{}/postgres",
+            container.get_host().await?,
+            container.get_host_port_ipv4(5432).await?
+        );
+        let pool = PgPoolOptions::new().connect(&database_url).await?;
+        crate::infrastructure::postgres::migrate(&pool).await?;
         let key_id = EncryptionKeyId::new("1")?;
         let cipher = SecretCipher::new(SecretKeyring::new(
             key_id.clone(),
@@ -259,6 +282,7 @@ mod tests {
             concurrency_limit: 8,
             trusted_proxy_hops: 0,
         };
+        let container = Arc::new(container);
         Ok(router(
             ApiState {
                 environments: None,
@@ -275,7 +299,17 @@ mod tests {
                 wakeups: DeliveryWakeups::new(),
             },
             &settings,
-        ))
+        )
+        .layer(axum::middleware::from_fn(
+            move |request: axum::extract::Request, next: axum::middleware::Next| {
+                let container = container.clone();
+                async move {
+                    let response = next.run(request).await;
+                    drop(container);
+                    response
+                }
+            },
+        )))
     }
 
     #[tokio::test]

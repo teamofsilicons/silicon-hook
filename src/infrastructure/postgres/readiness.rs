@@ -9,6 +9,8 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "hook.events",
     "hook.hooks",
     "hook_private.audit_log",
+    "hook_private.telemetry_events",
+    "hook_private.contract_versions",
     "hook_private.delivery_cursors",
     "hook_private.delivery_sequences",
     "hook_private.ip_blocks",
@@ -46,6 +48,7 @@ const API_TABLE_PRIVILEGES: &[&str] = &[
     "hook_private.management_idempotency|UPDATE",
     "hook_private.management_idempotency|DELETE",
     "hook_private.audit_log|INSERT",
+    "hook_private.telemetry_events|INSERT",
     "hook_control.environments|SELECT",
     "hook_control.environments|INSERT",
     "hook_control.environments|UPDATE",
@@ -59,6 +62,9 @@ const WORKER_TABLE_PRIVILEGES: &[&str] = &[
     "public._sqlx_migrations|SELECT",
     "hook.hooks|SELECT",
     "hook.hooks|DELETE",
+    "hook_private.telemetry_events|INSERT",
+    "hook_private.telemetry_events|DELETE",
+    "hook_private.telemetry_events|SELECT",
     "hook.events|SELECT",
     "hook.events|DELETE",
     "hook.blocked_requests|SELECT",
@@ -151,6 +157,9 @@ impl PostgresStore {
     /// by [`Self::ready`].
     pub async fn ready_for(&self, role: RuntimeDatabaseRole) -> Result<(), StoreError> {
         self.ready().await?;
+        if role == RuntimeDatabaseRole::Worker && !sqlx::query_scalar::<_, bool>("SELECT has_column_privilege(current_user, 'hook_private.telemetry_events', 'exported_at', 'UPDATE')").fetch_one(&self.pool).await? {
+            return Err(schema_not_ready("worker cannot update telemetry export markers"));
+        }
         ensure_privileges(
             &self.pool,
             "schema",
@@ -176,6 +185,7 @@ impl PostgresStore {
                 "hook_private.environment_id()|EXECUTE",
                 "hook_private.environment_is_available()|EXECUTE",
                 "hook_control.clean_environment(uuid)|EXECUTE",
+                "hook_private.contract_status(text,boolean)|EXECUTE",
             ],
             MISSING_FUNCTION_PRIVILEGES_SQL,
         )

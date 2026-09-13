@@ -14,7 +14,7 @@ use crate::{error::AppError, request_context};
 
 const REQUEST_ID_HEADER: http::HeaderName = http::HeaderName::from_static("x-request-id");
 const MAX_REQUEST_ID_BYTES: usize = 64;
-const MANAGEMENT_VARY: &str = "authorization, x-org-id, x-hook-test-key";
+const MANAGEMENT_VARY: &str = "authorization, x-org-id, x-hook-test-key, x-hook-test-app-secret";
 
 pub(super) async fn request_scope(mut request: Request, next: Next) -> Response {
     let contains_management_data = is_management_path(request.uri().path());

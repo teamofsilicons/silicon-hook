@@ -40,6 +40,16 @@ async fn notice(rx: &mut mpsc::UnboundedReceiver<String>, expected: &str) {
 
 async fn stream(ws: WebSocketUpgrade, State(f): State<Fixture>) -> impl IntoResponse {
     ws.on_upgrade(move |mut socket| async move {
+        let _ = f.notices.send("prewarmed".into());
+        let id = loop {
+            let Some(Ok(Message::Text(text))) = socket.recv().await else { return; };
+            let value: Value = serde_json::from_str(&text).unwrap();
+            if value["type"] == "subscribe" {
+                assert_eq!(value["token"], "oat_test");
+                assert_eq!(value["org_id"], "tos");
+                break value["subscription_id"].as_str().unwrap().to_owned();
+            }
+        };
         let _ = f.notices.send("connected".into());
         let ping = json!({"type":"ping","ping_id":"heartbeat-1"});
         let event = json!({"type":"new_event", "data":{"sender":"demo",
@@ -51,11 +61,13 @@ async fn stream(ws: WebSocketUpgrade, State(f): State<Fixture>) -> impl IntoResp
                     "query_string":"","headers":[],"content_type":"application/json",
                     "body":"{\"example\":true}","body_base64":null,"remote_ip":"127.0.0.1"}}}});
         for frame in [ping, event] {
-            if socket.send(Message::Text(frame.to_string().into())).await.is_err() { return; }
+            if socket.send(Message::Text(json!({"type":"frame","subscription_id":id,"frame":frame}).to_string().into())).await.is_err() { return; }
         }
         while let Some(Ok(message)) = socket.recv().await {
             if let Message::Text(text) = message {
                 let value: Value = serde_json::from_str(&text).unwrap();
+                assert_eq!(value["subscription_id"], id);
+                let value = &value["frame"];
                 let kind = value["type"].as_str().unwrap();
                 if kind == "pong" { assert_eq!(value["ping_id"], "heartbeat-1"); }
                 if kind == "ack" {
@@ -94,13 +106,14 @@ async fn authenticate_then_attach_detach_and_replay_without_leaking_destination(
             }
             Json(json!({"authenticated":true,"actor":{"type":"silicon","id":"cos:tos"},"org_id":"tos"})).into_response()
         }))
-        .route("/api/v1/ws", get(stream))
+        .route("/api/v1/relay/ws", get(stream))
         .route("/failing", post(|State(f): State<Fixture>| async move {
             let _ = f.notices.send("failed_delivery".into());
             StatusCode::SERVICE_UNAVAILABLE
         }))
         .route("/recipient", post(|State(f): State<Fixture>, headers: HeaderMap, Json(body): Json<Value>| async move {
-            assert_eq!(body.as_object().map(serde_json::Map::len), Some(2));
+            assert_eq!(body.as_object().map(serde_json::Map::len), Some(3));
+            assert_eq!(body["metadata"]["delivery_sequence"], 1);
             assert_eq!(body["type"], "new_event");
             assert_eq!(body["data"].as_object().map(serde_json::Map::len), Some(2));
             assert_eq!(body["data"]["sender"], "demo");
@@ -142,9 +155,10 @@ async fn authenticate_then_attach_detach_and_replay_without_leaking_destination(
     assert!(session.recipient().is_none());
     assert!(session.health().await.is_ok());
     assert!(session.client().login_status().await?.authenticated);
+    notice(&mut notices, "prewarmed").await;
     assert!(
         notices.try_recv().is_err(),
-        "no stream before recipient configuration"
+        "prewarming does not subscribe or acknowledge without a recipient"
     );
     assert_eq!(
         *fixture.login_bodies.lock().await,

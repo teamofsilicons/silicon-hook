@@ -77,13 +77,8 @@ comes from online IAM checks.
 
 ## Test application bootstrap
 
-Create a real IAM testing environment first, then create/import `tos>hook`
-inside it. Import returns a test-only application secret. Use that secret when
-configuring the Hook test environment. If IAM explicitly reports that the
-webhook secret is inherited, use the matching inherited signing secret/version;
-do not substitute the production app credential.
+Create an IAM test environment and import `tos>hook`. Pass the returned test application secret to `hook env use --app-secret-file ./hook-test-app-secret`, or the SDK's `with_test_app_secret`. Hook validates the selector online with IAM 1.8, resolves the environment identity, and creates empty isolated Hook storage on first use. Selection does not log in an actor.
 
-Every IAM request from a Hook test context includes the configured IAM testing
-key. No Hook test operation can use production IAM as a fallback. The Hook
-root key and IAM root key are distinct and must not be confused. See the
-[testing guide](../testing/README.md) for the complete bootstrap order.
+Sign in with an IAM test SLT or an existing test Carbon/Silicon public ID. Production never accepts this ID shortcut. Normal usage does not require either root key or a manual Hook/IAM pairing. Root administration APIs remain available for existing installations; use [the testing guide](../testing/README.md) for the normal flow.
+
+Imported IAM application webhooks retain their configured verification key; Hook additionally validates the signed testing-envelope key against the selected environment digest. The test selector is encrypted at rest and revalidated before data-plane operations. Invalid, deleted, revoked, foreign-app or unavailable selectors fail closed.

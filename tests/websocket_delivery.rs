@@ -394,3 +394,96 @@ async fn missing_pongs_close_the_connection_with_heartbeat_timeout() -> Result<(
         }
     }
 }
+
+#[tokio::test]
+async fn shared_socket_is_prewarmed_and_keeps_each_identity_authorized() -> Result<()> {
+    let harness =
+        Harness::start(realtime(Duration::from_secs(30), Duration::from_secs(120))?).await?;
+    let url = harness.base_url.replacen("http", "ws", 1) + "/api/v1/relay/ws";
+    let (mut socket, _) = tokio_tungstenite::connect_async(&url).await?;
+    assert_eq!(next_json(&mut socket).await?["type"], "relay_ready");
+    for (id, token) in [
+        ("silicon", "local:silicon:member:cos:tos"),
+        ("carbon", "local:carbon:owner:alice"),
+        ("denied", "local:silicon:member:other:tos"),
+    ] {
+        socket.send(Message::Text(json!({"type":"subscribe","subscription_id":id,"token":token,"org_id":"tos","silicon_ids":[SILICON_ID]}).to_string().into())).await?;
+    }
+    let mut ready = std::collections::BTreeSet::new();
+    let mut rejected = false;
+    while ready.len() < 2 || !rejected {
+        let frame = next_json(&mut socket).await?;
+        if frame["type"] == "ping" {
+            socket
+                .send(Message::Text(
+                    json!({"type":"pong","ping_id":frame["ping_id"]})
+                        .to_string()
+                        .into(),
+                ))
+                .await?;
+        }
+        if frame["frame"]["type"] == "ready" {
+            ready.insert(
+                frame["subscription_id"]
+                    .as_str()
+                    .context("subscription ID")?
+                    .to_owned(),
+            );
+        }
+        if frame["type"] == "subscription_error" {
+            assert_eq!(frame["subscription_id"], "denied");
+            assert_eq!(
+                frame["status"], 404,
+                "inaccessible targets stay undisclosed"
+            );
+            rejected = true;
+        }
+    }
+    let hook = harness.create_hook().await?;
+    harness
+        .send_webhook(&hook, "multiplex-event-1", "{\"test\":true}")
+        .await?;
+    let mut delivered = std::collections::BTreeSet::new();
+    while delivered.len() < 2 {
+        let frame = next_json(&mut socket).await?;
+        if frame["frame"]["type"] == "new_event" {
+            assert_eq!(frame["frame"]["data"]["metadata"]["silicon_id"], SILICON_ID);
+            delivered.insert(
+                frame["subscription_id"]
+                    .as_str()
+                    .context("subscription ID")?
+                    .to_owned(),
+            );
+        }
+    }
+    assert_eq!(delivered, ready);
+    socket.send(Message::Text(json!({"type":"frame","subscription_id":"silicon","frame":{"type":"ack","silicon_id":SILICON_ID,"through_sequence":1}}).to_string().into())).await?;
+    loop {
+        let frame = next_json(&mut socket).await?;
+        if frame["frame"]["type"] == "ack_recorded" {
+            assert_eq!(frame["subscription_id"], "silicon");
+            break;
+        }
+    }
+    for (token, expected) in [
+        ("local:silicon:member:cos:tos", 1),
+        ("local:carbon:owner:alice", 0),
+    ] {
+        let cursor: Value = harness
+            .client
+            .get(format!(
+                "{}/api/v1/silicons/{SILICON_ID}/deliveries/cursor",
+                harness.base_url
+            ))
+            .bearer_auth(token)
+            .header("x-org-id", "tos")
+            .send()
+            .await?
+            .error_for_status()?
+            .json()
+            .await?;
+        assert_eq!(cursor["acknowledged_through"], expected);
+    }
+    socket.close(None).await?;
+    Ok(())
+}

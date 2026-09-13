@@ -77,8 +77,11 @@ pub struct Client {
     pub(crate) token: Option<Secret>,
     pub(crate) org: Option<String>,
     pub(crate) test_key: Option<Secret>,
+    pub(crate) test_app_secret: Option<Secret>,
     negotiated: Arc<OnceCell<()>>,
-    auto_update: bool,
+    pub(crate) auto_update: bool,
+    pub(crate) telemetry: bool,
+    pub(crate) trace_id: Uuid,
 }
 
 impl fmt::Debug for Client {
@@ -86,7 +89,7 @@ impl fmt::Debug for Client {
         f.debug_struct("Client")
             .field("url", &self.base_url)
             .field("org", &self.org)
-            .field("testing", &self.test_key.is_some())
+            .field("testing", &self.is_testing())
             .finish_non_exhaustive()
     }
 }
@@ -107,9 +110,51 @@ impl Client {
             token: None,
             org: None,
             test_key: None,
+            test_app_secret: None,
             negotiated: Arc::default(),
             auto_update: true,
+            telemetry: true,
+            trace_id: Uuid::now_v7(),
         })
+    }
+    /// Controls optional diagnostic events and backend collection for this client.
+    /// `SILICON_HOOK_TELEMETRY=off` always overrides this preference.
+    pub fn with_telemetry(&self, enabled: bool) -> Self {
+        let mut client = self.clone();
+        client.telemetry = enabled;
+        client
+    }
+    pub(crate) fn telemetry_enabled(&self) -> bool {
+        self.telemetry
+            && std::env::var("SILICON_HOOK_TELEMETRY").map_or(true, |v| {
+                !matches!(v.to_ascii_lowercase().as_str(), "off" | "false" | "0")
+            })
+    }
+    /// Sends one best-effort diagnostic event for an authenticated client.
+    /// Context is restricted to documented source/step/outcome/operation names;
+    /// never pass user input. No credentials or payloads are included in the event.
+    pub async fn emit_telemetry(
+        &self,
+        source: &str,
+        step: &str,
+        outcome: &str,
+        operation: &str,
+        duration_ms: u64,
+        progress: u32,
+    ) {
+        if !self.telemetry_enabled() || self.token.is_none() {
+            return;
+        }
+        let event = serde_json::json!({"event_id":Uuid::now_v7(),"trace_id":self.trace_id,"source":source,"step":step,"outcome":outcome,"operation":operation,"duration_ms":duration_ms,"progress":progress,"version":env!("CARGO_PKG_VERSION"),"os":std::env::consts::OS,"arch":std::env::consts::ARCH});
+        if let Ok(request) = self.request(
+            reqwest::Method::POST,
+            &["telemetry"],
+            &[],
+            Some(&event),
+            None,
+        ) {
+            let _ = request.timeout(Duration::from_millis(500)).send().await;
+        }
     }
     /// Disables or enables automatic hourly dependency checks for this client.
     pub fn with_auto_update(&self, enabled: bool) -> Self {
@@ -134,18 +179,44 @@ impl Client {
         }
         let mut client = self.clone();
         client.test_key = Some(Secret::new(key));
+        client.test_app_secret = None;
+        Ok(client)
+    }
+    /// Select an IAM application sandbox. Validation happens online on every API call.
+    /// This does not log in an actor or grant environment administration.
+    pub fn with_test_app_secret(&self, secret: impl Into<String>) -> Result<Self> {
+        let secret = secret.into();
+        if secret.len() != 47
+            || !secret.starts_with("ask_")
+            || !secret[4..]
+                .bytes()
+                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        {
+            return Err(Error::Invalid(
+                "invalid IAM test app_secret; expected ask_ followed by 43 URL-safe characters"
+                    .into(),
+            ));
+        }
+        let mut client = self.clone();
+        client.test_key = None;
+        client.test_app_secret = Some(Secret::new(secret));
+        client.token = None;
+        client.org = None;
         Ok(client)
     }
     pub fn without_test_environment(&self) -> Self {
         let mut client = self.clone();
         client.test_key = None;
+        client.test_app_secret = None;
+        client.token = None;
+        client.org = None;
         client
     }
     pub fn base_url(&self) -> &Url {
         &self.base_url
     }
     pub fn is_testing(&self) -> bool {
-        self.test_key.is_some()
+        self.test_key.is_some() || self.test_app_secret.is_some()
     }
 
     /// Verifies that the server is Silicon Hook and agrees on API v1.
@@ -156,6 +227,14 @@ impl Client {
                     .http
                     .get(self.url(&["api", "version"])?)
                     .header("silicon-hook-supported-api-versions", "v1")
+                    .header(
+                        "x-hook-telemetry",
+                        if self.telemetry_enabled() {
+                            "on"
+                        } else {
+                            "off"
+                        },
+                    )
                     .send()
                     .await?;
                 let data: serde_json::Value = self.decode(response).await?;
@@ -296,7 +375,16 @@ impl Client {
             .http
             .request(method, self.url(&segments)?)
             .query(query)
-            .header("silicon-hook-api-version", "v1");
+            .header("silicon-hook-api-version", "v1")
+            .header("x-request-id", self.trace_id.to_string())
+            .header(
+                "x-hook-telemetry",
+                if self.telemetry_enabled() {
+                    "on"
+                } else {
+                    "off"
+                },
+            );
         if let Some(token) = &self.token {
             request = request.bearer_auth(token.expose());
         }
@@ -305,6 +393,9 @@ impl Client {
         }
         if let Some(key) = &self.test_key {
             request = request.header("x-hook-test-key", key.expose());
+        }
+        if let Some(secret) = &self.test_app_secret {
+            request = request.header("x-hook-test-app-secret", secret.expose());
         }
         if let Some(mutation) = mutation {
             request = request.header("idempotency-key", mutation.key());

@@ -184,7 +184,7 @@ hourly check and disables per-client background checks.
 
 ## Bring your own secret (BYOS)
 
-Version 0.4.0 adds `Client::set_secret`. Creation and updates also accept
+Version 0.5.0 adds `Client::set_secret`. Creation and updates also accept
 `Signature::secret` to configure the verification policy and secret together.
 
 ```rust,no_run

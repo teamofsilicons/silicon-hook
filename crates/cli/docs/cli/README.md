@@ -71,7 +71,7 @@ Global flags may appear before or after a command:
 | `--url <origin>` | Override service origin for a new/unbound profile |
 | `--org <handle>` | Select the production or test organization |
 | `--silicon <id>` | Silicon whose hooks/history/deliveries the action addresses |
-| `--test <uuid>` | Select a locally stored Hook test root key and separate test session |
+| `--test <uuid>` | Select a saved IAM application sandbox and its separate test session |
 | `--json` | Machine output with no contextual next-step prose |
 | `--idempotency-key <key>` | Stable logical mutation identifier for retries |
 
@@ -130,7 +130,7 @@ help. `hook docs <topic>` bundles these guides for offline reading.
 | `daemon ...` | Persistent relay and local request interface |
 | `config show` / `config profiles` | Inspect local settings and names |
 | `config home <directory>` | Set the base home directory for local state |
-| `config set <key> <value>` | Set url, org, silicon, or auto-update |
+| `config set <key> <value>` | Set url, org, silicon, auto-update, or telemetry |
 
 Hook deliveries printed by `listen` and posted to the configured webhook use
 `{"type":"new_event","data":{"sender":"<provider>","metadata":{...}}}`.
@@ -245,3 +245,9 @@ hook update <hook-uuid> --patch @byos-patch.json
 The file can contain `{"signature":{"secret":"provider-secret","secret_encoding":"utf8"}}`
 alongside `algorithm`, `payload`, `signature`, and other policy members. These
 commands work identically in production and paired testing environments.
+
+## Select an IAM sandbox
+
+Run `hook env use --app-secret-file ./hook-test-app-secret`, then `hook login your-silicon:tos --webhook-url http://127.0.0.1:8080/events`. The selector is validated online and never grants actor authority. Run `hook env exit` to restore the production session. `--production` uses production for one invocation. The active sandbox is printed after every command, error and help output. See [testing instructions](../testing/cli.md).
+
+`hook about` prints project links. `hook report "description" --pr https://github.com/teamofsilicons/silicon-hook/pull/123` submits an explicit issue using authenticated GitHub CLI. Diagnostic telemetry excludes report text.

@@ -3,6 +3,11 @@ use reqwest::Method;
 use uuid::Uuid;
 
 impl Client {
+    /// Read the sandbox selected by an application secret, without root authority.
+    pub async fn selected_environment(&self) -> Result<TestEnvironment> {
+        self.call(Method::GET, &["testing-session"], &[], None::<&()>, None)
+            .await
+    }
     pub async fn create_environment(
         &self,
         input: &CreateEnvironment,

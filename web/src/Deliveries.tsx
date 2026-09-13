@@ -1,6 +1,7 @@
 import { createSignal, For, Show, onCleanup } from "solid-js";
 import {
   api,
+  telemetryEnabled,
   scoped,
   query,
   gatewayOrigin,
@@ -239,6 +240,7 @@ export function Live(p: { ctx: Context }) {
     const url = new URL("/console/stream", gatewayOrigin());
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("plane", p.ctx.plane);
+    url.searchParams.set("telemetry", telemetryEnabled() ? "on" : "off");
     url.searchParams.set("org", p.ctx.org);
     silicons.forEach((id) => url.searchParams.append("silicon_id", id));
     const ws = new WebSocket(url);

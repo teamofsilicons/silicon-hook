@@ -8,7 +8,7 @@ use tokio::{
 };
 
 use crate::{
-    Client, Error, Mutation, Recipient, Relay, RelayNotice, Result, Secret,
+    Client, Error, Mutation, Recipient, RelayNotice, Result, Secret,
     local::{self, LocalClient, LocalIdentity},
     models::Tokens,
 };
@@ -262,40 +262,34 @@ impl Drop for RelaySession {
 async fn manage_relays(
     silicons: Vec<String>,
     mut destinations: watch::Receiver<Option<Recipient>>,
-    clients: watch::Receiver<Client>,
+    mut clients: watch::Receiver<Client>,
     mut stop: watch::Receiver<bool>,
     notices: Option<mpsc::Sender<RelayNotice>>,
 ) -> Result<()> {
-    let mut relays = JoinSet::new();
+    let base = clients.borrow().clone();
+    let (updates, registrations) = watch::channel(Vec::new());
+    let shared = crate::run_shared_relay(base, registrations, stop.clone(), notices);
+    tokio::pin!(shared);
     loop {
-        if *stop.borrow() {
-            return Ok(());
-        }
-        relays.abort_all();
-        while relays.join_next().await.is_some() {}
+        let client = clients.borrow_and_update().clone();
         let recipient = destinations.borrow_and_update().clone();
-        if let Some(recipient) = recipient {
-            for silicon_id in &silicons {
-                let relay = Relay {
-                    silicon_id: silicon_id.clone(),
-                    recipient: recipient.clone(),
-                };
-                let credentials = clients.clone();
-                let stopping = stop.clone();
-                let notices = notices.clone();
-                relays.spawn(async move { relay.run(credentials, stopping, notices).await });
-            }
-        }
+        updates.send_replace(
+            if let Some(recipient) = recipient.filter(|_| !silicons.is_empty()) {
+                vec![crate::RelayRegistration {
+                    id: "session".into(),
+                    client,
+                    silicons: silicons.clone(),
+                    recipient,
+                }]
+            } else {
+                Vec::new()
+            },
+        );
         tokio::select! {
-            changed = destinations.changed() => { if changed.is_err() { return Ok(()); } }
+            result = &mut shared => return result,
+            changed = destinations.changed() => if changed.is_err() { return Ok(()); },
+            changed = clients.changed() => if changed.is_err() { return Ok(()); },
             _ = stop.changed() => return Ok(()),
-            result = relays.join_next(), if !relays.is_empty() => {
-                return match result {
-                    Some(Ok(result)) => result,
-                    Some(Err(error)) => Err(Error::Protocol(format!("relay failed: {error}"))),
-                    None => Ok(()),
-                };
-            }
         }
     }
 }

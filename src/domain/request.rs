@@ -113,6 +113,82 @@ impl fmt::Debug for CapturedRequest {
 }
 
 impl CapturedRequest {
+    /// Remove credential fields after signature verification and before retention.
+    /// Sandboxes must never store IAM root selectors or authentication tokens.
+    #[must_use]
+    pub fn without_credentials(mut self) -> Self {
+        fn sensitive(name: &str) -> bool {
+            matches!(
+                name.to_ascii_lowercase().as_str(),
+                "authorization"
+                    | "cookie"
+                    | "set-cookie"
+                    | "x-hook-test-key"
+                    | "x-hook-test-app-secret"
+                    | "x-testing-environment-key"
+                    | "x-testing-application"
+                    | "app_secret"
+                    | "testing_key"
+                    | "iam_test_key"
+                    | "access_token"
+                    | "refresh_token"
+                    | "client_secret"
+            )
+        }
+        fn redact(value: &mut serde_json::Value) {
+            match value {
+                serde_json::Value::Object(map) => {
+                    for (key, value) in map {
+                        if sensitive(key) {
+                            *value = serde_json::Value::String("[REDACTED]".into());
+                        } else {
+                            redact(value);
+                        }
+                    }
+                }
+                serde_json::Value::Array(values) => {
+                    for value in values {
+                        redact(value);
+                    }
+                }
+                _ => {}
+            }
+        }
+        for (name, value) in &mut self.headers {
+            if sensitive(name) {
+                *value = "[REDACTED]".into();
+            }
+        }
+        if let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(&self.body) {
+            let original = value.clone();
+            redact(&mut value);
+            if value != original
+                && let Ok(bytes) = serde_json::to_vec(&value)
+            {
+                self.body = Bytes::from(bytes);
+                self.headers.retain(|(name, _)| name != "content-length");
+                self.json = OnceLock::new();
+            }
+        }
+        let query: Vec<_> = self
+            .url
+            .query_pairs()
+            .map(|(key, value)| {
+                let value = if sensitive(&key) {
+                    "[REDACTED]".to_owned()
+                } else {
+                    value.into_owned()
+                };
+                (key.into_owned(), value)
+            })
+            .collect();
+        if query.iter().any(|(name, _)| sensitive(name)) {
+            self.url.query_pairs_mut().clear().extend_pairs(query);
+            self.form = OnceLock::new();
+        }
+        self
+    }
+
     /// Validates capture bounds and normalizes header names to lowercase.
     ///
     /// # Errors

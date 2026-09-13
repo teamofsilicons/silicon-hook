@@ -70,8 +70,12 @@ pub(super) async fn version() -> Json<VersionResponse> {
 
 /// Unversioned handshake: selects the API major shared with the client.
 pub(super) async fn negotiate_api_version(
+    Extension(state): Extension<ApiState>,
     headers: HeaderMap,
 ) -> Result<(HeaderMap, Json<ApiVersionResponse>), AppError> {
+    if super::contracts::status(&state, false).await?.status == "sunset" {
+        return Err(AppError::ApiVersionUnsupported);
+    }
     let selected = version::negotiate(version::advertised_versions(&headers)?)?;
     Ok((
         version::response_headers(selected),

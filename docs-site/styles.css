@@ -1,0 +1,372 @@
+:root {
+  font-family:
+    Inter,
+    ui-sans-serif,
+    system-ui,
+    -apple-system,
+    sans-serif;
+  color: #182a24;
+  background: #fbfcfa;
+  font-size: 15px;
+  line-height: 1.7;
+  font-synthesis: none;
+  --line: #dce5df;
+  --green: #25684c;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+}
+a {
+  color: var(--green);
+  text-underline-offset: 3px;
+}
+header {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 30px;
+  min-height: 76px;
+  padding: 14px 32px;
+  background: #fbfcfaf5;
+  border-bottom: 1px solid var(--line);
+  backdrop-filter: blur(12px);
+}
+.brand {
+  display: flex;
+  gap: 9px;
+  align-items: center;
+  color: #182a24;
+  text-decoration: none;
+  font-weight: 700;
+  font-size: 20px;
+  letter-spacing: -0.6px;
+}
+.brand span {
+  font-size: 27px;
+  color: var(--green);
+}
+.brand small {
+  font-weight: 400;
+  margin-left: 5px;
+  padding-left: 15px;
+  border-left: 1px solid var(--line);
+  font-size: 15px;
+  color: #65776b;
+}
+.app-link {
+  margin-left: auto;
+  text-decoration: none;
+  font-size: 13px;
+}
+.search-label {
+  margin-left: auto;
+  font-size: 0;
+}
+input {
+  font: inherit;
+  font-size: 13px;
+  width: min(32vw, 350px);
+  padding: 11px 14px;
+  background: #f0f4ef;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+input:focus-visible,
+a:focus-visible,
+button:focus-visible {
+  outline: 3px solid #6aae8b;
+  outline-offset: 3px;
+}
+.layout {
+  display: grid;
+  grid-template-columns: 250px minmax(0, 860px) 200px;
+  max-width: 1530px;
+  margin: auto;
+}
+aside {
+  padding: 34px 22px;
+  position: sticky;
+  top: 76px;
+  height: calc(100vh - 76px);
+  overflow: auto;
+  border-right: 1px solid var(--line);
+}
+.version,
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 1.4px;
+  font-weight: 700;
+  color: #738276;
+}
+.version {
+  display: block;
+  margin: 0 10px 22px;
+}
+aside nav {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+aside nav a {
+  font-size: 13px;
+  color: #596a60;
+  line-height: 1.5;
+  text-decoration: none;
+  padding: 9px 11px;
+  border-radius: 6px;
+}
+aside nav a:hover {
+  background: #eff4ef;
+}
+aside a[aria-current] {
+  background: #e6f0e7;
+  color: #245e41;
+  font-weight: 650;
+}
+.source {
+  display: block;
+  margin: 32px 11px;
+  font-size: 12px;
+  text-decoration: none;
+}
+main {
+  padding: 48px 52px 32px;
+  min-width: 0;
+}
+h1,
+h2,
+h3 {
+  line-height: 1.25;
+  letter-spacing: -0.6px;
+  font-weight: 620;
+  scroll-margin-top: 105px;
+}
+h1 {
+  font-size: clamp(30px, 3vw, 42px);
+  margin: 17px 0 26px;
+}
+h2 {
+  font-size: 25px;
+  margin-top: 52px;
+}
+h3 {
+  font-size: 19px;
+  margin-top: 32px;
+}
+p {
+  margin: 17px 0;
+  color: #42574a;
+}
+li {
+  margin: 7px 0;
+}
+.anchor {
+  font-size: 0.7em;
+  text-decoration: none;
+  margin-left: 9px;
+  color: #8ca696;
+  opacity: 0;
+}
+h1:hover .anchor,
+h2:hover .anchor,
+h3:hover .anchor,
+.anchor:focus {
+  opacity: 1;
+}
+code {
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 0.85em;
+  padding: 2px 5px;
+  border-radius: 4px;
+  background: #edf2ed;
+  color: #315841;
+  overflow-wrap: anywhere;
+}
+pre {
+  overflow: auto;
+  background: #152920;
+  color: #def0e4;
+  border: 1px solid #294537;
+  border-radius: 10px;
+  padding: 20px 22px;
+  margin: 24px 0;
+  line-height: 1.65;
+  tab-size: 2;
+}
+pre code {
+  padding: 0;
+  background: none;
+  color: inherit;
+  overflow-wrap: normal;
+}
+table {
+  display: block;
+  overflow: auto;
+  width: 100%;
+  border-collapse: collapse;
+  margin: 25px 0;
+  font-size: 13px;
+}
+td,
+th {
+  padding: 12px 15px;
+  text-align: left;
+  border: 1px solid var(--line);
+  vertical-align: top;
+}
+th {
+  background: #edf3ed;
+  color: #3b5144;
+  font-weight: 600;
+}
+blockquote {
+  margin: 25px 0;
+  padding: 3px 22px;
+  border-left: 3px solid #84aa90;
+  background: #f0f5ef;
+}
+hr {
+  border: 0;
+  border-top: 1px solid var(--line);
+  margin: 40px 0;
+}
+.toc {
+  position: sticky;
+  top: 105px;
+  align-self: start;
+  padding: 42px 16px 20px 0;
+  font-size: 11px;
+  max-height: 80vh;
+  overflow: auto;
+}
+.toc strong {
+  display: block;
+  color: #536958;
+  margin-bottom: 15px;
+}
+.toc a {
+  display: block;
+  text-decoration: none;
+  color: #7c8c80;
+  line-height: 1.5;
+  padding: 6px 0;
+}
+footer {
+  margin-top: 65px;
+  border-top: 1px solid var(--line);
+  padding-top: 22px;
+  color: #7c8c80;
+  font-size: 11px;
+}
+.skip {
+  position: fixed;
+  top: -100px;
+  left: 12px;
+  z-index: 100;
+  padding: 10px;
+  background: white;
+}
+.skip:focus {
+  top: 10px;
+}
+#search-results {
+  position: fixed;
+  z-index: 20;
+  top: 70px;
+  left: 50%;
+  transform: translateX(-50%);
+  width: min(700px, 95vw);
+  max-height: 75vh;
+  overflow: auto;
+  padding: 18px;
+  background: white;
+  border: 1px solid var(--line);
+  box-shadow: 0 15px 40px #183b2420;
+  border-radius: 10px;
+}
+#search-results a {
+  display: block;
+  padding: 12px;
+  text-decoration: none;
+  border-bottom: 1px solid var(--line);
+}
+#search-results p {
+  font-size: 12px;
+  margin: 5px 0;
+}
+#search-results > p {
+  padding: 10px;
+}
+@media (max-width: 1150px) {
+  .layout {
+    grid-template-columns: 230px minmax(0, 1fr);
+  }
+  .toc {
+    display: none;
+  }
+  main {
+    padding: 35px;
+  }
+}
+@media (max-width: 700px) {
+  header {
+    padding: 12px 16px;
+    gap: 15px;
+    flex-wrap: wrap;
+  }
+  .brand {
+    font-size: 18px;
+  }
+  .app-link {
+    font-size: 12px;
+  }
+  .search-label {
+    order: 3;
+    width: 100%;
+    margin: 0;
+  }
+  input {
+    width: 100%;
+  }
+  .layout {
+    display: block;
+  }
+  aside {
+    position: static;
+    height: auto;
+    max-height: 240px;
+    padding: 18px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  aside nav {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 2px;
+  }
+  .source {
+    display: none;
+  }
+  .version {
+    margin-bottom: 10px;
+  }
+  main {
+    padding: 28px 20px;
+  }
+  h2 {
+    font-size: 23px;
+  }
+  header {
+    position: relative;
+  }
+  h1,
+  h2,
+  h3 {
+    scroll-margin-top: 20px;
+  }
+}

@@ -198,7 +198,8 @@ test("organization discovery uses the selected private session and IAM grant pag
       calls++;
       const url = new URL(input);
       const headers = init.headers as Record<string, string>;
-      if (url.pathname === "/api/v1/testing-environment") {
+      if (url.pathname === "/api/v1/testing-session") {
+        assert.equal(headers["x-hook-telemetry"], "off");
         assert.equal(headers["x-hook-test-key"], "sandbox-root");
         assert.equal(headers.authorization, undefined);
         return Response.json({ org_id: "sandbox-org" });
@@ -239,6 +240,7 @@ test("organization discovery uses the selected private session and IAM grant pag
             host: "hook.example",
             origin: cfg.origin,
             "x-hook-frontend": "1",
+            "x-hook-telemetry": "off",
             ...(cookie ? { cookie: "__Host-hook-session=" + id } : {}),
           },
         },

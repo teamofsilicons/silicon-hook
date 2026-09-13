@@ -32,13 +32,14 @@ relay.run(current, shutdown, None).await?;
 # drop((credentials, stop)); Ok(()) }
 ```
 
-Every recipient POST has exactly two top-level fields: `type` and `data`.
+Every recipient POST has three top-level fields: `type`, `data`, and `metadata`.
 `type` is `new_event`. `data` contains `sender` (the hook's provider name at
 receipt) and `metadata` (the complete retained event). For example:
 
 ```json
 {
   "type": "new_event",
+  "metadata": {"event_id":"00000000-0000-4000-8000-000000000001","delivery_sequence":42,"silicon_id":"cos:tos"},
   "data": {
     "sender": "stripe",
     "metadata": {
@@ -66,9 +67,7 @@ receipt) and `metadata` (the complete retained event). For example:
 }
 ```
 
-This is also the WebSocket event delivery shape, including replays. Event ID,
-Silicon ID, sequence, summary, timestamp and original request are all nested
-under `data.metadata`; none are extra top-level fields. Non-UTF-8 request bytes
+The server’s WebSocket frame retains `type` and `data`, including replays. The local receiver adds delivery identity under top-level `metadata`. Event ID, Silicon ID, sequence, summary, timestamp and original request remain available under `data.metadata`. Non-UTF-8 request bytes
 remain available in `data.metadata.request.body_base64`.
 Headers `silicon-hook-event-id` and `silicon-hook-delivery-sequence` make
 HTTP deduplication convenient. Consumers of the previous `type: event` shape
@@ -136,3 +135,32 @@ a watch channel of `LocalIdentity` values, a random control secret and a stop
 channel. The separate control secret authenticates `/health` and
 `POST /control/stop`. No network destination beyond loopback can be bound by
 this server API.
+
+
+## Shared system-daemon transport (client/CLI 0.5)
+
+The CLI daemon now prewarms one physical connection to `/api/v1/relay/ws`, even with no recipients. Each identity subscribes independently:
+
+```json
+{"type":"subscribe","subscription_id":"identity-1","token":"<actor-access-token>","org_id":"tos","silicon_ids":["cos:tos"],"app_secret":null,"test_key":null}
+```
+
+A sandbox subscription supplies `app_secret`; a legacy root-key subscription supplies `test_key`. Never supply both. These are TLS-protected frame bodies, never query parameters. The backend validates each actor, organization, target and sandbox independently. One failed subscription does not grant authority to another.
+
+The initial transport frame is `{"type":"relay_ready","protocol_version":1}`. Ordinary protocol-1 ready/event/ping/ack frames are wrapped as `{"type":"frame","subscription_id":"identity-1","frame":{...}}`. Send acknowledgments and logical pongs in that same wrapper. Physical `ping` frames receive an unwrapped `pong` carrying `ping_id`. Subscription closure is scoped to its identity. The direct `/api/v1/ws` contract remains available for existing consumers.
+
+Credential or destination changes replace the connection and replay unacknowledged events. Bounded per-stream queues and concurrent recipient workers keep heartbeats responsive while a receiver retries. There is one Hook origin per system daemon. Stateless SDK hosts can pass several `RelayRegistration` values to `run_shared_relay`.
+
+## Receiver metadata and optional signing
+
+Local receiver requests preserve the existing `type` and `data` and add top-level `metadata` containing `event_id`, `delivery_sequence`, `silicon_id` and optional `isi`. Accept additive fields. A successful response acknowledges only that identity's stream; other subscribers retain their own cursors.
+
+With `hook webhook <url> --secret-file ./key`, each local request carries:
+
+```text
+Silicon-Hook-Signature: t=<unix-seconds>,v1=<lowercase-hex-HMAC-SHA256>
+```
+
+Compute the HMAC over `<timestamp>.<complete raw body>` using the configured local secret. Reject old timestamps and compare signatures in constant time. Retries reuse the event ID and sequence but get a fresh timestamp/signature. The secret stays on the client and is never transmitted to Hook.
+
+For sandbox delivery, loopback is the default safe destination. Explicitly mark a remote sandbox receiver with `--test-destination` (Rust: `Recipient::with_test_destination(true)`). That receiver must simulate any email, SMS, payment or other production side effect.

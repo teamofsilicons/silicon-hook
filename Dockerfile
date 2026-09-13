@@ -18,6 +18,7 @@ RUN apt-get update \
 COPY --from=builder /build/target/release/hook-api /usr/local/bin/hook-api
 COPY --from=builder /build/target/release/hook-worker /usr/local/bin/hook-worker
 COPY --from=builder /build/target/release/hook-migrate /usr/local/bin/hook-migrate
+COPY --from=builder /build/target/release/hook-contract /usr/local/bin/hook-contract
 
 USER hook
 EXPOSE 8080

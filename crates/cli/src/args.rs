@@ -7,7 +7,7 @@ use uuid::Uuid;
     version,
     about = "Signed webhooks for Silicons, with reliable local delivery.",
     long_about = "Manage Silicon Hook through its official Rust client. Sign in with an IAM short-lived token, then configure your delivery URL with hook webhook. Use the same commands in a sandbox with --test <environment-id>.",
-    after_help = "Start: hook iam --json; hook login <slt> --org tos\nDelivery: hook webhook http://127.0.0.1:9000/events\nThen: hook --silicon cos:tos create GitHub\nExplore: hook commands; hook <command> --help"
+    after_help = "Start: hook iam --json; hook login <slt> --org tos\nDelivery: hook webhook http://127.0.0.1:9000/events\nThen: hook --silicon cos:tos create GitHub\nExplore: hook commands; hook <command> --help\nDocs: https://docs.hook.teamofsilicons.com · Source: https://github.com/teamofsilicons/silicon-hook\nRust: https://crates.io/crates/silicon-hook-client · Bugs: hook report --help"
 )]
 pub struct Cli {
     #[arg(
@@ -46,6 +46,20 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
+        conflicts_with = "test",
+        help = "Use the separate production session for this command"
+    )]
+    pub production: bool,
+    #[arg(
+        long,
+        global = true,
+        env = "ISI",
+        help = "Optional internal Silicon identifier stored in local delivery metadata"
+    )]
+    pub isi: Option<String>,
+    #[arg(
+        long,
+        global = true,
         help = "Structured JSON output without next-step prose"
     )]
     pub json: bool,
@@ -61,12 +75,32 @@ pub struct Cli {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Submit a bug report to GitHub using an already authenticated gh CLI. No logs or credentials are collected.
+    Report {
+        message: String,
+        #[arg(
+            long,
+            help = "Optional silicon-hook GitHub pull request URL containing a fix"
+        )]
+        pr: Option<String>,
+    },
+    /// Show source, online docs and published package links.
+    About,
     /// Sign in with an IAM short-lived token, or check login status.
     Login(Login),
     /// Discover the IAM app_id needed to request a short-lived token; no login needed.
     Iam,
     /// Configure or replace this identity's local delivery URL and start its relay.
-    Webhook { webhook_url: String },
+    Webhook {
+        webhook_url: String,
+        #[arg(long, help = "Optional local delivery HMAC key file; '-' reads stdin")]
+        secret_file: Option<String>,
+        #[arg(
+            long,
+            help = "Explicitly mark a remote webhook as a sandbox-only destination"
+        )]
+        test_destination: bool,
+    },
     /// Detach this identity's local delivery URL, retaining login and pending events.
     Unhook,
     /// Revoke the saved refresh-token family and remove the local session.
@@ -177,7 +211,7 @@ pub enum Command {
     },
     /// Discover every command and its complete usage, without signing in.
     Commands,
-    /// Read bundled guides: overview, api, client, cli, iam, signatures, testing, testing-api, testing-client, testing-cli, relay.
+    /// Read bundled guides: overview, api, client, cli, iam, signatures, testing, testing-api, testing-client, testing-cli, relay, contracts, configuration, telemetry, deployment.
     Docs {
         #[arg(default_value = "overview")]
         topic: String,
@@ -254,6 +288,13 @@ pub enum Deliveries {
 }
 #[derive(Debug, Subcommand)]
 pub enum Environment {
+    /// Select a sandbox with its IAM app_secret. Then run `hook login <test-slt-or-id>`.
+    Use {
+        #[arg(long, help = "File containing the IAM app_secret; '-' reads stdin")]
+        app_secret_file: String,
+    },
+    /// Leave testing mode and return to the separately saved production session.
+    Exit,
     /// Create an empty Hook sandbox linked to an existing IAM test environment.
     Create {
         name: String,
@@ -318,9 +359,9 @@ pub enum Config {
     Profiles,
     /// Set the base home directory; Hook stores state below .silicon-hook.
     Home { location: String },
-    /// Set url, org, silicon or auto-update for the selected profile.
+    /// Set url, org, silicon, auto-update or telemetry for the selected profile.
     Set {
-        #[arg(value_parser=["url","org","silicon","auto-update"])]
+        #[arg(value_parser=["url","org","silicon","auto-update","telemetry"])]
         key: String,
         value: String,
     },

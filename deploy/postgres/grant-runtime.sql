@@ -90,3 +90,8 @@ GRANT EXECUTE ON FUNCTION hook_private.environment_id(), hook_private.environmen
 GRANT EXECUTE ON FUNCTION hook_control.clean_environment(uuid) TO :"api_role", :"worker_role";
 GRANT SELECT, INSERT, UPDATE ON hook_control.mutation_results TO :"api_role";
 GRANT SELECT, DELETE ON hook_control.mutation_results TO :"worker_role";
+
+GRANT INSERT ON hook_private.telemetry_events TO :"api_role", :"worker_role";
+GRANT SELECT, DELETE ON hook_private.telemetry_events TO :"worker_role";
+GRANT UPDATE (exported_at) ON hook_private.telemetry_events TO :"worker_role";
+GRANT EXECUTE ON FUNCTION hook_private.contract_status(text, boolean) TO :"api_role", :"worker_role";

@@ -111,6 +111,8 @@ struct Credentials {
     hook_key: String,
     iam_key: String,
     iam: Option<TestIamConfiguration>,
+    #[serde(default)]
+    app_selector: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -150,6 +152,14 @@ impl fmt::Debug for EnvironmentService {
 }
 
 impl EnvironmentService {
+    /// Metadata for an already selected isolated application context.
+    ///
+    /// # Errors
+    /// Returns not found for unavailable storage.
+    pub async fn selected_metadata(&self, id: Uuid) -> Result<TestEnvironment, AppError> {
+        Ok(self.record(id).await?.metadata)
+    }
+
     /// Connects the shared test database and verifies its migration contract.
     ///
     /// # Errors
@@ -221,6 +231,7 @@ impl EnvironmentService {
         .to_vec();
         let id = Uuid::now_v7();
         let credentials = Credentials {
+            app_selector: None,
             hook_key: random_key()?,
             iam_key: iam_key.to_owned(),
             iam: input.iam,
@@ -453,6 +464,77 @@ impl EnvironmentService {
         self.context(self.by_key(key).await?).await
     }
 
+    /// Selects or initializes empty storage using IAM's authenticated sandbox identity.
+    /// The selector never grants Hook root-administration authority.
+    ///
+    /// # Errors
+    /// Fails closed when IAM rejects the secret or returns an older lifecycle snapshot.
+    pub async fn resolve_app_secret(&self, secret: &str) -> Result<EnvironmentContext, AppError> {
+        let (selected_iam, remote) = self
+            .production_iam
+            .select_testing_application(secret)
+            .await?;
+        let metadata = remote.environment.ok_or(AppError::ProviderUnavailable)?;
+        let digest = hex::decode(
+            remote
+                .webhook_key_digest
+                .ok_or(AppError::ProviderUnavailable)?,
+        )
+        .map_err(internal)?;
+        let mut tx = self.pool.begin().await.map_err(internal)?;
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(remote.environment_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(internal)?;
+        let existing: Option<(Uuid, Option<i64>, Option<time::OffsetDateTime>)> = sqlx::query_as(
+            "SELECT id, iam_version, iam_cleaned_at FROM hook_control.environments WHERE iam_environment_id = $1 OR iam_key_hash = $2 FOR UPDATE")
+            .bind(remote.environment_id).bind(&digest).fetch_optional(&mut *tx).await.map_err(internal)?;
+        let id = existing.as_ref().map_or(remote.environment_id, |row| row.0);
+        if existing
+            .as_ref()
+            .and_then(|row| row.1)
+            .is_some_and(|v| v > metadata.version)
+        {
+            return Err(AppError::conflict("stale_iam_environment"));
+        }
+        let credentials = if existing.is_some() {
+            let row = locked_record(&mut tx, id).await?;
+            if row.metadata.deleted_at.is_some() {
+                return Err(AppError::Unauthenticated);
+            }
+            let mut credentials = self.decrypt(&row)?;
+            credentials.app_selector = Some(secret.to_owned());
+            credentials
+        } else {
+            Credentials {
+                hook_key: random_key()?,
+                iam_key: String::new(),
+                iam: None,
+                app_selector: Some(secret.to_owned()),
+            }
+        };
+        if existing
+            .as_ref()
+            .is_some_and(|row| row.2 != metadata.cleaned_at)
+        {
+            sqlx::query("SELECT hook_control.clean_environment($1)")
+                .bind(id)
+                .execute(&mut *tx)
+                .await
+                .map_err(internal)?;
+        }
+        let encrypted = self.encrypt(id, &credentials)?;
+        sqlx::query("INSERT INTO hook_control.environments (id, org_id, creator_kind, creator_id, name, description, key_hash, iam_key_hash, encrypted_credentials, creation_request_hash, creation_input_hash, iam_environment_id, iam_version, iam_cleaned_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$10,$11,$12,$13) ON CONFLICT (id) DO UPDATE SET name=EXCLUDED.name, description=EXCLUDED.description, iam_key_hash=EXCLUDED.iam_key_hash, encrypted_credentials=EXCLUDED.encrypted_credentials, iam_environment_id=EXCLUDED.iam_environment_id, iam_version=EXCLUDED.iam_version, iam_cleaned_at=EXCLUDED.iam_cleaned_at, last_activity_at=clock_timestamp()")
+            .bind(id).bind(&metadata.org_id).bind(&metadata.creator_type).bind(&metadata.creator_id)
+            .bind(&metadata.name).bind(&metadata.description).bind(hash_key(&credentials.hook_key)).bind(digest)
+            .bind(encrypted).bind(hash_key(&format!("iam-selector:{id}"))).bind(remote.environment_id)
+            .bind(metadata.version).bind(metadata.cleaned_at).execute(&mut *tx).await.map_err(internal)?;
+        tx.commit().await.map_err(internal)?;
+        self.scoped_context(self.record(id).await?, Some(selected_iam))
+            .await
+    }
+
     /// Selects the environment owning a public test provider URL.
     ///
     /// # Errors
@@ -487,16 +569,35 @@ impl EnvironmentService {
             return Err(AppError::NotFound);
         }
         let credentials = self.decrypt(&row)?;
-        let config = credentials
-            .iam
-            .as_ref()
-            .ok_or_else(|| AppError::conflict("test_iam_application_not_configured"))?;
+        if let Some(secret) = &credentials.app_selector {
+            return self.resolve_app_secret(secret).await;
+        }
+        self.scoped_context(row, None).await
+    }
+
+    async fn scoped_context(
+        &self,
+        row: EnvironmentRecord,
+        selected_iam: Option<IamClient>,
+    ) -> Result<EnvironmentContext, AppError> {
+        if row.metadata.deleted_at.is_some() {
+            return Err(AppError::NotFound);
+        }
+        let credentials = self.decrypt(&row)?;
         let mut pools = self.pools.lock().await;
         let identity = (row.metadata.id, row.metadata.generation);
         let (pool, iam) = if let Some(context) = pools.get(&identity) {
             context.clone()
         } else {
-            let iam = self.iam_client(&credentials.iam_key, config).await?;
+            let iam = if let Some(iam) = &selected_iam {
+                iam.clone()
+            } else {
+                let config = credentials
+                    .iam
+                    .as_ref()
+                    .ok_or_else(|| AppError::conflict("test_iam_application_not_configured"))?;
+                self.iam_client(&credentials.iam_key, config).await?
+            };
             let options = postgres::connect_options(&self.database, "hook-test-scoped")
                 .map_err(internal)?
                 .options([
@@ -524,7 +625,7 @@ impl EnvironmentService {
         Ok(EnvironmentContext {
             environment: row.metadata,
             store: PostgresStore::new(pool),
-            iam,
+            iam: selected_iam.unwrap_or(iam),
         })
     }
 

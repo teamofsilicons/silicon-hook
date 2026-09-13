@@ -10,11 +10,14 @@
 mod client;
 mod environments;
 mod hooks;
+mod multiplex;
+pub use multiplex::{RelayRegistration, run_shared_relay};
 pub mod local;
 pub mod models;
 mod relay;
 mod session;
 mod stream;
+pub mod support;
 pub mod updater;
 pub use relay::{Recipient, Relay, RelayNotice};
 pub use session::{LoginOptions, RelaySession};

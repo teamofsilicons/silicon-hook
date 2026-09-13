@@ -5,6 +5,15 @@ use sqlx::PgPool;
 use super::StoreError;
 
 const REQUIRED_COLUMNS: &[&str] = &[
+    "hook_private.telemetry_events.environment_id|uuid|true",
+    "hook_private.telemetry_events.event_id|uuid|true",
+    "hook_private.telemetry_events.data|jsonb|true",
+    "hook_private.telemetry_events.exported_at|timestamp with time zone|false",
+    "hook_control.environments.iam_version|bigint|false",
+    "hook_control.environments.iam_cleaned_at|timestamp with time zone|false",
+    "hook_control.environments.iam_environment_id|uuid|false",
+    "hook_private.contract_versions.environment_id|uuid|true",
+    "hook_private.contract_versions.status|text|true",
     "hook.hooks.environment_id|uuid|true",
     "hook.events.environment_id|uuid|true",
     "hook.blocked_requests.environment_id|uuid|true",

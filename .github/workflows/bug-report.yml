@@ -1,0 +1,38 @@
+name: Bug report notifications
+on:
+  issues:
+    types: [opened]
+permissions:
+  contents: read
+jobs:
+  notify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 2
+    steps:
+      - name: Notify maintainers through Postmark
+        env:
+          POSTMARK_SERVER_TOKEN: ${{ secrets.POSTMARK_SERVER_TOKEN }}
+          POSTMARK_FROM_EMAIL: ${{ vars.POSTMARK_FROM_EMAIL }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          from pathlib import Path
+          token = os.environ.get('POSTMARK_SERVER_TOKEN')
+          sender = os.environ.get('POSTMARK_FROM_EMAIL') or 'hook@teamofsilicons.com'
+          if not token:
+              raise SystemExit('Configure POSTMARK_SERVER_TOKEN and verify hook@teamofsilicons.com (or POSTMARK_FROM_EMAIL) for report mail.')
+          issue = json.loads(Path(os.environ['GITHUB_EVENT_PATH']).read_text())['issue']
+          data = {
+              'From': sender,
+              'To': 'saketdev12@gmail.com,shubhastro2@gmails.com,bugs@teamofsilicons.com',
+              'Subject': 'Silicon Hook report #' + str(issue['number']),
+              'TextBody': issue['html_url'] + '\n\n' + issue['title'] + '\n\n' + (issue.get('body') or ''),
+              'MessageStream': 'outbound', 'TrackOpens': False, 'TrackLinks': 'None',
+          }
+          request = urllib.request.Request('https://api.postmarkapp.com/email', data=json.dumps(data).encode(), headers={'Content-Type': 'application/json', 'Accept': 'application/json', 'X-Postmark-Server-Token': token})
+          with urllib.request.urlopen(request, timeout=30) as response:
+              result = json.load(response)
+          if result.get('ErrorCode') != 0:
+              raise SystemExit('Postmark rejected report notification; inspect its delivery activity before retrying.')
+          print('Report notification accepted by Postmark.')
+          PY

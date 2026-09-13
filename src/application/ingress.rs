@@ -117,6 +117,11 @@ impl HookApplication {
         hook: Hook,
         request: CapturedRequest,
     ) -> Result<ReceiveOutcome, ApplicationError> {
+        let request = if self.environment_identity().is_some() {
+            request.without_credentials()
+        } else {
+            request
+        };
         self.store
             .accept_event(AcceptEvent {
                 event_id: EventId::new(),
@@ -134,6 +139,11 @@ impl HookApplication {
         request: CapturedRequest,
         reason: BlockReason,
     ) -> Result<ReceiveOutcome, ApplicationError> {
+        let request = if self.environment_identity().is_some() {
+            request.without_credentials()
+        } else {
+            request
+        };
         let strike = self
             .store
             .record_unverified_request(hook.id(), request.remote_ip(), request.received_at())

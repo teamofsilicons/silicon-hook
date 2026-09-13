@@ -91,6 +91,7 @@ export function allowed(path: string, method: string): boolean {
     )
   )
     return method === "POST";
+  if (p === "/api/v1/testing-session") return method === "GET";
   if (p === "/api/v1/testing-environment") return method === "GET";
   if (p === "/api/v1/testing-environment/clean") return method === "POST";
   if (p === "/api/v1/testing-environment/iam") return method === "PUT";
@@ -194,6 +195,8 @@ export function gateway(cfg: Config) {
     if (plane.tokens)
       headers.authorization = "Bearer " + plane.tokens.access_token;
     if (plane.key) headers["x-hook-test-key"] = plane.key;
+    if (plane.appSecret) headers["x-hook-test-app-secret"] = plane.appSecret;
+    if (plane.telemetry === false) headers["x-hook-telemetry"] = "off";
     if (org) headers["x-org-id"] = org;
     if (body !== undefined) headers["content-type"] = "application/json";
     if (key) headers["idempotency-key"] = key;
@@ -270,7 +273,7 @@ export function gateway(cfg: Config) {
       planes: Object.entries(session.planes).map(([id, p]) => ({
         id,
         name: p.name,
-        attached: !!p.key,
+        attached: !!(p.key || p.appSecret),
         authenticated: !!p.tokens,
         actor: p.tokens?.actor,
         org_id: p.tokens?.org_id,
@@ -326,7 +329,7 @@ export function gateway(cfg: Config) {
         );
         res.setHeader(
           "Access-Control-Allow-Headers",
-          "Content-Type, X-Hook-Frontend, X-Org-Id, Idempotency-Key",
+          "Content-Type, X-Hook-Frontend, X-Hook-Telemetry, X-Org-Id, Idempotency-Key",
         );
         res.writeHead(204);
         res.end();
@@ -405,24 +408,31 @@ export function gateway(cfg: Config) {
         const plane = Object.hasOwn(session.planes, planeId)
           ? session.planes[planeId]
           : undefined;
+        for (const saved of Object.values(session.planes)) saved.telemetry = req.headers["x-hook-telemetry"] !== "off";
+        if (url.pathname === "/console/telemetry" && req.method === "POST") {
+          if (plane?.telemetry !== false && plane?.tokens) {
+            await upstream("/api/v1/telemetry", "POST", plane, plane.tokens.org_id || "", body);
+          }
+          return { accepted: true };
+        }
         if (url.pathname === "/console/session" && req.method === "GET") {
           await store.save(id, session);
           return publicSession(session);
         }
         if (url.pathname === "/console/attach" && req.method === "POST") {
           if (
-            typeof body?.key !== "string" ||
-            !/^[a-zA-Z0-9]{32}$/.test(body.key)
+            typeof body?.app_secret !== "string" ||
+            !/^ask_[A-Za-z0-9_-]{43}$/.test(body.app_secret)
           )
             throw new GatewayError(
               422,
               "invalid_key",
-              "Enter the 32-character Hook test key.",
+              "Enter the IAM test application app_secret.",
             );
           const env = await upstream(
-            "/api/v1/testing-environment",
+            "/api/v1/testing-session",
             "GET",
-            { name: "Test", key: body.key },
+            { name: "Test", appSecret: body.app_secret, telemetry: req.headers["x-hook-telemetry"] !== "off" },
             "",
           );
           if (
@@ -438,7 +448,8 @@ export function gateway(cfg: Config) {
           session.planes[env.id] = {
             ...session.planes[env.id],
             name: env.name,
-            key: body.key,
+            key: undefined,
+            appSecret: body.app_secret,
           };
           await store.save(id, session);
           return { id: env.id, ...publicSession(session) };
@@ -452,7 +463,7 @@ export function gateway(cfg: Config) {
         if (url.pathname === "/console/organizations" && req.method === "GET") {
           if (planeId !== "production") {
             const env = await upstream(
-              "/api/v1/testing-environment",
+              "/api/v1/testing-session",
               "GET",
               plane,
               "",
@@ -575,7 +586,7 @@ export function gateway(cfg: Config) {
           const tokens = (await upstream(
             "/api/v1/auth/login",
             "POST",
-            { name: plane.name, key: plane.key },
+            { name: plane.name, key: plane.key, appSecret: plane.appSecret },
             "",
             { slt: body.slt.trim() },
             mutation(req),
@@ -661,6 +672,7 @@ export function gateway(cfg: Config) {
           !root &&
           path !== "/healthz" &&
           path !== "/readyz" &&
+          path !== "/api/v1/testing-session" &&
           !path.endsWith("/version")
         )
           await refresh(id, session, plane);
@@ -732,6 +744,7 @@ export function gateway(cfg: Config) {
             p = s.planes[planeId];
           if (!p?.tokens) throw new Error("Sign in first");
           await refresh(id, s, p);
+          p.telemetry = url.searchParams.get("telemetry") !== "off";
           return structuredClone(p);
         });
         const ids = url.searchParams.getAll("silicon_id");
@@ -749,7 +762,10 @@ export function gateway(cfg: Config) {
           "silicon-hook-api-version": "v1",
         };
         if (plane.key) headers["x-hook-test-key"] = plane.key;
+    if (plane.appSecret) headers["x-hook-test-app-secret"] = plane.appSecret;
         const org = url.searchParams.get("org");
+        if (plane.telemetry === false) headers["x-hook-telemetry"] = "off";
+    if (plane.telemetry === false) headers["x-hook-telemetry"] = "off";
         if (org) headers["x-org-id"] = org;
         wss.handleUpgrade(req, socket, head, (client) => {
           const upstream = new WebSocket(target, {

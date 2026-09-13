@@ -15,6 +15,12 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
+    #[serde(default)]
+    pub webhook_secret: Option<Secret>,
+    #[serde(default)]
+    pub isi: Option<String>,
+    #[serde(default)]
+    pub test_destination: bool,
     pub tokens: Tokens,
     pub expires_at: u64,
     #[serde(default)]
@@ -30,6 +36,14 @@ pub struct Session {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Profile {
+    #[serde(default = "enabled")]
+    pub telemetry: bool,
+    #[serde(default)]
+    pub selected_test: Option<Uuid>,
+    #[serde(default)]
+    pub test_app_secrets: BTreeMap<Uuid, Secret>,
+    #[serde(default)]
+    pub test_names: BTreeMap<Uuid, String>,
     pub url: String,
     pub org: Option<String>,
     pub silicon: Option<String>,
@@ -46,6 +60,10 @@ pub struct Profile {
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            selected_test: None,
+            telemetry: true,
+            test_app_secrets: BTreeMap::new(),
+            test_names: BTreeMap::new(),
             url: "https://backend.hook.teamofsilicons.com".into(),
             org: None,
             silicon: None,
@@ -224,16 +242,23 @@ pub fn select_client(
         && Client::new(url)?.base_url() != Client::new(&profile.url)?.base_url()
         && (profile.session.is_some()
             || !profile.test_sessions.is_empty()
-            || !profile.test_keys.is_empty())
+            || !profile.test_keys.is_empty()
+            || !profile.test_app_secrets.is_empty())
     {
         anyhow::bail!(
             "This profile is bound to a different backend. Use a new --profile for a new service origin."
         );
     }
-    let mut client = Client::new(url.unwrap_or(&profile.url))?.with_auto_update(false);
+    let mut client = Client::new(url.unwrap_or(&profile.url))?
+        .with_auto_update(false)
+        .with_telemetry(profile.telemetry);
     if let Some(environment) = env {
-        let key=profile.test_keys.get(&environment).context("No key stored for this environment. Use hook env attach <id> --key-file <file>, or create it with hook env create.")?;
-        client = client.with_test_key(key.expose())?;
+        if let Some(secret) = profile.test_app_secrets.get(&environment) {
+            client = client.with_test_app_secret(secret.expose())?;
+        } else {
+            let key=profile.test_keys.get(&environment).context("No key stored for this environment. Use hook env attach <id> --key-file <file>, or create it with hook env create.")?;
+            client = client.with_test_key(key.expose())?;
+        }
     }
     let org = org
         .or_else(|| env.and_then(|id| profile.test_orgs.get(&id).map(String::as_str)))

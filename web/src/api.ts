@@ -108,6 +108,7 @@ export async function request<T>(
 ): Promise<T> {
   const headers: Record<string, string> = {
     "X-Hook-Frontend": "1",
+    "X-Hook-Telemetry": telemetryEnabled() ? "on" : "off",
     accept: "application/json",
   };
   if (body !== undefined) headers["content-type"] = "application/json";
@@ -196,4 +197,23 @@ export function download(
   a.download = name;
   a.click();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+let telemetryPreference: boolean | undefined;
+export function telemetryEnabled(): boolean {
+  if (telemetryPreference !== undefined) return telemetryPreference;
+  try { return localStorage.getItem("hook.telemetry") !== "off"; } catch { return true; }
+}
+export function setTelemetry(enabled: boolean) {
+  telemetryPreference = enabled;
+  try { localStorage.setItem("hook.telemetry", enabled ? "on" : "off"); } catch {}
+}
+export async function track(ctx: Context, step: "page_view" | "interaction" | "error", operation: string) {
+  if (!telemetryEnabled() || !["overview","hooks","events","blocked","deliveries","live","testing","connections"].includes(operation)) return;
+  try {
+    await request("/console/telemetry?plane=" + encodeURIComponent(ctx.plane), "POST", {
+      event_id: crypto.randomUUID(), trace_id: crypto.randomUUID(), source: "web", step,
+      outcome: step === "error" ? "failed" : "succeeded", operation, version: "0.5.0", progress: 1,
+    });
+  } catch { /* Diagnostics must never interrupt the product. */ }
 }
