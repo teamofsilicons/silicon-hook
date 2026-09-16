@@ -2015,6 +2015,7 @@ async fn honeycomb_lifecycle_fences_cleanup_retries_and_retains_binding() -> Res
         config::{DatabaseSettings, IamSettings},
         infrastructure::iam::IamClient,
     };
+    use tower::ServiceExt as _;
     use uuid::Uuid;
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
@@ -2097,7 +2098,6 @@ async fn honeycomb_lifecycle_fences_cleanup_retries_and_retains_binding() -> Res
             trusted_proxy_hops: 0,
         },
     );
-    use tower::ServiceExt as _;
     let endpoint = format!(
         "/internal/honeycomb/organizations/org:integration/testing-environments/{id}/operations/{}",
         prepare.operation_id
@@ -2302,7 +2302,9 @@ async fn honeycomb_lifecycle_fences_cleanup_retries_and_retains_binding() -> Res
     );
     let mut rotate = operation("rotate-key", 5, 2, 2)?;
     rotate.testing_key = "B".repeat(32);
-    assert_eq!(service.lifecycle(&rotate).await?["state"], "completed");
+    let (first_rotation, repeated_rotation) =
+        tokio::join!(service.lifecycle(&rotate), service.lifecycle(&rotate));
+    assert_eq!(first_rotation?, repeated_rotation?);
     let mut purge = operation("purge", 6, 2, 2)?;
     purge.testing_key = "B".repeat(32);
     assert_eq!(service.lifecycle(&purge).await?["state"], "completed");

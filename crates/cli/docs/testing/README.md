@@ -1,8 +1,8 @@
-# Test Hook in an isolated IAM sandbox
+# Test Hook in a shared sandbox
 
 ## Select a sandbox
 
-Create an IAM test environment and import `tos>hook` in IAM. Copy that application's **test app_secret** into a private file. Hook validates it with IAM and automatically finds the correct sandbox; there is no manual pairing or IAM root-key input.
+Create a shared test environment in Honeycomb and import `tos>hook`. Wait for shared readiness. Copy that application's **test app_secret** into a private file. Hook validates it with IAM and automatically finds the correct sandbox; there is no manual pairing or IAM root-key input.
 
 ```sh
 hook env use --app-secret-file ./iam-test-app-secret
@@ -25,7 +25,7 @@ New storage starts empty. Hooks, signing keys, history, blocked requests, delive
 
 Invalid, revoked or unavailable selectors return errors. Neither the CLI nor the backend falls back to production. Production tokens and tokens for another sandbox are rejected by IAM. Application selectors are carried on every scoped IAM call, including actor authorization and refresh. Cached database pools do not bypass selector validation.
 
-IAM cleaning clears Hook data on the next sandbox request or ingress, increments the Hook generation and invalidates old scoped connections. A stale IAM lifecycle response cannot undo newer state. Hook retains retired endpoint tombstones so old provider URLs cannot reach a new hook. IAM deletion, suspension, rotation and inactive identities fail closed when revalidated.
+Honeycomb sends authenticated lifecycle operations directly to Hook. Cleaning completes before Hook reports success, retains the shared binding, and fences old requests, queued deliveries and retries. Disable blocks access; restore waits for IAM readiness and leaves cleaned data empty. Hook reports activity to Honeycomb instead of retiring environments itself. See [the participant contract](honeycomb.md).
 
 ## Deliver safely
 
@@ -44,4 +44,4 @@ hook --production login status --json
 
 CLI test context is printed to stderr, including failed commands and help, so JSON stdout stays valid. Each profile has independent production and sandbox sessions.
 
-Continue with [CLI examples](cli.md), [Rust examples](client.md), [HTTP contract](api.md), or [IAM's environment guide](https://docs.iam.teamofsilicons.com/api/testing-environments/).
+Continue with [CLI examples](cli.md), [Rust examples](client.md), [HTTP contract](api.md), or [Honeycomb's environment guide](https://docs.honeycomb.teamofsilicons.com/).

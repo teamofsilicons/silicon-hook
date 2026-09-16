@@ -1,4 +1,3 @@
-import { execFileSync } from "node:child_process";
 import { readFile, writeFile, mkdir, readdir, cp, rm } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -41,7 +40,7 @@ const titles = new Map(
     ]),
   ),
 );
-const navigation = ["README.md", "cli/README.md", "testing/README.md", "testing/cli.md", "client/README.md", "client/relay.md", "testing/client.md", "api/README.md", "testing/api.md", "iam/README.md", "contracts.md", "configuration.md", "telemetry.md", "deployment.md", "verification/current.md"];
+const navigation = ["README.md", "cli/README.md", "testing/README.md", "testing/cli.md", "client/README.md", "client/relay.md", "testing/client.md", "api/README.md", "testing/api.md", "iam/README.md", "contracts.md", "configuration.md", "releases.md", "testing/honeycomb.md", "telemetry.md", "deployment.md", "verification/current.md"];
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 const search = [];
@@ -86,7 +85,7 @@ for (const file of documents) {
         `<a href="${route(f)}"${f === file ? ' aria-current="page"' : ""}>${escape(titles.get(f))}</a>`,
     )
     .join("");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Hook Docs</title><meta name="description" content="Silicon Hook 0.5 documentation: ${escape(title)}"><link rel="canonical" href="${url}"><meta property="og:title" content="${escape(title)} · Hook Docs"><meta property="og:url" content="${url}"><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/styles.css"><script src="/search.js" defer></script></head><body><a class="skip" href="#main">Skip to content</a><header><a class="brand" href="/"><span>▣</span> Hook <small>Docs</small></a><label class="search-label" for="search">Search docs<input id="search" type="search" placeholder="Search the documentation" autocomplete="off" aria-controls="search-results"></label><a class="app-link" href="https://hook.teamofsilicons.com">Open Hook ↗</a></header><div id="search-results" hidden role="region" aria-label="Search results"></div><div class="layout"><aside><span class="version">VERSION · 0.5.0</span><nav aria-label="Documentation">${nav}</nav><a class="source" href="https://github.com/teamofsilicons/silicon-hook">Source on GitHub ↗</a></aside><main id="main"><div class="eyebrow">SILICON HOOK / DOCUMENTATION</div><article>${body}</article><footer>Silicon Hook · Client 0.5.0 · API v1 · <a href="/contracts/">Version policy</a></footer></main><nav class="toc" aria-label="On this page"><strong>On this page</strong>${headings.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}</nav></div></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Hook Docs</title><meta name="description" content="Silicon Hook 0.6 documentation: ${escape(title)}"><link rel="canonical" href="${url}"><meta property="og:title" content="${escape(title)} · Hook Docs"><meta property="og:url" content="${url}"><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/styles.css"><script src="/search.js" defer></script></head><body><a class="skip" href="#main">Skip to content</a><header><a class="brand" href="/"><span>▣</span> Hook <small>Docs</small></a><label class="search-label" for="search">Search docs<input id="search" type="search" placeholder="Search the documentation" autocomplete="off" aria-controls="search-results"></label><a class="app-link" href="https://hook.teamofsilicons.com">Open Hook ↗</a></header><div id="search-results" hidden role="region" aria-label="Search results"></div><div class="layout"><aside><span class="version">VERSION · 0.6.0</span><nav aria-label="Documentation">${nav}</nav><a class="source" href="https://github.com/teamofsilicons/silicon-hook">Source on GitHub ↗</a></aside><main id="main"><div class="eyebrow">SILICON HOOK / DOCUMENTATION</div><article>${body}</article><footer>Silicon Hook · Client 0.6.0 · API v1 · <a href="/contracts/">Version policy</a></footer></main><nav class="toc" aria-label="On this page"><strong>On this page</strong>${headings.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}</nav></div></body></html>`;
   const directory = path.join(output, route(file));
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, "index.html"), html);

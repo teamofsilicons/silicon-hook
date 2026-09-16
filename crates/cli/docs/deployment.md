@@ -3,9 +3,9 @@
 ## Upgrade order
 
 1. Back up the production and shared-test PostgreSQL databases and matching encryption keys.
-2. Run the new `hook-migrate` against both databases. Migrations 6–8 add IAM sandbox identity binding, isolated contract lifecycle state and the telemetry outbox.
+2. Run the new `hook-migrate` against both databases. Migration 9 adds Honeycomb lifecycle receipts, durable activity reports and database write fences.
 3. Reapply `deploy/postgres/grant-runtime.sql` for each database's API and worker roles. The contract function requires explicit execute permission.
-4. Deploy the matching Hook API and worker. Validate `/healthz`, `/readyz`, `/api/version` and `/api/contracts`.
+4. Configure [the Honeycomb service integration](testing/honeycomb.md), then deploy the matching Hook API and worker. Validate `/healthz`, `/readyz`, `/api/version` and `/api/contracts`.
 5. Deploy the matching browser gateway and frontend, then install the updated CLI/client. Restart old daemon processes to load the new shared-relay implementation.
 6. Verify an IAM test app_secret, test identity login, provider ingress, local recipient delivery and acknowledgment before production rollout.
 
@@ -32,3 +32,7 @@ The `bug-report.yml` GitHub workflow sends newly opened issues, including CLI re
 ## Space Station export
 
 Apply migration 0008 and the updated worker grants, then supply the dedicated `HOOK_TELEMETRY_TABLE_KEY` securely to the worker. Mount `HOOK_TELEMETRY_SPOOL_DIR` as a persistent private directory. Never put this key in browser environment variables, CLI distributions or docs. Restart the worker after changing its configuration. `HOOK_TELEMETRY=off` stops collection and export. See [telemetry](telemetry.md) for retention, sandbox routing and delivery semantics.
+
+## CLI release artifacts
+
+Use [the six-target release workflow](releases.md) to produce one validated Honeycomb archive. Documentation deployment does not produce or publish CLI binaries.

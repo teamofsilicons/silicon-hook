@@ -9,7 +9,7 @@ GET /api/v1/testing-session
 X-Hook-Test-App-Secret: <test-app-secret>
 ```
 
-The response contains `id`, `org_id`, `name`, `description`, `generation` and lifecycle timestamps. No token, app secret or administrative key is returned. It starts an empty Hook sandbox on first successful selection.
+The response contains `id`, `org_id`, `name`, `description`, `generation` and lifecycle timestamps. No token, app secret or administrative key is returned. Honeycomb prepares its empty storage before selection; IAM confirms shared readiness.
 
 ## Authenticate and act
 
@@ -33,3 +33,5 @@ The existing `/api/v1/ws` route accepts the selector in its upgrade headers. For
 ## Legacy administrative API
 
 The existing `/api/v1/testing-environments` collection and `/api/v1/testing-environment` root-key routes remain compatible with previous clients. They use `X-Hook-Test-Key`, require their documented production-owner/root permissions, and cannot accept an app selector. Use the new `/testing-session` route for ordinary app-selected testing.
+
+Honeycomb-managed environments reject legacy root/owner lifecycle mutations. Use [the protected participant contract](honeycomb.md) for service operations.

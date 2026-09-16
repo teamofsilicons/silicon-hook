@@ -9,7 +9,7 @@ args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 paths = ['README.md', 'api/README.md', 'client/README.md', 'cli/README.md',
          'iam/README.md', 'testing/README.md', 'testing/api.md',
-         'testing/client.md', 'testing/cli.md', 'client/relay.md', 'contracts.md', 'configuration.md', 'deployment.md', 'telemetry.md']
+         'testing/client.md', 'testing/cli.md', 'client/relay.md', 'contracts.md', 'configuration.md', 'deployment.md', 'telemetry.md', 'releases.md', 'testing/honeycomb.md']
 stale = []
 for name in paths:
     source = root / 'docs' / name

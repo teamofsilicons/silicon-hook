@@ -347,7 +347,7 @@ Silicon authenticates with IAM and calls POST /silicons/{silicon_id}/hooks/iam
 Use `X-Hook-Test-Key: <32-alphanumeric-root-key>` on ordinary API v1 calls.
 The same bearer authorization, permissions and request shapes then apply
 inside that environment. See the [complete testing API guide](../testing/api.md)
-for creation, key administration, cleanup, IAM configuration and lifecycle.
+for legacy configuration. Honeycomb now coordinates shared environment lifecycle; see [the participant contract](../testing/honeycomb.md).
 Public test ingress uses `/test/silicon/{silicon_id}/{endpoint_key}` and carries
 no test key. Its endpoint ledger determines the environment.
 

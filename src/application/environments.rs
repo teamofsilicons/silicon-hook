@@ -203,6 +203,9 @@ impl EnvironmentService {
         request_key: &str,
     ) -> Result<(TestEnvironment, Zeroizing<String>), AppError> {
         use secrecy::ExposeSecret as _;
+        if self.control.is_some() {
+            return Err(AppError::conflict("environment_managed_by_honeycomb"));
+        }
         if input.name.trim().is_empty()
             || input.name.chars().count() > 200
             || input
@@ -568,7 +571,8 @@ impl EnvironmentService {
                     .production_iam
                     .select_testing_application(secret)
                     .await?;
-                if confirmed.environment_id != remote.environment_id
+                if row.metadata.id != remote.environment_id
+                    || confirmed.environment_id != remote.environment_id
                     || confirmed
                         .webhook_key_digest
                         .as_ref()

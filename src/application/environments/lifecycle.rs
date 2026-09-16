@@ -147,49 +147,7 @@ impl EnvironmentService {
                 .fetch_optional(&mut *tx)
                 .await
                 .map_err(internal)?;
-        if let Some(row) = &row {
-            if row.metadata.org_id != operation.org_id {
-                return Err(AppError::Forbidden);
-            }
-            if row.honeycomb_state.as_deref() == Some("purged") {
-                return Err(AppError::conflict("environment_permanently_removed"));
-            }
-            if row.honeycomb_state.as_deref() == Some("pending")
-                && row.honeycomb_operation != Some(operation.operation_id)
-            {
-                return Err(AppError::conflict("lifecycle_operation_pending"));
-            }
-            if let Some(revision) = row.honeycomb_revision {
-                if previous.is_none()
-                    && row.honeycomb_key_version == Some(operation.key_version)
-                    && self.decrypt(row)?.iam_key != operation.testing_key
-                {
-                    return Err(AppError::conflict("environment_key_version_conflict"));
-                }
-
-                if operation.environment_revision < revision
-                    || (operation.environment_revision == revision
-                        && row.honeycomb_operation != Some(operation.operation_id))
-                    || operation.generation < row.honeycomb_generation.unwrap_or(1)
-                    || operation.key_version < row.honeycomb_key_version.unwrap_or(1)
-                {
-                    return Err(AppError::conflict("stale_environment_operation"));
-                }
-                if operation.generation > row.honeycomb_generation.unwrap_or(1)
-                    && operation.action != "clean"
-                {
-                    return Err(AppError::conflict("environment_clean_required"));
-                }
-                if operation.action == "clean"
-                    && operation.generation == row.honeycomb_generation.unwrap_or(1)
-                    && previous.is_none()
-                {
-                    return Err(AppError::conflict("clean_generation_must_advance"));
-                }
-            }
-        } else if !matches!(operation.action.as_str(), "create" | "prepare" | "import") {
-            return Err(AppError::NotFound);
-        }
+        self.validate_transition(row.as_ref(), operation, previous.is_some())?;
         if previous.is_none() {
             let credentials = if let Some(row) = &row {
                 self.decrypt(row)?
@@ -220,8 +178,73 @@ impl EnvironmentService {
         Ok(receipt)
     }
 
+    fn validate_transition(
+        &self,
+        row: Option<&EnvironmentRecord>,
+        operation: &LifecycleOperation,
+        replayed: bool,
+    ) -> Result<(), AppError> {
+        if let Some(row) = row {
+            if row.metadata.org_id != operation.org_id {
+                return Err(AppError::Forbidden);
+            }
+            if row.honeycomb_state.as_deref() == Some("purged") {
+                return Err(AppError::conflict("environment_permanently_removed"));
+            }
+            if row.honeycomb_state.as_deref() == Some("pending")
+                && row.honeycomb_operation != Some(operation.operation_id)
+            {
+                return Err(AppError::conflict("lifecycle_operation_pending"));
+            }
+            if let Some(revision) = row.honeycomb_revision {
+                if !replayed
+                    && operation.action == "rotate-key"
+                    && row.honeycomb_key_version == Some(operation.key_version)
+                {
+                    return Err(AppError::conflict("key_version_must_advance"));
+                }
+
+                if !replayed
+                    && row.honeycomb_key_version == Some(operation.key_version)
+                    && self.decrypt(row)?.iam_key != operation.testing_key
+                {
+                    return Err(AppError::conflict("environment_key_version_conflict"));
+                }
+
+                if operation.environment_revision < revision
+                    || (operation.environment_revision == revision
+                        && row.honeycomb_operation != Some(operation.operation_id))
+                    || operation.generation < row.honeycomb_generation.unwrap_or(1)
+                    || operation.key_version < row.honeycomb_key_version.unwrap_or(1)
+                {
+                    return Err(AppError::conflict("stale_environment_operation"));
+                }
+                if operation.generation > row.honeycomb_generation.unwrap_or(1)
+                    && operation.action != "clean"
+                {
+                    return Err(AppError::conflict("environment_clean_required"));
+                }
+                if operation.action == "clean"
+                    && operation.generation == row.honeycomb_generation.unwrap_or(1)
+                    && !replayed
+                {
+                    return Err(AppError::conflict("clean_generation_must_advance"));
+                }
+            }
+        } else if !matches!(operation.action.as_str(), "create" | "prepare" | "import") {
+            return Err(AppError::NotFound);
+        }
+        Ok(())
+    }
+
     async fn finish_lifecycle(&self, operation: &LifecycleOperation) -> Result<Value, AppError> {
         let mut tx = self.pool.begin().await.map_err(internal)?;
+        // Use the same lock order as admission, including concurrent identical retries.
+        sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
+            .bind(operation.environment_id.to_string())
+            .execute(&mut *tx)
+            .await
+            .map_err(internal)?;
         let row: EnvironmentRecord =
             sqlx::query_as("SELECT * FROM hook_control.environments WHERE id=$1 FOR UPDATE")
                 .bind(operation.environment_id)

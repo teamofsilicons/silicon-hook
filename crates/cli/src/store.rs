@@ -76,20 +76,13 @@ impl Default for Profile {
     }
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Default, Serialize, Deserialize)]
 pub struct Store {
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
 }
 fn enabled() -> bool {
     true
-}
-impl Default for Store {
-    fn default() -> Self {
-        Self {
-            profiles: BTreeMap::new(),
-        }
-    }
 }
 
 pub struct LockedStore {

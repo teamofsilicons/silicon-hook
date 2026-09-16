@@ -15,7 +15,7 @@ The highest shared implemented major wins. Unsupported majors return `406 api_ve
 | Consumer | Backend API | Direct WebSocket | Shared relay | Testing |
 | --- | --- | --- | --- | --- |
 | Client/CLI through 0.4 | v1 | protocol 1 | unavailable | legacy Hook root-key selection |
-| Updated client/CLI 0.5 | v1 | protocol 1 | relay protocol 1 | IAM app-secret selection; legacy root APIs retained |
+| Client/CLI 0.6 | v1 | protocol 1 | relay protocol 1 | Honeycomb installation and shared lifecycle; IAM app-secret selection |
 | Updated browser gateway | v1 | protocol 1 | daemon owns its own connection | app-secret selector and separate encrypted sessions |
 | Generic HTTP consumer | v1 | optional | optional | `X-Hook-Test-App-Secret` plus actor bearer |
 

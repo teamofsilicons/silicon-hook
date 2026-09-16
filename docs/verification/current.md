@@ -1,5 +1,10 @@
 # Understanding update verification
 
+The September 16 changes are local: Honeycomb lifecycle participation, migration 9, final-send delivery fences, durable activity reporting and CLI release packaging. They have not been deployed, published to crates.io or packed into a six-platform release. See [the lifecycle contract](../testing/honeycomb.md) and [release build](../releases.md). The earlier verification below describes the September 13 release, including its superseded source installer.
+
+Local validation: 162 workspace unit/integration and WebSocket tests pass (one opt-in live telemetry test remains ignored). Restricted-role PostgreSQL regressions cover failed-clean retry, concurrent identical operations, endpoint tombstones, stale writes and deliveries, key rotation, disable/restore/purge, service authentication and IAM shared readiness. Strict Clippy, dependency policy, packaging regressions and the 18-page documentation build/link check pass. Rustls is patched to 0.23.45. Client/CLI and the Honeycomb manifest are staged at 0.6.0; no release archive is claimed without all six native executables.
+
+
 Verified locally on September 13, 2026. `UNDERSTANDING.md` was preserved as supplied.
 
 ## Automated checks
@@ -14,13 +19,13 @@ Verified locally on September 13, 2026. `UNDERSTANDING.md` was preserved as supp
 
 Coverage includes encrypted IAM selectors, repeat selection without creating duplicate storage, online revocation, sandbox cleaning, runtime database permissions, webhook signatures and retention, two independently authorized identities sharing one physical socket, per-identity ACKs, seven-day contract sunset, SDK prewarm/attach/detach/replay, CLI grammar, and browser session isolation and telemetry opt-out forwarding.
 
-## Live results
+## September 13 live results
 
 [Docs](https://docs.hook.teamofsilicons.com) are published through the `silicon-hook-docs` Vercel project. Authoritative and public DNS resolve `docs.hook` to Vercel, and the requested hostname serves the landing page, guide routes and installer over verified HTTPS. Some resolvers may temporarily retain an earlier negative DNS answer.
 
 The new [siliconhook Space Station table](https://spacestation.teamofsilicons.com/o/tos/tables/siliconhook) received the synthetic verification event `01a09a8d-df78-7d51-bf35-bf65a8c188a4`. Its page also shows two earlier synthetic events recovered from the local spool, verifying retry delivery after the connection configuration was corrected. No customer webhook contents or IAM credentials were sent.
 
-## Production release
+## September 13 production release
 
 Published September 13, 2026. The dedicated AWS server runs the updated API, worker and persistent browser gateway. Both production and shared-test PostgreSQL databases have migrations 1–8 applied and the current runtime grants. Public liveness, readiness and contract discovery return HTTP 200. The worker has exported production backend and maintenance events to the dedicated Space Station table, with no container restarts during verification.
 

@@ -335,8 +335,7 @@ impl Client {
             .request(method, path, query, body, mutation)?
             .send()
             .await?;
-        let result = self.decode(response).await;
-        result
+        self.decode(response).await
     }
     pub(crate) async fn empty(
         &self,

@@ -20,6 +20,7 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "hook_control.endpoint_routes",
     "hook_control.mutation_results",
     "hook_control.lifecycle_operations",
+    "hook_control.activity_reports",
 ];
 
 const REQUIRED_SCHEMAS: &[&str] = &["hook|USAGE", "hook_private|USAGE", "hook_control|USAGE"];
