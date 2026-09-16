@@ -41,7 +41,11 @@ that environment's IAM application using the locally attached Hook test key.
 It never returns an app secret or environment key.
 
 `hook login status --json` refreshes an expiring session, then checks the current
-bearer and organization membership online with IAM. A successful response contains
+bearer and organization membership online with IAM. Organization selection uses
+`--org`, then the selected profile/environment organization, then the session
+token organization. For an unscoped Silicon session, Hook derives the organization
+from its `name:organization` identity and still verifies it online with IAM. Test
+sessions never borrow the production organization. A successful response contains
 `authenticated: true`, `actor: {"type": "carbon" | "silicon", "id": "..."}`,
 organization, expiry, and local delivery configuration. No saved session or an
 invalid/revoked credential reports `authenticated: false`. Transport and permission

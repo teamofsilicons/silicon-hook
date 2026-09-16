@@ -1,6 +1,6 @@
 format_version: 1
 app_id: "tos>hook"
-version: "0.6.0"
+version: "0.6.1"
 bin:
   hook: "app"
 targets:

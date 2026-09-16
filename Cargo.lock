@@ -3315,9 +3315,10 @@ dependencies = [
 
 [[package]]
 name = "silicon-hook-cli"
-version = "0.6.0"
+version = "0.6.1"
 dependencies = [
  "anyhow",
+ "axum",
  "clap",
  "fs2",
  "serde",

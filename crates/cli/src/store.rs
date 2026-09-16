@@ -247,12 +247,6 @@ pub fn select_client(
             client = client.with_test_key(key.expose())?;
         }
     }
-    let org = org
-        .or_else(|| env.and_then(|id| profile.test_orgs.get(&id).map(String::as_str)))
-        .or(profile.org.as_deref());
-    if let Some(org) = org {
-        client = client.with_organization(org);
-    }
     let session = env
         .and_then(|id| profile.test_sessions.get(&id))
         .or_else(|| {
@@ -262,6 +256,27 @@ pub fn select_client(
                 None
             }
         });
+    // IAM can issue an unscoped Silicon login with no token org_id. Its public
+    // name still identifies the organization to select; IAM verifies the bearer
+    // and membership online. Never borrow production context for a test session.
+    let configured_org = match env {
+        Some(id) => profile.test_orgs.get(&id).map(String::as_str),
+        None => profile.org.as_deref(),
+    };
+    let org = org
+        .or(configured_org)
+        .or_else(|| session.and_then(|s| s.tokens.org_id.as_deref()))
+        .or_else(|| {
+            let actor = &session?.tokens.actor;
+            if actor.kind != "silicon" {
+                return None;
+            }
+            let (name, org) = actor.id.split_once(':')?;
+            (!name.is_empty() && !org.is_empty() && !org.contains(':')).then_some(org)
+        });
+    if let Some(org) = org {
+        client = client.with_organization(org);
+    }
     if let Some(session) = session {
         client = client.with_token(session.tokens.access_token.expose());
     }

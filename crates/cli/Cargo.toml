@@ -1,6 +1,6 @@
 [package]
 name = "silicon-hook-cli"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 rust-version = "1.98"
 description = "Silicon Hook CLI and local webhook relay"
@@ -23,6 +23,9 @@ tokio = { version = "1.53.1", features = ["macros", "rt-multi-thread", "signal",
 url = "2.5.7"
 uuid = { version = "1.26.0", features = ["serde", "v7", "v4"] }
 zeroize = "1.8.2"
+
+[dev-dependencies]
+axum = "0.8.9"
 
 [lints.rust]
 unsafe_code = "forbid"
