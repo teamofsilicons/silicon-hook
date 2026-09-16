@@ -1,0 +1,30 @@
+format_version: 1
+app_id: "tos>hook"
+version: "0.5.0"
+bin:
+  hook: "app"
+targets:
+  linux-x86_64:
+    root: "targets/linux-x86_64"
+    executables:
+      app: "bin/hook"
+  linux-aarch64:
+    root: "targets/linux-aarch64"
+    executables:
+      app: "bin/hook"
+  windows-x86_64:
+    root: "targets/windows-x86_64"
+    executables:
+      app: "bin/hook.exe"
+  windows-aarch64:
+    root: "targets/windows-aarch64"
+    executables:
+      app: "bin/hook.exe"
+  macos-x86_64:
+    root: "targets/macos-x86_64"
+    executables:
+      app: "bin/hook"
+  macos-aarch64:
+    root: "targets/macos-aarch64"
+    executables:
+      app: "bin/hook"

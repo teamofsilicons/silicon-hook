@@ -359,9 +359,9 @@ pub enum Config {
     Profiles,
     /// Set the base home directory; Hook stores state below .silicon-hook.
     Home { location: String },
-    /// Set url, org, silicon, auto-update or telemetry for the selected profile.
+    /// Set url, org, silicon or telemetry for the selected profile.
     Set {
-        #[arg(value_parser=["url","org","silicon","auto-update","telemetry"])]
+        #[arg(value_parser=["url","org","silicon","telemetry"])]
         key: String,
         value: String,
     },

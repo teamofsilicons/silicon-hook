@@ -3,7 +3,7 @@
 The `hook` binary is built from `crates/cli` and uses `silicon-hook-client` for
 all backend and local-service networking. Build it with
 `cargo build -p silicon-hook-cli`; the executable is `target/debug/hook`.
-For a published version use `cargo install silicon-hook-cli --locked`.
+Install with `honeycomb install 'tos>hook'`, then run `hook login <slt>` and `hook webhook <webhook-url>`.
 Maintainers bundle canonical `docs/` guides into the crate with
 `python3 scripts/bundle-cli-docs.py` before publishing; CI rejects stale copies.
 
@@ -130,7 +130,7 @@ help. `hook docs <topic>` bundles these guides for offline reading.
 | `daemon ...` | Persistent relay and local request interface |
 | `config show` / `config profiles` | Inspect local settings and names |
 | `config home <directory>` | Set the base home directory for local state |
-| `config set <key> <value>` | Set url, org, silicon, auto-update, or telemetry |
+| `config set <key> <value>` | Set url, org, silicon or telemetry |
 
 Hook deliveries printed by `listen` and posted to the configured webhook use
 `{"type":"new_event","data":{"sender":"<provider>","metadata":{...}}}`.
@@ -190,31 +190,8 @@ echoes, identity tokens and downstream acknowledgment behavior.
 
 ## Updates and troubleshooting
 
-Updates are enabled by default. After a command finishes, at most once per hour,
-the CLI checks its crates.io release. Cargo-installed binaries update in their
-existing installation root. Development/custom binaries get a release notice;
-the updater does not overwrite source build outputs. A running daemon keeps its
-loaded version until restarted. When upgrading from a build that required the
-recipient during login, run `hook daemon stop` before using the new login or
-delivery commands, then `hook daemon start` with the rebuilt CLI. The new CLI
-reads existing recipient strings and also supports unconfigured recipients.
+Honeycomb manages CLI updates. Hook never replaces its executable. After upgrading, restart a running daemon with `hook daemon stop`, then `hook daemon start`. Source builds are updated explicitly by their owner.
 
-Opt out with `hook config set auto-update off` or
-`SILICON_HOOK_AUTO_UPDATE=false`. Enable again with `auto-update on`. The CLI
-stores the last-check timestamp and serializes the claim to avoid concurrent
-installations. Update failures do not change the command's success/failure.
-
-Common recovery steps:
-
-- An expired/revoked session needs a fresh IAM SLT and `hook login`.
-- A missing test key needs `hook env attach` or authorized `hook env key`.
-- A rotated key requires refreshing the saved key before test commands resume.
-- A local port conflict needs resolving the process already bound to 18479.
-- An offline recipient keeps deliveries pending; restart it at the saved URL.
-- A JSON error includes a stable backend code; use `--idempotency-key` on retries
-  after uncertain transport outcomes.
-
-`hook report` and the graphical UI are outside the current release scope.
 
 ## Bring your own secret (BYOS)
 

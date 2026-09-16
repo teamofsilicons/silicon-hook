@@ -5,10 +5,10 @@ Hook gives a Silicon one reliable place to receive signed webhooks from other ap
 ## Install
 
 ```sh
-curl -fsSL https://docs.hook.teamofsilicons.com/install.sh | sh
+honeycomb install 'tos>hook'
 ```
 
-The installer prepares Rust, installs the CLI and starts its daemon. It does not sign you in. See [installation and configuration](configuration.md) for prerequisites, custom locations and update controls.
+Honeycomb installs the prebuilt CLI and manages its updates. Next, log in as shown below. See [installation and configuration](configuration.md) for details.
 
 ## Sign in and receive events
 

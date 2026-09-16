@@ -1,37 +1,49 @@
 #!/usr/bin/env python3
-"""Build a reproducible, allowlisted CLI source distribution and checked installer."""
-import gzip
-import hashlib
-import io
+"""Stage all six prebuilt targets, then validate and pack with Honeycomb."""
+import argparse
 from pathlib import Path
-import tarfile
+import shutil
+import subprocess
+import tempfile
 import tomllib
 
-root = Path(__file__).resolve().parent.parent
-version = tomllib.loads((root / 'crates/cli/Cargo.toml').read_text())['package']['version']
-output = root / 'docs-site/dist/releases'
-output.mkdir(parents=True, exist_ok=True)
-manifest = b'''[workspace]\nmembers = ["crates/client", "crates/cli"]\nresolver = "3"\n[profile.release]\ncodegen-units = 1\nlto = "thin"\nstrip = "symbols"\n'''
-files = {'Cargo.toml': manifest, 'Cargo.lock': (root / 'packaging/Cargo.lock').read_bytes()}
-for directory in ['crates/client', 'crates/cli', 'docs']:
-    for path in sorted((root / directory).rglob('*')):
-        if path.is_file() and path.suffix in {'.rs', '.toml', '.md', '.sh'}:
-            files[str(path.relative_to(root))] = path.read_bytes()
-for name in ['LICENSE', 'LICENSE.md', 'LICENSE-APACHE', 'LICENSE-MIT']:
-    if (root / name).is_file(): files[name] = (root / name).read_bytes()
-buffer = io.BytesIO()
-with gzip.GzipFile(fileobj=buffer, mode='wb', mtime=0) as compressed:
-    with tarfile.open(fileobj=compressed, mode='w') as archive:
-        for name, data in sorted(files.items()):
-            info = tarfile.TarInfo(f'silicon-hook-{version}/{name}')
-            info.size = len(data)
-            info.mode = 0o644
-            archive.addfile(info, io.BytesIO(data))
-content = buffer.getvalue()
-name = f'silicon-hook-cli-{version}.tar.gz'
-digest = hashlib.sha256(content).hexdigest()
-(output / name).write_bytes(content)
-(output / f'{name}.sha256').write_text(f'{digest}  {name}\n')
-installer = (root / 'docs/install.sh').read_text().replace('@VERSION@', version).replace('@SHA256@', digest)
-(root / 'docs-site/dist/install.sh').write_text(installer)
-print(f'Packaged {len(files)} source files: {name} (sha256 {digest})')
+TARGETS = {
+    'linux-x86_64': ('x86_64-unknown-linux-gnu', 'hook'),
+    'linux-aarch64': ('aarch64-unknown-linux-gnu', 'hook'),
+    'windows-x86_64': ('x86_64-pc-windows-msvc', 'hook.exe'),
+    'windows-aarch64': ('aarch64-pc-windows-msvc', 'hook.exe'),
+    'macos-x86_64': ('x86_64-apple-darwin', 'hook'),
+    'macos-aarch64': ('aarch64-apple-darwin', 'hook'),
+}
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--artifacts', type=Path, required=True, help='Directory containing <Honeycomb target>/<hook or hook.exe>')
+    parser.add_argument('--output', type=Path, default=Path('dist'))
+    parser.add_argument('--honeycomb', default='honeycomb')
+    args = parser.parse_args()
+    root = Path(__file__).resolve().parent.parent
+    version = tomllib.loads((root / 'crates/cli/Cargo.toml').read_text())['package']['version']
+    manifest = (root / 'honeycomb.yaml').read_text()
+    if f'version: "{version}"' not in manifest:
+        parser.error('honeycomb.yaml version must match the CLI app release version')
+    for target, (_, binary) in TARGETS.items():
+        artifact = args.artifacts / target / binary
+        if not artifact.is_file() or artifact.stat().st_size == 0 or artifact.is_symlink():
+            parser.error(f'Missing prebuilt executable: {artifact}')
+    args.output.mkdir(parents=True, exist_ok=True)
+    output = (args.output / f'silicon-hook-{version}.tar.gz').resolve()
+    with tempfile.TemporaryDirectory(prefix='hook-release-') as temporary:
+        stage = Path(temporary)
+        (stage / 'honeycomb.yaml').write_text(manifest)
+        for target, (_, binary) in TARGETS.items():
+            destination = stage / 'targets' / target / 'bin' / binary
+            destination.parent.mkdir(parents=True)
+            shutil.copyfile(args.artifacts / target / binary, destination)
+            destination.chmod(0o755)
+        subprocess.run([args.honeycomb, 'validate', str(stage)], check=True)
+        subprocess.run([args.honeycomb, 'pack', str(stage), '--output', str(output)], check=True)
+    print(output)
+
+if __name__ == '__main__':
+    main()

@@ -3,14 +3,12 @@
 ## One-command technical setup
 
 ```sh
-curl -fsSL https://docs.hook.teamofsilicons.com/install.sh | sh
+honeycomb install 'tos>hook'
 ```
 
-The installer installs Rust 1.98, verifies the SHA-256 of the versioned CLI source archive hosted with these docs, builds it with locked dependencies, and starts the daemon. It does not authenticate you or change IAM credentials. The registry package may lag this source snapshot. The backend must support these features before the new CLI can use them.
+Honeycomb installs a prebuilt executable for Linux, Windows or macOS on x86_64 or aarch64. No Rust compiler is needed. Then run `hook login <slt>` and `hook webhook <webhook-url>`.
 
-Requirements: macOS or Linux, HTTPS access, `curl`, a C compiler and Rust 1.98 or newer. On macOS, install Apple's command-line tools if prompted. On Debian/Ubuntu, install `build-essential` if a compiler is missing. Compiler/system package installation may require local administration.
-
-## Build the updated source
+For local source development:
 
 ```sh
 git clone https://github.com/teamofsilicons/silicon-hook.git
@@ -37,16 +35,13 @@ hook config set org tos
 hook webhook http://127.0.0.1:9000/events --secret-file ./receiver-secret
 hook webhook https://sandbox.example/events --test-destination
 hook --isi worker-17 webhook http://127.0.0.1:9000/events
-hook config set auto-update false
 ```
 
 `ISI`/`--isi` is optional internal Silicon metadata. It is stored locally and included in receiver metadata when present; it never changes authorization. `--secret-file` configures local delivery HMAC signing and never sends that secret to Hook. Mark remote test destinations explicitly to prevent accidental production effects.
 
 ## Automatic updates
 
-The daemon checks hourly and the CLI also checks after commands, using a shared timestamp/lock to avoid duplicate installation. Default: enabled. Set `SILICON_HOOK_AUTO_UPDATE=0` or `hook config set auto-update false` to disable automatic checks/installations. Cargo-installed binaries are updated through locked Cargo installation. A custom source build reports the available release and installation command instead of guessing its installation layout.
-
-New commands use the installed update. Restart an already running daemon to load its new executable: `hook daemon stop` followed by `hook daemon start`. The installer starts the daemon before login, so checks do not depend on user activity. Backend dependency updates remain reviewable `Cargo.lock` changes.
+Honeycomb owns CLI updates. Hook commands and its daemon never install or replace binaries. Rust dependencies change only when the consuming project updates its manifest or lockfile. After upgrading, restart a running daemon with `hook daemon stop` and `hook daemon start`.
 
 ## Diagnose and report
 

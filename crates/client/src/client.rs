@@ -79,7 +79,6 @@ pub struct Client {
     pub(crate) test_key: Option<Secret>,
     pub(crate) test_app_secret: Option<Secret>,
     negotiated: Arc<OnceCell<()>>,
-    pub(crate) auto_update: bool,
     pub(crate) telemetry: bool,
     pub(crate) trace_id: Uuid,
 }
@@ -112,7 +111,6 @@ impl Client {
             test_key: None,
             test_app_secret: None,
             negotiated: Arc::default(),
-            auto_update: true,
             telemetry: true,
             trace_id: Uuid::now_v7(),
         })
@@ -156,11 +154,9 @@ impl Client {
             let _ = request.timeout(Duration::from_millis(500)).send().await;
         }
     }
-    /// Disables or enables automatic hourly dependency checks for this client.
-    pub fn with_auto_update(&self, enabled: bool) -> Self {
-        let mut client = self.clone();
-        client.auto_update = enabled;
-        client
+    /// Compatibility no-op. Dependencies never update themselves at runtime.
+    pub fn with_auto_update(&self, _enabled: bool) -> Self {
+        self.clone()
     }
     pub fn with_token(&self, token: impl Into<String>) -> Self {
         let mut client = self.clone();
@@ -340,7 +336,6 @@ impl Client {
             .send()
             .await?;
         let result = self.decode(response).await;
-        crate::updater::schedule(self.auto_update);
         result
     }
     pub(crate) async fn empty(
@@ -355,7 +350,6 @@ impl Client {
             .request(method, path, &[], body, mutation)?
             .send()
             .await?;
-        crate::updater::schedule(self.auto_update);
         if !response.status().is_success() {
             return Err(self.failure(response).await?);
         }

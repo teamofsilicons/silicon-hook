@@ -1,7 +1,6 @@
 mod args;
 mod daemon;
 mod store;
-mod updater;
 
 use anyhow::{Context as _, Result};
 use args::{Cli, Command, Config, Deliveries, Environment, Rotate, System};
@@ -63,15 +62,6 @@ async fn main() {
                 1,
             )
             .await;
-    }
-    if !matches!(
-        cli.command,
-        Command::Daemon {
-            action: args::Daemon::Run
-        }
-    ) && let Err(error) = updater::after_command().await
-    {
-        eprintln!("Hook update check was skipped: {error}");
     }
     let failed = result.is_err();
     if let Err(error) = result {
@@ -847,13 +837,6 @@ fn configuration(cli: &Cli, action: &Config, stored: &mut LockedStore) -> Result
                         "off" | "false" => false,
                         _ => anyhow::bail!("Use on or off"),
                     };
-                }
-                "auto-update" => {
-                    stored.data.auto_update = match value.as_str() {
-                        "on" | "true" => true,
-                        "off" | "false" => false,
-                        _ => anyhow::bail!("Use on or off"),
-                    }
                 }
                 _ => anyhow::bail!("unknown configuration key"),
             }

@@ -108,7 +108,7 @@ production token to a test client as a fallback after a failed test login.
 | Test administration | `create_environment`, `list_environments`, `environment`, `environment_key`, `rotate_environment_key`, `delete_environment`, `restore_environment`, `list_environments_page` |
 | Test root operations | `current_environment`, `clean_environment`, `configure_test_iam` |
 | Local service | `RelaySession`, `Relay::run`, `local::serve_local`, `local::LocalClient` |
-| Updates | `updater::check`, `update_dependency`, `install_cli`, `find_manifest` |
+| Release discovery | Explicit read-only `updater::check` |
 
 All wire models are under `models`. `CreateHook::default()` plus a nonempty
 name enables default HMAC-SHA256 verification. A `Signature` override changes
@@ -169,18 +169,7 @@ with its documented environment variables; enter one command at a time.
 
 ## Updates
 
-Automatic client checks are on by default and at most hourly in one process,
-after an API request completes. The client checks crates.io and, when running
-inside a consuming Cargo project, can advance the dependency's lockfile within
-its manifest constraint. It skips Hook's own source workspace. Linked library
-code changes only after a new build/restart; an update cannot replace compiled
-code in a running process. Short-lived programs can use the explicit async
-updater functions and await them before exiting.
-
-Disable with `client.with_auto_update(false)` or
-`SILICON_HOOK_CLIENT_AUTO_UPDATE=false`. Authentication remains stateless;
-update timestamps for the SDK are in memory. The CLI handles its own persistent
-hourly check and disables per-client background checks.
+The Rust client is a normal project dependency. It never runs Cargo, modifies a lockfile, or schedules runtime updates. Update it through your project’s normal dependency workflow. `with_auto_update` remains a compatibility no-op. Honeycomb owns CLI updates.
 
 ## Bring your own secret (BYOS)
 

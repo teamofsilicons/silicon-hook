@@ -1,0 +1,56 @@
+name: Honeycomb release archive
+on:
+  workflow_dispatch:
+  push:
+    tags: ['v*']
+permissions:
+  contents: read
+jobs:
+  binaries:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, package: linux-x86_64, binary: hook}
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, package: linux-aarch64, binary: hook}
+          - {os: windows-2025, target: x86_64-pc-windows-msvc, package: windows-x86_64, binary: hook.exe}
+          - {os: windows-2025, target: aarch64-pc-windows-msvc, package: windows-aarch64, binary: hook.exe}
+          - {os: macos-15, target: x86_64-apple-darwin, package: macos-x86_64, binary: hook}
+          - {os: macos-15, target: aarch64-apple-darwin, package: macos-aarch64, binary: hook}
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --locked --release -p silicon-hook-cli --target ${{ matrix.target }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.package }}
+          path: target/${{ matrix.target }}/release/${{ matrix.binary }}
+          if-no-files-found: error
+  pack:
+    needs: binaries
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+      - name: Verify release tag
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import os, tomllib
+          from pathlib import Path
+          version = tomllib.loads(Path('crates/cli/Cargo.toml').read_text())['package']['version']
+          if os.environ['GITHUB_REF_TYPE'] == 'tag':
+              assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'Release tag and app version differ'
+          PY
+      - name: Install Honeycomb packager
+        run: cargo install silicon-honeycomb-cli --locked --version 0.1.1
+      - name: Validate and pack every platform
+        run: python3 scripts/package-cli.py --artifacts artifacts --output dist
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hook-honeycomb-release
+          path: dist/*.tar.gz
+          if-no-files-found: error

@@ -248,10 +248,6 @@ async fn manage(
             eprintln!("Shared relay stopped: {error}");
         }
     }));
-    let update_stop = shutdown.clone();
-    workers
-        .0
-        .push(tokio::spawn(crate::updater::daemon_updates(update_stop)));
 
     loop {
         let mut stored = LockedStore::open()?;

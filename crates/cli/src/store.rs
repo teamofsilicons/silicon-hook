@@ -80,10 +80,6 @@ impl Default for Profile {
 pub struct Store {
     #[serde(default)]
     pub profiles: BTreeMap<String, Profile>,
-    #[serde(default = "enabled")]
-    pub auto_update: bool,
-    #[serde(default)]
-    pub last_update_check: u64,
 }
 fn enabled() -> bool {
     true
@@ -92,8 +88,6 @@ impl Default for Store {
     fn default() -> Self {
         Self {
             profiles: BTreeMap::new(),
-            auto_update: true,
-            last_update_check: 0,
         }
     }
 }

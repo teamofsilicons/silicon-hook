@@ -124,4 +124,4 @@ await writeFile(
 );
 console.log(`Built ${documents.length} documentation pages for ${origin}`);
 
-execFileSync("python3", [path.join(root, "scripts/package-cli.py")], { stdio: "inherit" });
+
