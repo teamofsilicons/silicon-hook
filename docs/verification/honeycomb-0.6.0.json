@@ -60,5 +60,26 @@
       "validation": "native architecture and imports checked; runtime not exercised"
     }
   ],
-  "published": false
+  "published": false,
+  "publication": {
+    "state": "awaiting_validator",
+    "visibility": "private",
+    "configuration_revision": 1,
+    "application_id": "01a0aa31-2d7b-7c80-bc76-13fd110888da",
+    "configuration_operation_id": "e107d572-8ed3-48c1-ace7-447608fc7a65",
+    "release_operation_id": "5e09addf-0063-4275-8f62-eeb4a80268da",
+    "publication_request_id": "4df7163e-6e6f-4ed2-8c6d-8f4229f2e682",
+    "iam_scope_review": "approved",
+    "honeycomb_review": "pending; current actor can_decide=false",
+    "uploaded_archive_sha256": "b6bc254c5dc014c8ba3450fbc3f1e9f63721bce4ca43da2717d8db17089ac690",
+    "authenticated_install": "macos-aarch64 isolated install and --version passed; downloaded executable SHA-256 matches local input",
+    "anonymous_install": "not tested; application remains private"
+  },
+  "runtime_registration": {
+    "credentials": "fresh application and webhook credentials saved privately and configured on existing API/worker images",
+    "ssm_command_id": "42cc2e11-45cc-431e-90d2-56252d8ce3f7",
+    "readyz": 200,
+    "iam_application_identity": "authenticated successfully",
+    "backend_code_deployment": false
+  }
 }
