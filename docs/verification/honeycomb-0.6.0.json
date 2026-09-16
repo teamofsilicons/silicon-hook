@@ -1,0 +1,64 @@
+{
+  "app_id": "tos>hook",
+  "version": "0.6.0",
+  "verified_on": "2026-09-16",
+  "source_revision": "ab0e082246bd66312381c9e2b9592986460ad8d1",
+  "rust_version": "rustc 1.98.0 (88d9e12ae 2026-08-18)",
+  "packager": "silicon-honeycomb-cli 0.2.0",
+  "archive": {
+    "path": "dist/silicon-hook-0.6.0.tar.gz",
+    "bytes": 19593892,
+    "sha256": "b6bc254c5dc014c8ba3450fbc3f1e9f63721bce4ca43da2717d8db17089ac690",
+    "validation": "Honeycomb directory and archive validation passed; all seven file contents match local inputs"
+  },
+  "build_notes": {
+    "linux": "cargo-zigbuild; glibc 2.28 baseline; both architectures smoke tested in Debian bookworm Docker containers",
+    "macos": "Xcode SDK; arm64 native and x86_64 under Rosetta smoke tests",
+    "windows": "cargo-xwin; static Visual C++ runtime; PE imports contain only Windows system DLLs; no Windows runtime tests"
+  },
+  "binaries": [
+    {
+      "target": "linux-aarch64",
+      "path": "targets/linux-aarch64/bin/hook",
+      "bytes": 6678528,
+      "sha256": "e65bdc07d4636fdfeef005de05e7705c84f28d592b6da9b70d8f43ba0cfd5987",
+      "validation": "native architecture and system dependencies checked; --version and --help passed"
+    },
+    {
+      "target": "linux-x86_64",
+      "path": "targets/linux-x86_64/bin/hook",
+      "bytes": 8337992,
+      "sha256": "455a11c99ad62d9226186a56428128bae1f1e94bc8e5e00d821e12f7767bbb08",
+      "validation": "native architecture and system dependencies checked; --version and --help passed"
+    },
+    {
+      "target": "macos-aarch64",
+      "path": "targets/macos-aarch64/bin/hook",
+      "bytes": 6682784,
+      "sha256": "19e8b8649037938e28ac40242bb85238eebdaf86f8db824bd201afd3c1be6aa5",
+      "validation": "native architecture and system dependencies checked; --version and --help passed"
+    },
+    {
+      "target": "macos-x86_64",
+      "path": "targets/macos-x86_64/bin/hook",
+      "bytes": 8012208,
+      "sha256": "f4f28f4e70ff0bda739738ca253103983d8f9209cd053effb402887dd8639905",
+      "validation": "native architecture and system dependencies checked; --version and --help passed"
+    },
+    {
+      "target": "windows-aarch64",
+      "path": "targets/windows-aarch64/bin/hook.exe",
+      "bytes": 7052288,
+      "sha256": "5cea336a9d248cec8d15d0dd28b91551fd16b4165e9f127aba405b298c22382f",
+      "validation": "native architecture and imports checked; runtime not exercised"
+    },
+    {
+      "target": "windows-x86_64",
+      "path": "targets/windows-x86_64/bin/hook.exe",
+      "bytes": 8140800,
+      "sha256": "5b9b1d443cf949a2f8cd558991e7e5eef644508b77a8aa2912cdea5fdd9021fe",
+      "validation": "native architecture and imports checked; runtime not exercised"
+    }
+  ],
+  "published": false
+}
