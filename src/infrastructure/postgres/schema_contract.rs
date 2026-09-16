@@ -5,6 +5,8 @@ use sqlx::PgPool;
 use super::StoreError;
 
 const REQUIRED_COLUMNS: &[&str] = &[
+    "hook_control.environments.honeycomb_revision|bigint|false",
+    "hook_control.lifecycle_operations.receipt|jsonb|true",
     "hook_private.telemetry_events.environment_id|uuid|true",
     "hook_private.telemetry_events.event_id|uuid|true",
     "hook_private.telemetry_events.data|jsonb|true",

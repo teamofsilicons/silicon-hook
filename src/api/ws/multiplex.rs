@@ -51,7 +51,8 @@ pub(crate) async fn upgrade(
 }
 
 async fn serve(mut socket: WebSocket, state: ApiState) -> anyhow::Result<()> {
-    let (outgoing, mut output) = mpsc::channel::<(String, Message)>(32);
+    let (outgoing, mut output) =
+        mpsc::channel::<(String, Message, Option<crate::application::HookApplication>)>(32);
     let mut inputs = BTreeMap::new();
     let mut tasks = JoinSet::new();
     let mut heartbeat = tokio::time::interval(state.realtime.heartbeat_interval);
@@ -71,13 +72,20 @@ async fn serve(mut socket: WebSocket, state: ApiState) -> anyhow::Result<()> {
                 if ping.is_empty() { ping = uuid::Uuid::now_v7().to_string(); }
                 send(&mut socket, serde_json::json!({"type":"ping","ping_id":ping})).await?;
             }
-            item = output.recv() => if let Some((id, message)) = item {
+            item = output.recv() => if let Some((id, message, application)) = item {
+                let guard = if let Some(application) = application {
+                    if let Ok(guard) = application.delivery_guard().await { guard } else {
+                        send(&mut socket, serde_json::json!({"type":"subscription_closed","subscription_id":id,"code":4001})).await?;
+                        continue;
+                    }
+                } else { None };
                 let value = match message {
                     Message::Text(text) => serde_json::json!({"type":"frame","subscription_id":id,"frame":serde_json::from_str::<serde_json::Value>(&text)?}),
                     Message::Close(frame) => serde_json::json!({"type":"subscription_closed","subscription_id":id,"code":frame.map(|f| f.code)}),
                     _ => continue,
                 };
                 send(&mut socket, value).await?;
+                if let Some(tx) = guard { tx.commit().await?; }
             },
             incoming = socket.next() => {
                 let Some(Ok(message)) = incoming else { return Ok(()); };

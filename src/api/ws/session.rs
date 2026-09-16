@@ -56,7 +56,7 @@ pub(super) enum SessionSocket {
     Shared {
         id: String,
         incoming: tokio::sync::mpsc::Receiver<Message>,
-        outgoing: tokio::sync::mpsc::Sender<(String, Message)>,
+        outgoing: tokio::sync::mpsc::Sender<(String, Message, Option<HookApplication>)>,
     },
 }
 impl SessionSocket {
@@ -70,7 +70,7 @@ impl SessionSocket {
         match self {
             Self::Native(socket) => socket.send(message).await.map_err(Into::into),
             Self::Shared { id, outgoing, .. } => outgoing
-                .send((id.clone(), message))
+                .send((id.clone(), message, None))
                 .await
                 .map_err(Into::into),
         }
@@ -373,8 +373,9 @@ impl SessionRuntime {
             .await?;
         for event in events {
             let sequence = event.delivery_sequence().get();
-            send_frame(
+            send_event(
                 socket,
+                &self.application,
                 &ServerFrame::NewEvent {
                     data: EventData {
                         sender: event.provider().as_str().to_owned(),
@@ -534,4 +535,35 @@ async fn send_frame(
         ApplicationError::Internal(anyhow::Error::new(error).context("realtime write timed out"))
     })?
     .map_err(|error| ApplicationError::Internal(error.context("send frame")))
+}
+
+async fn send_event(
+    socket: &mut SessionSocket,
+    application: &HookApplication,
+    frame: &ServerFrame,
+) -> Result<(), ApplicationError> {
+    if let SessionSocket::Shared { id, outgoing, .. } = socket {
+        let encoded = serde_json::to_string(frame)
+            .map_err(|error| ApplicationError::Internal(error.into()))?;
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            outgoing.send((
+                id.clone(),
+                Message::Text(encoded.into()),
+                Some(application.clone()),
+            )),
+        )
+        .await
+        .map_err(|error| ApplicationError::Internal(error.into()))?
+        .map_err(|error| ApplicationError::Internal(error.into()))?;
+        return Ok(());
+    }
+    let guard = application.delivery_guard().await?;
+    send_frame(socket, frame).await?;
+    if let Some(tx) = guard {
+        tx.commit()
+            .await
+            .map_err(|error| ApplicationError::Internal(error.into()))?;
+    }
+    Ok(())
 }

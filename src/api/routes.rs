@@ -123,6 +123,10 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
             state.clone(),
             environments::scope,
         ))
+        .merge(Router::new().route(
+            "/internal/honeycomb/organizations/{org}/testing-environments/{environment}/operations/{operation}",
+            axum::routing::put(super::lifecycle::apply).get(super::lifecycle::status),
+        ).layer(DefaultBodyLimit::max(settings.max_management_body_bytes)))
         .with_state(state)
         .layer(axum_middleware::from_fn(middleware::enforce_api_version))
         .layer(SetSensitiveRequestHeadersLayer::new([

@@ -114,6 +114,30 @@ impl HookApplication {
             .map_err(ApplicationError::unavailable)
     }
 
+    /// Holds a shared lifecycle lock until a test delivery reaches the transport.
+    ///
+    /// # Errors
+    /// Rejects disabled or superseded sessions and storage failures.
+    pub async fn delivery_guard(
+        &self,
+    ) -> Result<Option<sqlx::Transaction<'static, sqlx::Postgres>>, ApplicationError> {
+        let Some((id, expected)) = self.environment else {
+            return Ok(None);
+        };
+        let mut tx = self
+            .store
+            .pool()
+            .begin()
+            .await
+            .map_err(ApplicationError::unavailable)?;
+        let current: Option<(i64, bool)> = sqlx::query_as("SELECT generation,deleted_at IS NULL AND (honeycomb_state IS NULL OR honeycomb_state='ready') FROM hook_control.environments WHERE id=$1 FOR SHARE")
+            .bind(id).fetch_optional(&mut *tx).await.map_err(ApplicationError::unavailable)?;
+        if current != Some((expected, true)) {
+            return Err(ApplicationError::StateConflict);
+        }
+        Ok(Some(tx))
+    }
+
     /// Exposes the store for readiness without leaking it into handlers.
     #[must_use]
     pub const fn store(&self) -> &PostgresStore {

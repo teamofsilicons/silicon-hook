@@ -19,6 +19,7 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "hook_control.environments",
     "hook_control.endpoint_routes",
     "hook_control.mutation_results",
+    "hook_control.lifecycle_operations",
 ];
 
 const REQUIRED_SCHEMAS: &[&str] = &["hook|USAGE", "hook_private|USAGE", "hook_control|USAGE"];
@@ -56,6 +57,10 @@ const API_TABLE_PRIVILEGES: &[&str] = &[
     "hook_control.mutation_results|SELECT",
     "hook_control.mutation_results|INSERT",
     "hook_control.mutation_results|UPDATE",
+    "hook_control.mutation_results|DELETE",
+    "hook_control.lifecycle_operations|SELECT",
+    "hook_control.lifecycle_operations|INSERT",
+    "hook_control.lifecycle_operations|UPDATE",
 ];
 
 const WORKER_TABLE_PRIVILEGES: &[&str] = &[

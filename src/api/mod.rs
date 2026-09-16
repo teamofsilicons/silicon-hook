@@ -5,6 +5,7 @@ mod dto;
 mod environments;
 mod extractors;
 mod handlers;
+mod lifecycle;
 mod middleware;
 mod routes;
 mod state;
@@ -86,6 +87,7 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
     let store = PostgresStore::new(pool.clone());
     let wakeups = DeliveryWakeups::new();
     let dependencies = build_dependencies(&settings, store, wakeups.clone()).await?;
+    let activity_service = dependencies.environments.clone();
     let app = router(dependencies, &settings.server);
     let listener = tokio::net::TcpListener::bind(settings.server.bind_addr)
         .await
@@ -116,6 +118,7 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
     } else {
         None
     };
+    let activity_task = tokio::spawn(report_activity(activity_service, shutdown_receiver.clone()));
     let mut server_shutdown = shutdown_receiver;
     let mut server_task = tokio::spawn(async move {
         axum::serve(
@@ -168,6 +171,8 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
     {
         task.abort();
     }
+    activity_task.abort();
+    let _ = activity_task.await;
     pool.close().await;
     result
 }
@@ -191,7 +196,7 @@ async fn build_dependencies(
     let iam = IamClient::connect(&settings.iam)
         .await
         .context("failed to connect to Silicon IAM")?;
-    let environments = if let Some(database) = &settings.test_database {
+    let mut environments = if let Some(database) = &settings.test_database {
         Some(
             crate::application::environments::EnvironmentService::connect(
                 database.clone(),
@@ -203,6 +208,24 @@ async fn build_dependencies(
     } else {
         None
     };
+    if let Ok(token) = std::env::var("HOOK_HONEYCOMB_SERVICE_TOKEN") {
+        let service = environments
+            .take()
+            .context("Honeycomb lifecycle requires HOOK_TEST_DATABASE_URL")?;
+        environments = Some(
+            service.with_honeycomb_control(
+                secrecy::SecretString::from(token),
+                settings
+                    .iam
+                    .app_id
+                    .clone()
+                    .context("Honeycomb lifecycle requires IAM application ID")?,
+                std::env::var("HOOK_HONEYCOMB_URL")
+                    .unwrap_or_else(|_| "https://backend.honeycomb.teamofsilicons.com".into())
+                    .parse()?,
+            )?,
+        );
+    }
     Ok(ApiDependencies {
         application: HookApplication::new(
             store,
@@ -236,4 +259,22 @@ fn build_secret_cipher(settings: &CryptoSettings) -> anyhow::Result<SecretCipher
         .collect::<anyhow::Result<Vec<_>>>()?;
     let keyring = SecretKeyring::new(current_key_id, entries)?;
     Ok(SecretCipher::new(keyring))
+}
+
+async fn report_activity(
+    service: Option<crate::application::environments::EnvironmentService>,
+    mut stop: tokio::sync::watch::Receiver<bool>,
+) {
+    let Some(service) = service else {
+        return;
+    };
+    let mut timer = tokio::time::interval(std::time::Duration::from_secs(30));
+    loop {
+        tokio::select! {
+            _ = stop.changed() => break,
+            _ = timer.tick() => if let Err(error) = service.report_activity().await {
+                tracing::warn!(%error, "test activity report remains pending");
+            }
+        }
+    }
 }

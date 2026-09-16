@@ -361,7 +361,7 @@ async fn migrations_apply_and_readiness_proves_the_schema_contract() -> Result<(
     let applied = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _sqlx_migrations")
         .fetch_one(pool)
         .await?;
-    assert_eq!(applied, 8);
+    assert_eq!(applied, 9);
 
     let mut absent_environment = pool.begin().await?;
     sqlx::query("SELECT set_config('hook.environment_id', $1, true)")
@@ -1854,6 +1854,83 @@ async fn application_secret_selects_empty_isolated_storage_and_revalidates_lifec
         service.resolve_app_secret(&secret).await.is_err(),
         "cached pools cannot bypass revoked selectors"
     );
+    let service = service.with_honeycomb_control(
+        secrecy::SecretString::from("dedicated-hook-honeycomb-service-token"),
+        "tos>hook".into(),
+        Url::parse(&server.uri())?,
+    )?;
+    let mut current = context(3, Some("2026-09-13T01:00:00Z"));
+    current["webhook_key_digest"] =
+        hex::encode(<Sha256 as sha2::Digest>::digest("A".repeat(32))).into();
+    let ready = Mock::given(method("GET"))
+        .and(path("/api/v1/application/testing-context"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&current))
+        .mount_as_scoped(&server)
+        .await;
+    let operation = |action: &str,
+                     revision,
+                     generation|
+     -> Result<
+        silicon_hook::application::environments::lifecycle::LifecycleOperation,
+    > {
+        Ok(serde_json::from_value(
+            serde_json::json!({"operation_id":uuid::Uuid::now_v7(),"environment_id":id,"org_id":"tos","app_id":"tos>hook","environment_revision":revision,"generation":generation,"key_version":1,"action":action,"testing_key":"A".repeat(32)}),
+        )?)
+    };
+    assert_eq!(
+        service.lifecycle(&operation("prepare", 1, 1)?).await?["state"],
+        "completed"
+    );
+    let managed = service.resolve_app_secret(&secret).await?;
+    assert_eq!(managed.environment.id, id);
+    let clean = operation("clean", 2, 2)?;
+    assert_eq!(service.lifecycle(&clean).await?["state"], "completed");
+    let cleaned_generation = service.selected_metadata(id).await?.generation;
+    assert_eq!(
+        service
+            .resolve_app_secret(&secret)
+            .await?
+            .environment
+            .generation,
+        cleaned_generation,
+        "IAM snapshots cannot repeat coordinator cleanup"
+    );
+    assert_eq!(
+        service.lifecycle(&operation("disable", 3, 2)?).await?["state"],
+        "completed"
+    );
+    assert!(
+        service.resolve_app_secret(&secret).await.is_err(),
+        "an IAM response cannot override Hook disable"
+    );
+    assert_eq!(
+        service.lifecycle(&operation("restore", 4, 2)?).await?["state"],
+        "completed"
+    );
+    drop(ready);
+    let unavailable = Mock::given(method("GET"))
+        .and(path("/api/v1/application/testing-context"))
+        .respond_with(ResponseTemplate::new(403))
+        .mount_as_scoped(&server)
+        .await;
+    assert!(
+        service.resolve_app_secret(&secret).await.is_err(),
+        "local restore cannot bypass shared IAM readiness"
+    );
+    drop(unavailable);
+    current["environment_id"] = uuid::Uuid::now_v7().to_string().into();
+    current["environment"]["environment_id"] = current["environment_id"].clone();
+    current["webhook_key_digest"] =
+        hex::encode(<Sha256 as sha2::Digest>::digest("C".repeat(32))).into();
+    let _unprepared = Mock::given(method("GET"))
+        .and(path("/api/v1/application/testing-context"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&current))
+        .mount_as_scoped(&server)
+        .await;
+    assert!(
+        service.resolve_app_secret(&secret).await.is_err(),
+        "selection cannot create an unprepared shared environment"
+    );
     Ok(())
 }
 
@@ -1923,5 +2000,333 @@ async fn telemetry_reaches_configured_space_station_table() -> Result<()> {
         .await?
     );
     println!("Space Station accepted synthetic Hook diagnostic {id}");
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "end-to-end participant state machine with restricted database roles"
+)]
+async fn honeycomb_lifecycle_fences_cleanup_retries_and_retains_binding() -> Result<()> {
+    use secrecy::SecretString;
+    use silicon_hook::{
+        application::environments::{EnvironmentService, lifecycle::LifecycleOperation},
+        config::{DatabaseSettings, IamSettings},
+        infrastructure::iam::IamClient,
+    };
+    use uuid::Uuid;
+    use wiremock::{
+        Mock, MockServer, ResponseTemplate,
+        matchers::{header, method, path},
+    };
+    let (database, api, _) = TestDatabase::start_with_runtime_roles().await?;
+    let coordinator = MockServer::start().await;
+    let iam = IamClient::connect(&IamSettings {
+        base_url: Url::parse("http://127.0.0.1:9")?,
+        app_id: None,
+        app_secret: None,
+        connect_timeout: StdDuration::from_millis(10),
+        request_timeout: StdDuration::from_millis(10),
+        max_response_bytes: 1024,
+        allow_insecure_local_http: true,
+        local_auth: true,
+        webhook: None,
+    })
+    .await?;
+    let url = format!(
+        "postgres://silicon_hook_api:api-secret@{}:{}/postgres",
+        database.container.get_host().await?,
+        database.container.get_host_port_ipv4(5432).await?
+    );
+    let db = DatabaseSettings {
+        url: SecretString::from(url.clone()),
+        max_connections: std::num::NonZeroU32::new(4).context("pool size")?,
+        min_connections: 0,
+        acquire_timeout: StdDuration::from_secs(3),
+        statement_timeout: StdDuration::from_secs(10),
+    };
+    let key = EncryptionKeyId::new("1")?;
+    let cipher = Arc::new(SecretCipher::new(SecretKeyring::new(
+        key.clone(),
+        [(key, SecretKey::from_bytes([7; 32]))],
+    )?));
+    let service = EnvironmentService::connect(db, cipher, iam.clone())
+        .await?
+        .with_honeycomb_control(
+            SecretString::from("dedicated-hook-honeycomb-service-credential"),
+            "tos>hook".into(),
+            Url::parse(&coordinator.uri())?,
+        )?;
+    assert!(service.authorize_honeycomb("user-token").is_err());
+    service.authorize_honeycomb("dedicated-hook-honeycomb-service-credential")?;
+    let id = Uuid::now_v7();
+    let operation = |action: &str,
+                     revision,
+                     generation,
+                     key_version|
+     -> Result<LifecycleOperation> {
+        Ok(serde_json::from_value(
+            serde_json::json!({"operation_id":Uuid::now_v7(),"environment_id":id,"org_id":"org:integration","app_id":"tos>hook","environment_revision":revision,"generation":generation,"key_version":key_version,"action":action,"testing_key":"A".repeat(32),"snapshot":{}}),
+        )?)
+    };
+    let prepare = operation("prepare", 1, 1, 1)?;
+    // The protected route bypasses test headers, but never service authentication.
+    let router = silicon_hook::api::router(
+        silicon_hook::api::ApiDependencies {
+            application: application(api.clone(), database_now(api.pool()).await?)?,
+            environments: Some(service.clone()),
+            iam: iam.clone(),
+            trusted_proxy_hops: 0,
+            realtime: silicon_hook::config::RealtimeSettings {
+                heartbeat_interval: StdDuration::from_secs(30),
+                heartbeat_timeout: StdDuration::from_secs(120),
+                replay_batch_size: std::num::NonZeroU32::MIN,
+                poll_interval: StdDuration::from_secs(1),
+                max_silicons_per_connection: std::num::NonZeroUsize::MIN,
+            },
+            wakeups: silicon_hook::infrastructure::postgres::DeliveryWakeups::new(),
+        },
+        &silicon_hook::config::ServerSettings {
+            bind_addr: "127.0.0.1:0".parse()?,
+            public_base_url: Url::parse(PUBLIC_BASE_URL)?,
+            request_timeout: StdDuration::from_secs(5),
+            max_ingress_body_bytes: 4096,
+            max_management_body_bytes: 65536,
+            concurrency_limit: 8,
+            trusted_proxy_hops: 0,
+        },
+    );
+    use tower::ServiceExt as _;
+    let endpoint = format!(
+        "/internal/honeycomb/organizations/org:integration/testing-environments/{id}/operations/{}",
+        prepare.operation_id
+    );
+    for (token, expected) in [
+        ("user-token", http::StatusCode::UNAUTHORIZED),
+        (
+            "dedicated-hook-honeycomb-service-credential",
+            http::StatusCode::OK,
+        ),
+    ] {
+        let response = router
+            .clone()
+            .oneshot(
+                http::Request::put(&endpoint)
+                    .header("authorization", format!("Bearer {token}"))
+                    .header("x-hook-test-app-secret", "disabled-test-secret")
+                    .body(axum::body::Body::from(serde_json::to_vec(&prepare)?))?,
+            )
+            .await?;
+        assert_eq!(response.status(), expected);
+    }
+    let receipt = service.lifecycle(&prepare).await?;
+    assert_eq!(receipt["state"], "completed");
+    assert_eq!(receipt, service.lifecycle(&prepare).await?);
+    assert!(!receipt.to_string().contains(&"A".repeat(32)));
+    let mut changed: LifecycleOperation = serde_json::from_value(serde_json::to_value(&prepare)?)?;
+    changed.action = "clean".into();
+    assert!(service.lifecycle(&changed).await.is_err());
+    let generation = service.selected_metadata(id).await?.generation;
+    let scoped = PgPoolOptions::new()
+        .max_connections(4)
+        .connect_with(url.parse::<sqlx::postgres::PgConnectOptions>()?.options([
+            ("hook.environment_id", id.to_string()),
+            ("hook.environment_generation", generation.to_string()),
+        ]))
+        .await?;
+    let app = application(api.clone(), database_now(api.pool()).await?)?.for_test_environment(
+        PostgresStore::new(scoped.clone()),
+        id,
+        generation,
+    );
+    let identity = FixtureIdentity::new()?;
+    let hook = create_hook(
+        &app,
+        &identity,
+        "before-clean",
+        SigningPatch {
+            required: Some(false),
+            ..SigningPatch::default()
+        },
+        "before-clean",
+    )
+    .await?;
+    service.touch(id, generation).await?;
+    Mock::given(method("POST"))
+        .and(path(format!(
+            "/api/v1/environments/{id}/apps/tos%3Ehook/activity"
+        )))
+        .and(header("x-testing-environment-key", "A".repeat(32)))
+        .respond_with(ResponseTemplate::new(503))
+        .mount(&coordinator)
+        .await;
+    service.report_activity().await?;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM hook_control.activity_reports")
+            .fetch_one(database.store.pool())
+            .await?,
+        1
+    );
+    coordinator.reset().await;
+    Mock::given(method("POST"))
+        .and(header("x-testing-environment-key", "A".repeat(32)))
+        .respond_with(ResponseTemplate::new(200))
+        .expect(1)
+        .mount(&coordinator)
+        .await;
+    service.report_activity().await?;
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM hook_control.activity_reports")
+            .fetch_one(database.store.pool())
+            .await?,
+        0
+    );
+    // An in-flight transport owns a shared fence. Clean cannot complete until it sends.
+    sqlx::raw_sql("CREATE FUNCTION public.fail_hook_cleanup() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'injected cleanup failure'; END $$; CREATE TRIGGER fail_hook_cleanup BEFORE DELETE ON hook.events FOR EACH STATEMENT EXECUTE FUNCTION public.fail_hook_cleanup();").execute(database.store.pool()).await?;
+    let guard = app.delivery_guard().await?.context("test delivery fence")?;
+    let clean = operation("clean", 2, 2, 1)?;
+    let cloned = service.clone();
+    let clean_json = serde_json::to_value(&clean)?;
+    let cleanup = tokio::spawn(async move {
+        cloned
+            .lifecycle(
+                &serde_json::from_value(clean_json)
+                    .map_err(silicon_hook::error::AppError::internal)?,
+            )
+            .await
+    });
+    wait_for_blocked_query(database.store.pool(), "FOR UPDATE").await?;
+    assert!(!cleanup.is_finished());
+    guard.commit().await?;
+    assert_eq!(cleanup.await??["state"], "failed");
+    assert_eq!(
+        service
+            .lifecycle_status("org:integration", id, clean.operation_id)
+            .await?["state"],
+        "failed"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM hook.hooks WHERE environment_id=$1")
+            .bind(id)
+            .fetch_one(database.store.pool())
+            .await?,
+        1,
+        "failed cleanup rolls back deletion"
+    );
+    sqlx::raw_sql(
+        "DROP TRIGGER fail_hook_cleanup ON hook.events; DROP FUNCTION public.fail_hook_cleanup();",
+    )
+    .execute(database.store.pool())
+    .await?;
+    assert_eq!(service.lifecycle(&clean).await?["state"], "completed");
+    assert!(!app.environment_is_available().await?);
+    assert!(app.delivery_guard().await.is_err());
+    assert!(
+        create_hook(
+            &app,
+            &identity,
+            "stale-write",
+            SigningPatch {
+                required: Some(false),
+                ..SigningPatch::default()
+            },
+            "stale-write"
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        sqlx::query(
+            "INSERT INTO hook_private.delivery_sequences(silicon_id,last_sequence) VALUES('late',1)"
+        )
+        .execute(&scoped)
+        .await
+        .is_err()
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM hook.hooks WHERE environment_id=$1")
+            .bind(id)
+            .fetch_one(database.store.pool())
+            .await?,
+        0
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>(
+            "SELECT count(*) FROM hook_control.endpoint_routes WHERE environment_id=$1"
+        )
+        .bind(id)
+        .fetch_one(database.store.pool())
+        .await?,
+        1
+    );
+    assert_eq!(service.lifecycle(&clean).await?["state"], "completed");
+    let after = service.selected_metadata(id).await?.generation;
+    assert!(after > generation);
+    assert_eq!(after, service.selected_metadata(id).await?.generation);
+    assert!(
+        service
+            .lifecycle(&operation("disable", 1, 1, 1)?)
+            .await
+            .is_err()
+    );
+    assert!(
+        service
+            .lifecycle(&operation("restore", 3, 3, 1)?)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        service.lifecycle(&operation("disable", 3, 2, 1)?).await?["state"],
+        "completed"
+    );
+    assert!(
+        service
+            .resolve_endpoint(
+                identity.silicon_id.as_str(),
+                hook.hook.endpoint_key().as_str()
+            )
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        service.lifecycle(&operation("restore", 4, 2, 1)?).await?["state"],
+        "completed"
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, i64>("SELECT count(*) FROM hook.hooks WHERE environment_id=$1")
+            .bind(id)
+            .fetch_one(database.store.pool())
+            .await?,
+        0
+    );
+    let mut rotate = operation("rotate-key", 5, 2, 2)?;
+    rotate.testing_key = "B".repeat(32);
+    assert_eq!(service.lifecycle(&rotate).await?["state"], "completed");
+    let mut purge = operation("purge", 6, 2, 2)?;
+    purge.testing_key = "B".repeat(32);
+    assert_eq!(service.lifecycle(&purge).await?["state"], "completed");
+    assert_eq!(service.lifecycle(&purge).await?["state"], "completed");
+    assert_eq!(
+        service
+            .lifecycle_status("org:integration", id, purge.operation_id)
+            .await?["state"],
+        "completed"
+    );
+    assert!(
+        service
+            .lifecycle(&operation("prepare", 7, 2, 2)?)
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        sqlx::query_scalar::<_, serde_json::Value>(
+            "SELECT encrypted_credentials FROM hook_control.environments WHERE id=$1"
+        )
+        .bind(id)
+        .fetch_one(database.store.pool())
+        .await?,
+        serde_json::json!({})
+    );
     Ok(())
 }

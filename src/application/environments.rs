@@ -1,5 +1,7 @@
 //! Organization-owned test environments and their strictly scoped database pools.
 
+pub mod lifecycle;
+
 use std::{collections::BTreeMap, fmt, sync::Arc, time::Duration};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -104,6 +106,11 @@ struct EnvironmentRecord {
     #[sqlx(flatten)]
     metadata: TestEnvironment,
     encrypted_credentials: serde_json::Value,
+    honeycomb_revision: Option<i64>,
+    honeycomb_generation: Option<i64>,
+    honeycomb_key_version: Option<i64>,
+    honeycomb_operation: Option<Uuid>,
+    honeycomb_state: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Zeroize, ZeroizeOnDrop)]
@@ -143,6 +150,7 @@ pub struct EnvironmentService {
     cipher: Arc<SecretCipher>,
     production_iam: IamClient,
     pools: ScopedPools,
+    control: Option<lifecycle::Control>,
 }
 
 impl fmt::Debug for EnvironmentService {
@@ -179,6 +187,7 @@ impl EnvironmentService {
             cipher,
             production_iam: iam,
             pools: Arc::default(),
+            control: None,
         })
     }
 
@@ -306,6 +315,9 @@ impl EnvironmentService {
         id: Uuid,
     ) -> Result<(TestEnvironment, Zeroizing<String>), AppError> {
         let row = self.record(id).await?;
+        if row.honeycomb_revision.is_some() {
+            return Err(AppError::conflict("environment_managed_by_honeycomb"));
+        }
         authorize_owner(actor, &row.metadata)?;
         let secrets = self.decrypt(&row)?;
         Ok((row.metadata, Zeroizing::new(secrets.hook_key.clone())))
@@ -323,8 +335,13 @@ impl EnvironmentService {
     ) -> Result<(TestEnvironment, Zeroizing<String>), AppError> {
         let mut tx = self.pool.begin().await.map_err(internal)?;
         let row = locked_record(&mut tx, id).await?;
+        if row.honeycomb_revision.is_some() {
+            return Err(AppError::conflict("environment_managed_by_honeycomb"));
+        }
         authorize_owner(actor, &row.metadata)?;
-        if row.metadata.deleted_at.is_some() {
+        if row.metadata.deleted_at.is_some()
+            || row.honeycomb_state.as_deref().is_some_and(|s| s != "ready")
+        {
             return Err(AppError::NotFound);
         }
         let request = mutation_hash(actor, request_key)?;
@@ -332,6 +349,11 @@ impl EnvironmentService {
         if let Some((metadata, encrypted)) = replay(&mut tx, id, &request, &input).await? {
             let credentials = self.decrypt(&EnvironmentRecord {
                 metadata: metadata.clone(),
+                honeycomb_revision: None,
+                honeycomb_generation: None,
+                honeycomb_key_version: None,
+                honeycomb_operation: None,
+                honeycomb_state: None,
                 encrypted_credentials: encrypted
                     .ok_or_else(|| internal(anyhow::anyhow!("missing rotation result")))?,
             })?;
@@ -361,6 +383,9 @@ impl EnvironmentService {
     ) -> Result<TestEnvironment, AppError> {
         let mut tx = self.pool.begin().await.map_err(internal)?;
         let row = locked_record(&mut tx, id).await?;
+        if row.honeycomb_revision.is_some() {
+            return Err(AppError::conflict("environment_managed_by_honeycomb"));
+        }
         authorize_owner(actor, &row.metadata)?;
         let request = mutation_hash(actor, request_key)?;
         let input = hash_key(if deleted { "delete" } else { "restore" });
@@ -386,6 +411,16 @@ impl EnvironmentService {
         let mut tx = self.pool.begin().await.map_err(internal)?;
         let id: Uuid = sqlx::query_scalar("SELECT id FROM hook_control.environments WHERE key_hash = $1 AND deleted_at IS NULL FOR UPDATE")
             .bind(hash_key(key)).fetch_optional(&mut *tx).await.map_err(internal)?.ok_or(AppError::Unauthenticated)?;
+        let managed: bool = sqlx::query_scalar(
+            "SELECT honeycomb_revision IS NOT NULL FROM hook_control.environments WHERE id=$1",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(internal)?;
+        if managed {
+            return Err(AppError::conflict("environment_managed_by_honeycomb"));
+        }
         let request = root_mutation_hash(key, request_key)?;
         let input = hash_key("clean");
         if let Some((metadata, _)) = replay(&mut tx, id, &request, &input).await? {
@@ -419,6 +454,16 @@ impl EnvironmentService {
         let row: EnvironmentRecord = sqlx::query_as("SELECT * FROM hook_control.environments WHERE key_hash = $1 AND deleted_at IS NULL FOR UPDATE")
             .bind(hash_key(key)).fetch_optional(&mut *tx).await.map_err(internal)?.ok_or(AppError::Unauthenticated)?;
         let id = row.metadata.id;
+        let managed: bool = sqlx::query_scalar(
+            "SELECT honeycomb_revision IS NOT NULL FROM hook_control.environments WHERE id=$1",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(internal)?;
+        if managed {
+            return Err(AppError::conflict("environment_managed_by_honeycomb"));
+        }
         let request = root_mutation_hash(key, request_key)?;
         let input = Sha256::digest(Zeroizing::new(
             serde_json::to_vec(&serde_json::json!(["configure-iam", config])).map_err(internal)?,
@@ -451,8 +496,14 @@ impl EnvironmentService {
     /// # Errors
     /// Returns storage failures; missing or changed generations remain untouched.
     pub async fn touch(&self, id: Uuid, generation: i64) -> Result<(), AppError> {
-        sqlx::query("UPDATE hook_control.environments SET last_activity_at = clock_timestamp() WHERE id = $1 AND generation = $2 AND deleted_at IS NULL")
-            .bind(id).bind(generation).execute(&self.pool).await.map_err(internal)?;
+        let mut tx = self.pool.begin().await.map_err(internal)?;
+        let accepted: Option<(Option<i64>, Option<i64>)> = sqlx::query_as("UPDATE hook_control.environments SET last_activity_at = clock_timestamp() WHERE id=$1 AND generation=$2 AND deleted_at IS NULL AND (honeycomb_state IS NULL OR honeycomb_state='ready') RETURNING honeycomb_generation,honeycomb_key_version")
+            .bind(id).bind(generation).fetch_optional(&mut *tx).await.map_err(internal)?;
+        if let Some((Some(shared_generation), Some(key_version))) = accepted {
+            sqlx::query("INSERT INTO hook_control.activity_reports(environment_id,report_id,generation,key_version) VALUES($1,$2,$3,$4) ON CONFLICT(environment_id) DO NOTHING")
+                .bind(id).bind(Uuid::now_v7()).bind(shared_generation).bind(key_version).execute(&mut *tx).await.map_err(internal)?;
+        }
+        tx.commit().await.map_err(internal)?;
         Ok(())
     }
 
@@ -490,6 +541,9 @@ impl EnvironmentService {
         let existing: Option<(Uuid, Option<i64>, Option<time::OffsetDateTime>)> = sqlx::query_as(
             "SELECT id, iam_version, iam_cleaned_at FROM hook_control.environments WHERE iam_environment_id = $1 OR iam_key_hash = $2 FOR UPDATE")
             .bind(remote.environment_id).bind(&digest).fetch_optional(&mut *tx).await.map_err(internal)?;
+        if self.control.is_some() && existing.is_none() {
+            return Err(AppError::conflict("environment_not_prepared"));
+        }
         let id = existing.as_ref().map_or(remote.environment_id, |row| row.0);
         if existing
             .as_ref()
@@ -498,10 +552,36 @@ impl EnvironmentService {
         {
             return Err(AppError::conflict("stale_iam_environment"));
         }
+        let mut managed = false;
         let credentials = if existing.is_some() {
             let row = locked_record(&mut tx, id).await?;
-            if row.metadata.deleted_at.is_some() {
+            if row.metadata.deleted_at.is_some()
+                || row.honeycomb_state.as_deref().is_some_and(|s| s != "ready")
+            {
                 return Err(AppError::Unauthenticated);
+            }
+            managed = row.honeycomb_revision.is_some();
+            if managed {
+                // Revalidate IAM shared readiness while holding the local lifecycle
+                // lock: an earlier in-flight response cannot reopen a cleaned world.
+                let (_, confirmed) = self
+                    .production_iam
+                    .select_testing_application(secret)
+                    .await?;
+                if confirmed.environment_id != remote.environment_id
+                    || confirmed
+                        .webhook_key_digest
+                        .as_ref()
+                        .map(|s| hex::decode(s).ok())
+                        != Some(Some(digest.clone()))
+                    || confirmed.environment.as_ref().is_none_or(|e| {
+                        e.version != metadata.version || e.cleaned_at != metadata.cleaned_at
+                    })
+                    || hash_key(&self.decrypt(&row)?.iam_key) != digest
+                    || row.metadata.org_id != metadata.org_id
+                {
+                    return Err(AppError::conflict("stale_iam_environment"));
+                }
             }
             let mut credentials = self.decrypt(&row)?;
             credentials.app_selector = Some(secret.to_owned());
@@ -514,9 +594,10 @@ impl EnvironmentService {
                 app_selector: Some(secret.to_owned()),
             }
         };
-        if existing
-            .as_ref()
-            .is_some_and(|row| row.2 != metadata.cleaned_at)
+        if !managed
+            && existing
+                .as_ref()
+                .is_some_and(|row| row.2 != metadata.cleaned_at)
         {
             sqlx::query("SELECT hook_control.clean_environment($1)")
                 .bind(id)
@@ -530,9 +611,9 @@ impl EnvironmentService {
             .bind(&metadata.name).bind(&metadata.description).bind(hash_key(&credentials.hook_key)).bind(digest)
             .bind(encrypted).bind(hash_key(&format!("iam-selector:{id}"))).bind(remote.environment_id)
             .bind(metadata.version).bind(metadata.cleaned_at).execute(&mut *tx).await.map_err(internal)?;
+        let record = locked_record(&mut tx, id).await?;
         tx.commit().await.map_err(internal)?;
-        self.scoped_context(self.record(id).await?, Some(selected_iam))
-            .await
+        self.scoped_context(record, Some(selected_iam)).await
     }
 
     /// Selects the environment owning a public test provider URL.
@@ -565,13 +646,18 @@ impl EnvironmentService {
     }
 
     async fn context(&self, row: EnvironmentRecord) -> Result<EnvironmentContext, AppError> {
-        if row.metadata.deleted_at.is_some() {
+        if row.metadata.deleted_at.is_some()
+            || row.honeycomb_state.as_deref().is_some_and(|s| s != "ready")
+        {
             return Err(AppError::NotFound);
         }
         let credentials = self.decrypt(&row)?;
         if let Some(secret) = &credentials.app_selector {
             return self.resolve_app_secret(secret).await;
         }
+        self.production_iam
+            .validate_environment(&credentials.iam_key)
+            .await?;
         self.scoped_context(row, None).await
     }
 
@@ -580,7 +666,9 @@ impl EnvironmentService {
         row: EnvironmentRecord,
         selected_iam: Option<IamClient>,
     ) -> Result<EnvironmentContext, AppError> {
-        if row.metadata.deleted_at.is_some() {
+        if row.metadata.deleted_at.is_some()
+            || row.honeycomb_state.as_deref().is_some_and(|s| s != "ready")
+        {
             return Err(AppError::NotFound);
         }
         let credentials = self.decrypt(&row)?;
