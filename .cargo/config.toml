@@ -1,0 +1,6 @@
+# Ship standalone Windows executables without a Visual C++ runtime installer.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
+[target.aarch64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]

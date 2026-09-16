@@ -1,11 +1,13 @@
 #!/usr/bin/env python3
 """Stage all six prebuilt targets, then validate and pack with Honeycomb."""
 import argparse
+import hashlib
 from pathlib import Path
 import shutil
 import struct
 import subprocess
 import tempfile
+import tarfile
 import tomllib
 
 TARGETS = {
@@ -71,7 +73,16 @@ def main():
             destination.chmod(0o755)
         subprocess.run([args.honeycomb, 'validate', str(stage)], check=True)
         subprocess.run([args.honeycomb, 'pack', str(stage), '--output', str(output)], check=True)
-    print(output)
+    subprocess.run([args.honeycomb, 'validate', str(output)], check=True)
+    expected = {'honeycomb.yaml'} | {f'targets/{target}/bin/{binary}' for target, (_, binary) in TARGETS.items()}
+    with tarfile.open(output, 'r:gz') as archive:
+        members = archive.getmembers()
+        files = {member.name.removeprefix('./') for member in members if member.isfile()}
+        if files != expected or any(not (member.isfile() or member.isdir()) for member in members):
+            raise SystemExit('Archive must contain only honeycomb.yaml and the six native executables')
+    digest = hashlib.sha256(output.read_bytes()).hexdigest()
+    output.with_name(output.name + '.sha256').write_text(f'{digest}  {output.name}\n')
+    print(f'{output}\nSHA-256: {digest}')
 
 if __name__ == '__main__':
     main()

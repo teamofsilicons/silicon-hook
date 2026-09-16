@@ -15,7 +15,7 @@ The release workflow builds these native executables:
 | macos-x86_64 | x86_64-apple-darwin | hook |
 | macos-aarch64 | aarch64-apple-darwin | hook |
 
-For each Rust target, run `cargo build --locked --release -p silicon-hook-cli --target <rust-target>` on the corresponding build runner. Collect each executable as `artifacts/<honeycomb-target>/<executable>`. Windows ARM64 uses the Windows runner's cross compiler.
+For each Rust target, run `cargo build --locked --release -p silicon-hook-cli --target <rust-target>` on the corresponding build runner. Collect each executable as `artifacts/<honeycomb-target>/<executable>`. Windows ARM64 uses the Windows runner's cross compiler. The checked-in Cargo configuration statically links the Visual C++ runtime for both Windows targets.
 
 ## Validate and pack
 
@@ -25,6 +25,20 @@ Keep the app version in `honeycomb.yaml` equal to `crates/cli/Cargo.toml`. A rel
 python3 scripts/package-cli.py --artifacts artifacts --output dist
 ```
 
-The packager requires all six nonempty native executables and checks their OS and CPU headers, stages `honeycomb.yaml` at the archive root, runs `honeycomb validate <staging-directory>`, then `honeycomb pack <staging-directory> --output <archive>`. It fails without a complete set. The output is one `silicon-hook-<version>.tar.gz` containing every platform. The GitHub release workflow uploads that archive as a build artifact; publication is a separate release action.
+The packager requires all six nonempty native executables and checks their OS and CPU headers, stages `honeycomb.yaml` at the archive root, runs `honeycomb validate <staging-directory>`, then `honeycomb pack <staging-directory> --output <archive>`. It then validates the finished archive, checks its exact file inventory and writes a SHA-256 sidecar. It fails without a complete set. The output is one `silicon-hook-<version>.tar.gz` containing every platform. The GitHub release workflow uploads that archive and checksum as build artifacts; publication is a separate release action.
 
 A docs build only renders documentation. It does not build binaries, publish a release or substitute a source archive for the prebuilt package. See [Honeycomb's package documentation](https://docs.honeycomb.teamofsilicons.com/) for its manifest contract.
+
+## Local cross builds on macOS
+
+Install the six Rust targets above, Xcode's macOS SDK, `cargo-zigbuild` with Zig, and `cargo-xwin` with LLVM. With their executables on `PATH`:
+
+```sh
+cargo build --locked --release -p silicon-hook-cli --target aarch64-apple-darwin --target x86_64-apple-darwin --target-dir target/honeycomb-macos
+cargo zigbuild --locked --release -p silicon-hook-cli --target x86_64-unknown-linux-gnu.2.28 --target aarch64-unknown-linux-gnu.2.28 --target-dir target/honeycomb-linux
+cargo xwin build --locked --release -p silicon-hook-cli --target x86_64-pc-windows-msvc --target aarch64-pc-windows-msvc --target-dir target/honeycomb-windows
+```
+
+The Linux cross builds target glibc 2.28 or newer. Collect the outputs from each build directory's `<rust-target>/release/` into the artifact layout above before packaging. Native CI builds use the system libraries of their listed runners.
+
+Locally staged executables can also live at the paths declared by the root manifest: `targets/<honeycomb-target>/bin/<executable>`. Then `honeycomb validate .` verifies the complete local package. Generated `targets/` and `dist/` are kept on disk and excluded from source commits.

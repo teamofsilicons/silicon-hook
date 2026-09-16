@@ -4,6 +4,7 @@ from pathlib import Path
 import struct
 import subprocess
 import tempfile
+import tarfile
 import unittest
 from unittest.mock import patch
 
@@ -58,13 +59,20 @@ class Packaging(unittest.TestCase):
             def record(command, check):
                 self.assertTrue(check)
                 stage = Path(command[2])
+                if command[1] == 'validate' and stage.is_file():
+                    calls.append(command)
+                    return
                 self.assertTrue((stage / 'honeycomb.yaml').is_file())
                 for target, (_, binary) in package_cli.TARGETS.items():
                     self.assertTrue((stage / 'targets' / target / 'bin' / binary).is_file())
+                if command[1] == 'pack':
+                    with tarfile.open(command[-1], 'w:gz') as archive:
+                        archive.add(stage / 'honeycomb.yaml', arcname='honeycomb.yaml')
+                        archive.add(stage / 'targets', arcname='targets')
                 calls.append(command)
             with patch('sys.argv', argv), patch.object(package_cli.subprocess, 'run', side_effect=record):
                 package_cli.main()
-            self.assertEqual([command[1] for command in calls], ['validate', 'pack'])
+            self.assertEqual([command[1] for command in calls], ['validate', 'pack', 'validate'])
             with patch('sys.argv', argv), patch.object(package_cli.subprocess, 'run', side_effect=subprocess.CalledProcessError(1, 'validate')) as run:
                 with self.assertRaises(subprocess.CalledProcessError):
                     package_cli.main()
