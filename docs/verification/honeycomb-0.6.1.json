@@ -46,7 +46,8 @@
     "packaging": "Honeycomb directory and archive validation passed; archived file hashes match local inputs",
     "smoke_tests": "Linux and macOS on x86_64 and ARM64 passed; Windows architecture checks only",
     "anonymous_install": "macOS ARM64 installed from public Honeycomb; binary checksum matched; --version and empty-home login status --json passed",
-    "testsi_home": "Exact real session not checked; awaiting its home path"
+    "testsi_home": "Exact real session not checked; awaiting its home path",
+    "live_status_regression": "Production endpoint with isolated synthetic revoked Silicon session: 0.6.0 exits 1 missing_required_header; 0.6.1 exits 0 authenticated:false"
   },
   "publication": {
     "visibility": "public",

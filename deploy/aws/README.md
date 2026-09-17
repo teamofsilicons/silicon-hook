@@ -1,6 +1,6 @@
 # Hook standalone hosting
 
-The API and worker are migrating to [native systemd releases](../native/README.md).
+The API and worker run as [native systemd releases](../native/README.md).
 Use that release procedure for backend updates. The Docker installation steps
 below describe the original host setup and retained supporting services.
 
@@ -32,7 +32,7 @@ database, actor token, or testing root key is copied into the deployment.
 PostgreSQL has separate `hook_prod` and `hook_test` databases, private API and
 worker roles, and the repository's explicit runtime grants. Connections verify
 the local TLS certificate. Migrations run as the database administrator before
-runtime startup; runtime containers have no administrator credentials. Caddy
+runtime startup; runtime API and worker processes have no administrator credentials. Caddy
 obtains/renews the public certificate. Sessions use encrypted files with a stable
 key; the gateway must remain a single process with private persistent storage.
 

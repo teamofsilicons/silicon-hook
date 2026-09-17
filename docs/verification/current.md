@@ -1,8 +1,8 @@
 # Understanding update verification
 
-The September 16 changes are local: Honeycomb lifecycle participation, migration 9, final-send delivery fences, durable activity reporting and CLI release packaging. The implementation changes have not been deployed. The Honeycomb 0.6.0 archive contains all six native builds for `tos>hook` and is publicly available. The September 17 CLI 0.6.1 patch is also published. See [the lifecycle contract](../testing/honeycomb.md) and [release build](../releases.md). The earlier verification below describes the September 13 release, including its superseded source installer.
+The September 16 changes are deployed: Honeycomb lifecycle participation, migration 9, final-send delivery fences, durable activity reporting and CLI release packaging. The API and worker were deployed as native systemd services on September 17, including migration 9 in both databases. The Honeycomb 0.6.0 archive contains all six native builds for `tos>hook` and is publicly available. The September 17 CLI 0.6.1 patch is also published. See [the lifecycle contract](../testing/honeycomb.md) and [release build](../releases.md). The earlier verification below describes the September 13 release, including its superseded source installer.
 
-Local validation: 162 workspace unit/integration and WebSocket tests pass (one opt-in live telemetry test remains ignored). Restricted-role PostgreSQL regressions cover failed-clean retry, concurrent identical operations, endpoint tombstones, stale writes and deliveries, key rotation, disable/restore/purge, service authentication and IAM shared readiness. Strict Clippy, dependency policy, packaging regressions and the 18-page documentation build/link check pass. Rustls is patched to 0.23.45. Client/CLI and the Honeycomb manifest are at 0.6.0. The 19 MiB local archive passes Honeycomb 0.2.0 directory and archive validation, and every archived file matches its staged input. Both Linux and both macOS builds pass `--version` and `--help`; Windows x86_64 and ARM64 pass architecture/import checks with the Visual C++ runtime statically linked, but have not been executed on Windows. The [build inventory](honeycomb-0.6.0.json) records binary and archive SHA-256 checksums, source revision and validation boundaries. The archive and checksum are in `dist/`; native builds are in `targets/`.
+Local validation: 162 workspace unit/integration and WebSocket tests pass (one opt-in live telemetry test remains ignored). Restricted-role PostgreSQL regressions cover failed-clean retry, concurrent identical operations, endpoint tombstones, stale writes and deliveries, key rotation, disable/restore/purge, service authentication and IAM shared readiness. Strict Clippy, dependency policy, packaging regressions and the 18-page documentation build/link check pass. Rustls is patched to 0.23.45. The initial archive uses client/CLI and manifest version 0.6.0; CLI and manifest 0.6.1 supersede it as described below. The 19 MiB local archive passes Honeycomb 0.2.0 directory and archive validation, and every archived file matches its staged input. Both Linux and both macOS builds pass `--version` and `--help`; Windows x86_64 and ARM64 pass architecture/import checks with the Visual C++ runtime statically linked, but have not been executed on Windows. The [build inventory](honeycomb-0.6.0.json) records binary and archive SHA-256 checksums, source revision and validation boundaries. The archive and checksum are in `dist/`; native builds are in `targets/`.
 
 
 ## September 16 Honeycomb publication
@@ -11,7 +11,7 @@ Fresh `tos>hook` registration revision 1 was accepted after the earlier IAM appl
 
 An authenticated macOS ARM64 install into an isolated temporary home succeeded, returned `hook 0.6.0`, and matched the input executable hash. The September 17 patch was subsequently installed anonymously, as recorded below. Fresh application and webhook credentials were saved outside Git and configured on the existing production API/worker images, with previous configuration and containers retained for recovery. Public readiness returns 200 and IAM accepts the new application credentials. This credential refresh did not deploy the pending backend implementation or migrations.
 
-## September 17 CLI status fix and native backend preparation
+## September 17 CLI status fix and native backend deployment
 
 CLI 0.6.1 fixes `missing_required_header` after an unscoped Silicon login. The
 selected session supplies the missing organization from its token or Silicon
@@ -26,11 +26,25 @@ published archive. Anonymous macOS ARM64 installation verified the checksum,
 version, and top-level `authenticated: false` for an empty home. The exact
 reported `testsi` session remains unverified until its home path is supplied.
 
-The [native backend deployment](../../deploy/native/README.md) builds Linux ARM64
-executables into a separate systemd release bundle. The bundle is built and local
-installer verification tests pass. AWS SSO expired before host prerequisites or
-the native cutover could be applied; the existing API/worker containers remain
-running. PostgreSQL, Caddy, the gateway and their data have not been migrated.
+A live before/after check used an isolated synthetic revoked Silicon session with
+no explicit organization: 0.6.0 exited 1 with `missing_required_header`; 0.6.1
+exited 0 with top-level `authenticated: false`. This verifies the production
+request contract without claiming that the user's actual saved session was tested.
+
+The [native backend deployment](../../deploy/native/README.md) is complete.
+Release `2c3a41118ad4` runs the Linux ARM64 API and worker directly under systemd,
+as the unprivileged `silicon-hook` user. Both services are enabled and running,
+with zero restarts; `/proc` executable paths resolve to the deployed release.
+Both databases contain migrations 1–9. Public health, readiness, version and IAM
+discovery return 200. Old API/worker containers are stopped with restart disabled.
+PostgreSQL, Caddy and the browser gateway remain in Docker.
+
+The [deployment record](native-backend-2026-09-17.json) contains the bundle hash,
+successful SSM commands and private backup location. Both databases and
+configuration were backed up before migration, including quiesced database dumps.
+Daily backups also include the native environment files, service units and active
+release pointer. Database migrations require explicit recovery when rolling back
+to an older backend that does not support the new schema.
 
 Verified locally on September 13, 2026. `UNDERSTANDING.md` was preserved as supplied.
 

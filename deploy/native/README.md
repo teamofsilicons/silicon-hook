@@ -53,3 +53,12 @@ recovery may require restoring both database dumps while services are stopped.
 The installer records the previous release and container restart policies in the
 private backup's `rollback.json`. Never restore over a database that is accepting
 writes.
+
+## Verified deployment
+
+On September 17, 2026, release `2c3a41118ad4` replaced the API and worker
+containers on the standalone host. Both native units are enabled and healthy;
+production and shared-test databases have migrations 1–9. See the
+[deployment evidence](../../docs/verification/native-backend-2026-09-17.json).
+Daily backups include `/etc/silicon-hook`, both service units and the active
+release symlink, alongside the existing database and configuration backups.

@@ -1,0 +1,83 @@
+{
+  "verified_on": "2026-09-17",
+  "release_id": "2c3a41118ad4",
+  "archive": {
+    "path": "dist/silicon-hook-backend-2c3a41118ad4-linux-aarch64.tar.gz",
+    "sha256": "b5609ffee451bb688d215453cecd70eb510be27b5eb540ae18a2bd1027c2bd85"
+  },
+  "instance_id": "i-04398b332e0a3c1b7",
+  "ssm": {
+    "preflight": "dd1002ef-45fc-4557-96ef-fc0d1e6f021c",
+    "deployment": "1bb449f3-e9c0-418f-820a-69b5d1d6dd3f",
+    "verification": "3769957a-a228-4b72-a883-b4b33bbe40ff",
+    "status": "Success"
+  },
+  "services": {
+    "names": [
+      "silicon-hook-api",
+      "silicon-hook-worker"
+    ],
+    "manager": "systemd",
+    "user": "silicon-hook",
+    "enabled": true,
+    "active": "running",
+    "restarts": 0,
+    "release_path": "/opt/silicon-hook/releases/2c3a41118ad4"
+  },
+  "database_migrations": {
+    "hook_prod": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ],
+    "hook_test": [
+      1,
+      2,
+      3,
+      4,
+      5,
+      6,
+      7,
+      8,
+      9
+    ]
+  },
+  "public_http_200": [
+    "/healthz",
+    "/readyz",
+    "/api/version",
+    "/api/v1/auth/iam"
+  ],
+  "backup": {
+    "local": "/opt/silicon-hook/backups/before-native-20260917T063015Z",
+    "s3": "s3://silicon-hook-standalone-artifacts-lxpfsbc0jpuk/backups/native/20260917T063015Z/",
+    "includes_quiesced_database_dumps": true,
+    "daily_backup_verification": {
+      "ssm_command": "17ee57b3-c5a3-46c4-88c9-b7a30d68bba4",
+      "result": "success",
+      "exit_status": 0,
+      "timer": "active",
+      "native_configuration_included": true
+    }
+  },
+  "legacy_api_worker_containers": {
+    "running": false,
+    "restart_policy": "no"
+  },
+  "retained_docker_services": [
+    "hook-postgres",
+    "hook-https",
+    "hook-gateway"
+  ],
+  "limitations": [
+    "Exact user testsi saved session not tested",
+    "Migration rollback is not automatic",
+    "Public API build metadata reports commit unknown; native executable identity verified on host"
+  ]
+}

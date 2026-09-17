@@ -1,6 +1,6 @@
 # Hook implementation and verification
 
-The September 16 Honeycomb lifecycle and CLI distribution changes are implemented locally. The human-owned requirements file was not edited.
+The September 16 Honeycomb lifecycle and CLI distribution changes are implemented and deployed. The human-owned requirements file was not edited.
 
 - IAM 1.8 application-secret sandbox selection, empty isolated storage, online lifecycle validation, and separate browser/CLI identities.
 - One prewarmed daemon WebSocket with independently authorized logical subscriptions and ACK cursors.
@@ -11,6 +11,8 @@ The September 16 Honeycomb lifecycle and CLI distribution changes are implemente
 - Authenticated Honeycomb lifecycle operations, durable receipts, transactional cleanup, stale-write/delivery fences and retention activity reporting.
 - Published docs at https://docs.hook.teamofsilicons.com.
 
-The September 16 code changes are not deployed; the six-platform `tos>hook` 0.6.0 archive passes Honeycomb validation and is uploaded. Both publication reviews are approved and the app is public. CLI 0.6.1 fixes unscoped Silicon status and passes an anonymous installation check. An authenticated isolated install passes. Fresh IAM credentials are configured on the existing API/worker images. Linux and macOS smoke tests pass; Windows executables have architecture/import validation only. Earlier September 13 production status follows. Validation and the exact release boundary are in [the verification guide](docs/verification/current.md). The API, worker, browser gateway and frontend are deployed; both databases are migrated through version 8. Client/CLI 0.5.0 are published on crates.io. Production telemetry export is verified. The Postmark workflow is configured with its server secret and existing verified sender.
+The September 16 backend changes were deployed on September 17 as native Linux ARM64 API and worker binaries under systemd, release `2c3a41118ad4`. Both databases now have migrations 1–9. Public health, readiness, version and IAM discovery checks pass; both services are enabled, running as `silicon-hook`, with zero restarts. Previous API/worker containers are stopped with restart disabled. PostgreSQL, Caddy and the browser gateway remain in Docker.
 
-Native Linux ARM64 backend binaries and a systemd deployment bundle are prepared. AWS SSO renewal is required before replacing the running API/worker containers. See [native deployment](deploy/native/README.md).
+The six-platform `tos>hook` app is public, with both publication reviews approved. CLI 0.6.1 fixes unscoped Silicon status and passes anonymous installation and a live before/after regression using an isolated synthetic revoked session. The exact reported user session has not been tested. Linux and macOS smoke tests pass; Windows executables have architecture/import validation only. The earlier client/CLI 0.5.0 publication on crates.io is separate from Honeycomb distribution.
+
+Database/configuration backups, including quiesced dumps before migration, are stored in the encrypted private bucket. See [native deployment](deploy/native/README.md) and [verification evidence](docs/verification/current.md).

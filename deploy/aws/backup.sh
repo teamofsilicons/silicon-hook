@@ -9,6 +9,13 @@ docker exec hook-postgres pg_dump -U postgres -Fc hook_test > "$backup_dir/hook_
 config_files=(credentials.json iam.json db-tls)
 if [ -f /opt/silicon-hook/telemetry.env ]; then config_files+=(telemetry.env); fi
 tar -czf "$backup_dir/config.tar.gz" -C /opt/silicon-hook "${config_files[@]}"
+if [ -d /etc/silicon-hook ]; then
+  native_files=(etc/silicon-hook opt/silicon-hook/current
+    etc/systemd/system/silicon-hook-api.service
+    etc/systemd/system/silicon-hook-worker.service)
+  tar -czf "$backup_dir/native-config.tar.gz" -C / "${native_files[@]}"
+fi
 aws s3 cp "$backup_dir/" "s3://$bucket/backups/$stamp/" --recursive --sse AES256 --only-show-errors
 rm "$backup_dir/hook_prod.dump" "$backup_dir/hook_test.dump" "$backup_dir/config.tar.gz"
+if [ -f "$backup_dir/native-config.tar.gz" ]; then rm "$backup_dir/native-config.tar.gz"; fi
 rmdir "$backup_dir"
