@@ -1,0 +1,56 @@
+{
+  "app_id": "tos>hook",
+  "version": "0.6.1",
+  "source_revision": "a5f8ed17ded62961c20a8f623c23ab844316c168",
+  "verified_on": "2026-09-17",
+  "archive": {
+    "path": "dist/silicon-hook-0.6.1.tar.gz",
+    "bytes": 19599276,
+    "sha256": "93c3bca7faa0018a262d0f120eed9fedfeef670ef31b1f6794bee739a913cfc9"
+  },
+  "binaries": [
+    {
+      "path": "targets/linux-aarch64/bin/hook",
+      "bytes": 6679040,
+      "sha256": "34556c56f0adb0a340f81c4bc32e6162acf1ded16a2c044c5f252f5b278fb763"
+    },
+    {
+      "path": "targets/linux-x86_64/bin/hook",
+      "bytes": 8338440,
+      "sha256": "1997000b9c76d3daa8de3af30addd2dcb04de6fa528d0a8e8f78318f660c162d"
+    },
+    {
+      "path": "targets/macos-aarch64/bin/hook",
+      "bytes": 6699296,
+      "sha256": "be117377513a6d159792c8351fdf48b13dc2747cd9cb7b17a8a4de5bcdd45122"
+    },
+    {
+      "path": "targets/macos-x86_64/bin/hook",
+      "bytes": 8012200,
+      "sha256": "7baf0b4bda6040aae41ce9cec7424305024b37df867c84aca4b74737da214f68"
+    },
+    {
+      "path": "targets/windows-aarch64/bin/hook.exe",
+      "bytes": 7052800,
+      "sha256": "4a768c056ae5469be08bba85da66f7d4173585caeda909b7382b4488c8bcb4e3"
+    },
+    {
+      "path": "targets/windows-x86_64/bin/hook.exe",
+      "bytes": 8141312,
+      "sha256": "5d3e33bce76e71c657dd883fc9767c02c57d1dc84a7da27f325e8d672b333390"
+    }
+  ],
+  "validation": {
+    "cli_tests": "4 unit and 5 actual CLI process regression tests passed",
+    "clippy": "CLI all targets with warnings denied passed",
+    "packaging": "Honeycomb directory and archive validation passed; archived file hashes match local inputs",
+    "smoke_tests": "Linux and macOS on x86_64 and ARM64 passed; Windows architecture checks only",
+    "anonymous_install": "macOS ARM64 installed from public Honeycomb; binary checksum matched; --version and empty-home login status --json passed",
+    "testsi_home": "Exact real session not checked; awaiting its home path"
+  },
+  "publication": {
+    "visibility": "public",
+    "release_operation_id": "257403b0-da07-48a4-832d-d31a70c816c7",
+    "version": "0.6.1"
+  }
+}

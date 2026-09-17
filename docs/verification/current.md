@@ -1,15 +1,36 @@
 # Understanding update verification
 
-The September 16 changes are local: Honeycomb lifecycle participation, migration 9, final-send delivery fences, durable activity reporting and CLI release packaging. The implementation changes have not been deployed. The Honeycomb 0.6.0 archive contains all six native builds for `tos>hook` and is uploaded, but remains private pending Honeycomb validator approval. See [the lifecycle contract](../testing/honeycomb.md) and [release build](../releases.md). The earlier verification below describes the September 13 release, including its superseded source installer.
+The September 16 changes are local: Honeycomb lifecycle participation, migration 9, final-send delivery fences, durable activity reporting and CLI release packaging. The implementation changes have not been deployed. The Honeycomb 0.6.0 archive contains all six native builds for `tos>hook` and is publicly available. The September 17 CLI 0.6.1 patch is also published. See [the lifecycle contract](../testing/honeycomb.md) and [release build](../releases.md). The earlier verification below describes the September 13 release, including its superseded source installer.
 
 Local validation: 162 workspace unit/integration and WebSocket tests pass (one opt-in live telemetry test remains ignored). Restricted-role PostgreSQL regressions cover failed-clean retry, concurrent identical operations, endpoint tombstones, stale writes and deliveries, key rotation, disable/restore/purge, service authentication and IAM shared readiness. Strict Clippy, dependency policy, packaging regressions and the 18-page documentation build/link check pass. Rustls is patched to 0.23.45. Client/CLI and the Honeycomb manifest are at 0.6.0. The 19 MiB local archive passes Honeycomb 0.2.0 directory and archive validation, and every archived file matches its staged input. Both Linux and both macOS builds pass `--version` and `--help`; Windows x86_64 and ARM64 pass architecture/import checks with the Visual C++ runtime statically linked, but have not been executed on Windows. The [build inventory](honeycomb-0.6.0.json) records binary and archive SHA-256 checksums, source revision and validation boundaries. The archive and checksum are in `dist/`; native builds are in `targets/`.
 
 
 ## September 16 Honeycomb publication
 
-Fresh `tos>hook` registration revision 1 was accepted after the earlier IAM application reset. The six-platform archive uploaded with its recorded SHA-256 unchanged. IAM approved `directory.silicons.read`; publication request `4df7163e-6e6f-4ed2-8c6d-8f4229f2e682` is `awaiting_validator`. The current organization-owner account cannot decide the Honeycomb review. An authorized validator must approve Silicon Hook from Review requests in the [Honeycomb console](https://console.honeycomb.teamofsilicons.com).
+Fresh `tos>hook` registration revision 1 was accepted after the earlier IAM application reset. The six-platform archive uploaded with its recorded SHA-256 unchanged. IAM approved `directory.silicons.read`; publication request `4df7163e-6e6f-4ed2-8c6d-8f4229f2e682` is now `published`, with both IAM and Honeycomb gates approved and archive activation accepted. This was verified on September 17.
 
-An authenticated macOS ARM64 install into an isolated temporary home succeeded, returned `hook 0.6.0`, and matched the input executable hash. Anonymous installation is not claimed while visibility remains private. Fresh application and webhook credentials were saved outside Git and configured on the existing production API/worker images, with previous configuration and containers retained for recovery. Public readiness returns 200 and IAM accepts the new application credentials. This credential refresh did not deploy the pending backend implementation or migrations.
+An authenticated macOS ARM64 install into an isolated temporary home succeeded, returned `hook 0.6.0`, and matched the input executable hash. The September 17 patch was subsequently installed anonymously, as recorded below. Fresh application and webhook credentials were saved outside Git and configured on the existing production API/worker images, with previous configuration and containers retained for recovery. Public readiness returns 200 and IAM accepts the new application credentials. This credential refresh did not deploy the pending backend implementation or migrations.
+
+## September 17 CLI status fix and native backend preparation
+
+CLI 0.6.1 fixes `missing_required_header` after an unscoped Silicon login. The
+selected session supplies the missing organization from its token or Silicon
+public ID; IAM still verifies status online. Test sessions do not inherit the
+production organization. Explicit organization selections retain precedence.
+Five process-level regression tests cover inference, precedence, testing,
+refresh, revoked sessions and genuine server/permission errors. All nine CLI
+tests, strict Clippy and packaging checks pass.
+
+The [0.6.1 build inventory](honeycomb-0.6.1.json) records all six binaries and the
+published archive. Anonymous macOS ARM64 installation verified the checksum,
+version, and top-level `authenticated: false` for an empty home. The exact
+reported `testsi` session remains unverified until its home path is supplied.
+
+The [native backend deployment](../../deploy/native/README.md) builds Linux ARM64
+executables into a separate systemd release bundle. The bundle is built and local
+installer verification tests pass. AWS SSO expired before host prerequisites or
+the native cutover could be applied; the existing API/worker containers remain
+running. PostgreSQL, Caddy, the gateway and their data have not been migrated.
 
 Verified locally on September 13, 2026. `UNDERSTANDING.md` was preserved as supplied.
 

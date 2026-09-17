@@ -32,9 +32,13 @@ def settings(path):
 
 
 def native_settings(values):
-    return {key: value.replace('/run/hook-db/ca.crt', str(ROOT / 'db-tls/ca.crt'))
-            .replace('/var/lib/hook-telemetry', str(ROOT / 'telemetry-spool'))
-            for key, value in values.items()}
+    converted = dict(values)
+    for key, value in values.items():
+        if key.endswith('DATABASE_URL'):
+            converted[key] = value.replace('/run/hook-db/ca.crt', str(ROOT / 'db-tls/ca.crt'))
+    if converted.get('HOOK_TELEMETRY_SPOOL_DIR') == '/var/lib/hook-telemetry':
+        converted['HOOK_TELEMETRY_SPOOL_DIR'] = str(ROOT / 'telemetry-spool')
+    return converted
 
 
 def pg_environment(url):
@@ -180,6 +184,14 @@ def main():
         for record in legacy:
             run('docker', 'update', '--restart=no', record['name'])
             run('docker', 'stop', '-t', '120', record['name'])
+        # These dumps are taken after both writers stop and are the recovery
+        # point for a schema-changing release. Keep the earlier online backup too.
+        for database in databases:
+            path = backup / ('quiesced-' + database['PGDATABASE'] + '.dump')
+            run('pg_dump', '-Fc', '-f', str(path), env=database)
+            run('pg_restore', '--list', str(path))
+        run('aws', 's3', 'cp', str(backup) + '/', 's3://' + args.backup_bucket + '/backups/native/' + stamp + '/',
+            '--recursive', '--sse', 'AES256', '--only-show-errors')
         output = subprocess.run([str(release / 'bin/hook-migrate')], env=dict(os.environ, **values['migration']),
                                 user=10001, group=10001, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
         (backup / 'migration.log').write_text(output.stdout)
