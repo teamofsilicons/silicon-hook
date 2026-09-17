@@ -1,5 +1,9 @@
 # Hook standalone hosting
 
+The API and worker are migrating to [native systemd releases](../native/README.md).
+Use that release procedure for backend updates. The Docker installation steps
+below describe the original host setup and retained supporting services.
+
 The frontend is a static SolidJS build on Vercel. One dedicated ARM64 EC2
 `t4g.small` runs Caddy, Hook API, retention worker, Node browser gateway, and
 PostgreSQL 16. No load balancer is attached. Only TCP 80 and 443 are public;
