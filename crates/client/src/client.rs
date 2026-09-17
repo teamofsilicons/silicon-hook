@@ -448,6 +448,7 @@ impl Client {
 pub(crate) fn validate_origin(url: &Url) -> Result<()> {
     let loopback = url.host_str().is_some_and(|host| {
         host == "localhost"
+            || host.ends_with(".localhost")
             || host
                 .trim_matches(['[', ']'])
                 .parse::<std::net::IpAddr>()
