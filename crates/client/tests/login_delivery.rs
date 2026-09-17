@@ -55,7 +55,7 @@ async fn stream(ws: WebSocketUpgrade, State(f): State<Fixture>) -> impl IntoResp
         let event = json!({"type":"new_event", "data":{"sender":"demo",
             "metadata":{"id":"00000000-0000-4000-8000-000000000001", "org_id":"tos",
                 "silicon_id":"cos:tos","hook_id":"00000000-0000-4000-8000-000000000002",
-                "provider":"demo","summary":"demo triggered", "delivery_sequence":1,
+                "provider":"demo", "delivery_sequence":1,
                 "received_at":"2026-09-09T00:00:00Z", "request":{"method":"POST",
                     "url":"https://hook.example.test/silicon/cos:tos/ABCDEFGH", "path":"/silicon/cos:tos/ABCDEFGH",
                     "query_string":"","headers":[],"content_type":"application/json",
@@ -120,7 +120,7 @@ async fn authenticate_then_attach_detach_and_replay_without_leaking_destination(
             let event = &body["data"]["metadata"];
             assert_eq!(event["silicon_id"], "cos:tos");
             assert_eq!(event["delivery_sequence"], 1);
-            assert_eq!(event["summary"], "demo triggered");
+            assert!(event.get("summary").is_none());
             assert_eq!(event["request"]["body"], "{\"example\":true}");
             assert_eq!(headers["silicon-hook-event-id"], event["id"].as_str().unwrap());
             assert_eq!(headers["silicon-hook-delivery-sequence"], "1");

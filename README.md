@@ -7,7 +7,7 @@ and delivers it to the Silicon over an ordered, acknowledged WebSocket stream.
 Unverified requests are withheld, logged separately, and counted against the
 sending address.
 
-The product behavior is defined in [UNDERSTANDING.md](./UNDERSTANDING.md).
+The product behavior is defined in [UNDERSTANDING.md](./understanding/UNDERSTANDING.md).
 That file is the single source of truth; the human API guide is
 [API_DOCS.md](./API_DOCS.md), the machine contract is
 [openapi.yaml](./openapi.yaml), and the Silicon IAM boundary is
@@ -26,13 +26,12 @@ https://hook.teamofsilicons.com/silicon/{silicon_id}/{endpoint_key}
 
 Each hook carries:
 
-- a name (the provider shown in every delivery summary) and optional description;
+- a name (the provider shown in received events) and optional description;
 - a signature policy: whether verification is required, the algorithm, the
   expression that rebuilds the bytes the provider signed, the expression that
   locates the presented signature, and the encodings involved;
 - an encrypted signing secret or a provider public key;
-- an IANA time zone used to render the summary line
-  `{provider} triggered at HH:MM:SS DD-MM-YYYY IANA_ZONE_ID`.
+- an IANA time zone retained in the hook configuration.
 
 The default policy is the Standard Webhooks convention: HMAC-SHA-256 over
 `webhook-id.webhook-timestamp.body`, presented in base64 in the

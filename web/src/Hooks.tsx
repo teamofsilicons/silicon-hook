@@ -125,7 +125,7 @@ export function HookForm(p: {
           </Field>
           <Field
             label="Time zone"
-            hint="Used in each delivery’s readable summary."
+            hint="Identifies the provider in received events."
           >
             <input
               required

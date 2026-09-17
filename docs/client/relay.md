@@ -48,7 +48,6 @@ receipt) and `metadata` (the complete retained event). For example:
       "silicon_id": "cos:tos",
       "hook_id": "00000000-0000-4000-8000-000000000002",
       "provider": "stripe",
-      "summary": "stripe triggered at 12:00:00 11-09-2026 UTC",
       "delivery_sequence": 42,
       "received_at": "2026-09-11T12:00:00Z",
       "request": {
@@ -67,7 +66,7 @@ receipt) and `metadata` (the complete retained event). For example:
 }
 ```
 
-The server’s WebSocket frame retains `type` and `data`, including replays. The local receiver adds delivery identity under top-level `metadata`. Event ID, Silicon ID, sequence, summary, timestamp and original request remain available under `data.metadata`. Non-UTF-8 request bytes
+The server’s WebSocket frame retains `type` and `data`, including replays. The local receiver adds delivery identity under top-level `metadata`. Event ID, Silicon ID, sequence, timestamp and original request remain available under `data.metadata`. Non-UTF-8 request bytes
 remain available in `data.metadata.request.body_base64`.
 Headers `silicon-hook-event-id` and `silicon-hook-delivery-sequence` make
 HTTP deduplication convenient. Consumers of the previous `type: event` shape

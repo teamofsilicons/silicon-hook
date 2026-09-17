@@ -232,17 +232,25 @@ We will have a test environment for hook itself. This would work exactly like th
 
 When a test environment is created, it would start empty.
 
-Refer to [how IAM manages testing environments](https://docs.iam.teamofsilicons.com/api/testing-environments/) for environment creation, test identities, application imports, authentication, webhooks, and lifecycle.
+Honeycomb manages environment creation and lifecycle. Hook prepares its own isolated data when instructed, while IAM still handles test identities, authentication and webhooks.
 
 A test environment is basically the same hook where creating hooks, testing them, etc is possible. It uses test IAM and test hook together, so the entire flow can be tested inside one sandbox.
 
+### Environment Lifecycle
+
+Hook would accept authenticated instructions from Honeycomb to prepare, update the key version, clean, disable, restore and permanently remove its test data. Use the shared environment_id, make operations safe to retry and report pending, completed or failed. These instructions must work even when test sessions are disabled.
+
+Cleaning clears the environment's hook endpoints, signing secrets, received events, delivery queues and logs and other test records. Keep Hook linked to the environment so later deletion, restoration and permanent removal still reach it. Check the environment revision and cleaning generation so old incoming requests, websocket deliveries or retries cannot recreate cleared events. Report completion only after Hook's cleanup finishes.
+
+Only allow test access once shared readiness is confirmed, using IAM's current environment state where it enforces this. Disabling blocks access and deliveries immediately; restoring allows access again once ready and does not undo a clean. Report activity for retention decisions instead of independently retiring the environment.
+
 ### Using a Test Environment
 
-In the client app, website, CLI, or API, passing the test environment’s `app_secret` would select that application’s test environment. No manual pairing or separately entering the IAM environment root key should be needed. Hook should validate the secret with IAM and identify the correct environment automatically.
+In the client app, website, CLI, or API, passing the test environment’s `app_secret` would select that application’s test environment. No manual pairing or separately entering the environment root key should be needed. Hook should validate the secret with IAM and identify the correct environment automatically.
 
 For logging in, it would ask for an SLT. In a test environment, this can either be an IAM-issued test SLT or the public ID of an existing Carbon/Silicon in the test sandbox. Entering the ID would sign me in as that test user. Unknown or inactive identities should be rejected. This shortcut must never work in production.
 
-The IAM environment root key gives administrative control over the test world. The application’s `app_secret` selects its sandbox. Once signed in as a particular user, actions must follow that user’s actual permissions. Possessing the secret must not make every signed-in user bypass permission checks.
+The environment root key gives administrative control over the test world. The application’s `app_secret` selects its sandbox. Once signed in as a particular user, actions must follow that user’s actual permissions. Possessing the secret must not make every signed-in user bypass permission checks.
 
 If an administrative or god view is provided, it should be separate and clearly labelled so it cannot be confused with testing what a normal user is allowed to do.
 
@@ -263,6 +271,8 @@ Everything belonging to a test environment must stay inside that environment, in
 Production credentials must not work in testing, and credentials from one test environment must not work in another.
 
 If a supplied test secret is invalid, revoked, or belongs to an unavailable environment, return an error. Never silently continue in production.
+
+Each test hook URL, event and websocket subscription must resolve to its own environment. Disabled or cleared test endpoints must not accept new events, and test events must never reach production subscriptions.
 
 
 ### Webhooks and External Actions
@@ -320,7 +330,7 @@ For logging in via the cli or the package for any carbon/silicon you don't ask f
 For CLI login there should be this exact command: `hook login <slt>`. 
 And there should be an command to configure the home directory where the information is stored:  `{home_dir}/.{appname}/dir`. This can be confitgure via `hook config home {location}`. If it's not a directory give an error not a directory. 
 
-For both cli and client we would also package in an auto updater, the task of this auto updater is to compare the current version to the latest version in crates for them, and if there's a new verion auto update it to the said new version. By default auto update is on, users can specifically come and opt in to stop auto update. Which would stop auto updating the package. Auto updater check runs every single hour. Updates should be checked when the command is run and should happen every hour, so check for the last update check time and if it's past 1 hour old check for update and update after the command finishes running.
+The Rust client package remains a normal project dependency and does not update itself at runtime. CLI releases and updates follow the Updates section below.
 
 Whenever someone authenticates as a silicon or carbon the client and cli both would have to give an webhook url to send the data to, so the webhook url would be configured after logging in. The webhook url would be the endpoint where we inform the said silicon or carbon, this is just required in the client and the cli. This endpoint won't be sent to the backend instead stored locally in a file along with the auth in case of cli. The client and cli acts as a relay and a daemon is launched for keeping the websocket connection alive with the backend for it, and when a message comes routing the message to the correct silicon or carbon via the webhook url assigned. And when you get a message to send or any request for that matter, acknowledge that you recieved the message along with the entire request. 
 
@@ -362,7 +372,7 @@ If your app is not just reactive, but also proactive (sends msg upfront to a sil
 App Internals:
 All apps are suggested to make a rust library which is stateless. then 2 things that uses the rust library: always running daemon, and a cli interface that talks to the daemon.
 
-At the end, on the docs page, there should be one curl + sh command to run to install and get everything setup to start using it. not auth, just technical setup on the system like installing the right set of things.
+On the docs page, show `honeycomb install 'tos>hook'` to install the CLI, followed by how to log in.
 
 CLI design should be focused on giving details and helping finding the right command to use. CLI will often have lots of commands and it should be like a tree that can be traversed using --help.
 
@@ -434,4 +444,4 @@ We ship highly configurable apps with sensible defaults. Very much like VS Code.
 
 # Updates
 
-All CLIs when installed, within their daemon run a update checker hourly. Update the CLI to the newest one if a update is found. Don't rely on user usage to check for updates.
+For each Hook app release, provide one .tar.gz with honeycomb.yaml at the archive root and the prebuilt hook CLI for Linux, Windows and macOS on x86_64 and aarch64. The manifest maps the hook command to each target's executable and uses the app release version. Run `honeycomb validate` and then `honeycomb pack`. Refer to [Honeycomb docs](https://docs.honeycomb.teamofsilicons.com/) for the package format. Honeycomb handles installation and updates; Hook must not independently replace a Honeycomb-managed CLI.

@@ -1,0 +1,698 @@
+# Current backend route inventory; endpoint contracts await joint agreement.
+# Empty responses are placeholders, not approved response contracts.
+# Axum GET routes also handle HEAD. Ingress ANY routes are shown using OpenAPI methods.
+openapi: 3.1.0
+info:
+  title: Hook API
+  version: discussion
+  description: Current backend endpoints. Parameters, fields, failures, and examples await joint agreement.
+paths:
+  "/api/v1/telemetry":
+    post: { tags: [ System ], responses: {} }
+  "/healthz":
+    get: { tags: [ System ], responses: {} }
+  "/readyz":
+    get: { tags: [ System ], responses: {} }
+  "/api/version":
+    get: { tags: [ System ], responses: {} }
+  "/api/v1/version":
+    get: { tags: [ System ], responses: {} }
+  "/api/v1/auth/iam":
+    get: { tags: [ Authentication ], responses: {} }
+  "/api/v1/auth/status":
+    get: { tags: [ Authentication ], responses: {} }
+  "/api/v1/auth/login":
+    post: { tags: [ Authentication ], responses: {} }
+  "/api/v1/auth/refresh":
+    post: { tags: [ Authentication ], responses: {} }
+  "/api/v1/auth/logout":
+    post: { tags: [ Authentication ], responses: {} }
+  "/api/v1/iam/events":
+    post: { tags: [ IAM events ], responses: {} }
+  "/webhook/":
+    post: { tags: [ IAM events ], responses: {} }
+  "/webhook":
+    post: { tags: [ IAM events ], responses: {} }
+  "/test/silicon/{silicon_id}/{endpoint_key}":
+    x-router-method: ANY
+    get: { tags: [ Webhook ingress ], responses: {} }
+    post: { tags: [ Webhook ingress ], responses: {} }
+    put: { tags: [ Webhook ingress ], responses: {} }
+    patch: { tags: [ Webhook ingress ], responses: {} }
+    delete: { tags: [ Webhook ingress ], responses: {} }
+    head: { tags: [ Webhook ingress ], responses: {} }
+    options: { tags: [ Webhook ingress ], responses: {} }
+    trace: { tags: [ Webhook ingress ], responses: {} }
+  "/test/silicon/{silicon_id}/{endpoint_key}/":
+    x-router-method: ANY
+    get: { tags: [ Webhook ingress ], responses: {} }
+    post: { tags: [ Webhook ingress ], responses: {} }
+    put: { tags: [ Webhook ingress ], responses: {} }
+    patch: { tags: [ Webhook ingress ], responses: {} }
+    delete: { tags: [ Webhook ingress ], responses: {} }
+    head: { tags: [ Webhook ingress ], responses: {} }
+    options: { tags: [ Webhook ingress ], responses: {} }
+    trace: { tags: [ Webhook ingress ], responses: {} }
+  "/silicon/{silicon_id}/{endpoint_key}":
+    x-router-method: ANY
+    get: { tags: [ Webhook ingress ], responses: {} }
+    post: { tags: [ Webhook ingress ], responses: {} }
+    put: { tags: [ Webhook ingress ], responses: {} }
+    patch: { tags: [ Webhook ingress ], responses: {} }
+    delete: { tags: [ Webhook ingress ], responses: {} }
+    head: { tags: [ Webhook ingress ], responses: {} }
+    options: { tags: [ Webhook ingress ], responses: {} }
+    trace: { tags: [ Webhook ingress ], responses: {} }
+  "/silicon/{silicon_id}/{endpoint_key}/":
+    x-router-method: ANY
+    get: { tags: [ Webhook ingress ], responses: {} }
+    post: { tags: [ Webhook ingress ], responses: {} }
+    put: { tags: [ Webhook ingress ], responses: {} }
+    patch: { tags: [ Webhook ingress ], responses: {} }
+    delete: { tags: [ Webhook ingress ], responses: {} }
+    head: { tags: [ Webhook ingress ], responses: {} }
+    options: { tags: [ Webhook ingress ], responses: {} }
+    trace: { tags: [ Webhook ingress ], responses: {} }
+  "/api/v1/silicon/{silicon_id}/{endpoint_key}":
+    x-router-method: ANY
+    get: { tags: [ Webhook ingress ], responses: {} }
+    post: { tags: [ Webhook ingress ], responses: {} }
+    put: { tags: [ Webhook ingress ], responses: {} }
+    patch: { tags: [ Webhook ingress ], responses: {} }
+    delete: { tags: [ Webhook ingress ], responses: {} }
+    head: { tags: [ Webhook ingress ], responses: {} }
+    options: { tags: [ Webhook ingress ], responses: {} }
+    trace: { tags: [ Webhook ingress ], responses: {} }
+  "/api/v1/silicon/{silicon_id}/{endpoint_key}/":
+    x-router-method: ANY
+    get: { tags: [ Webhook ingress ], responses: {} }
+    post: { tags: [ Webhook ingress ], responses: {} }
+    put: { tags: [ Webhook ingress ], responses: {} }
+    patch: { tags: [ Webhook ingress ], responses: {} }
+    delete: { tags: [ Webhook ingress ], responses: {} }
+    head: { tags: [ Webhook ingress ], responses: {} }
+    options: { tags: [ Webhook ingress ], responses: {} }
+    trace: { tags: [ Webhook ingress ], responses: {} }
+  "/api/contracts":
+    get: { tags: [ Contracts ], responses: {} }
+  "/api/v1/contracts":
+    get: { tags: [ Contracts ], responses: {} }
+  "/api/v1/testing-session":
+    get: { tags: [ Testing environments ], responses: {} }
+  "/api/v1/testing-environments":
+    get: { tags: [ Testing environments ], responses: {} }
+    post: { tags: [ Testing environments ], responses: {} }
+  "/api/v1/testing-environments/{id}":
+    get: { tags: [ Testing environments ], responses: {} }
+    delete: { tags: [ Testing environments ], responses: {} }
+  "/api/v1/testing-environments/{id}/key":
+    get: { tags: [ Testing environments ], responses: {} }
+  "/api/v1/testing-environments/{id}/key/rotate":
+    post: { tags: [ Testing environments ], responses: {} }
+  "/api/v1/testing-environments/{id}/restore":
+    post: { tags: [ Testing environments ], responses: {} }
+  "/api/v1/testing-environment":
+    get: { tags: [ Testing environments ], responses: {} }
+  "/api/v1/testing-environment/clean":
+    post: { tags: [ Testing environments ], responses: {} }
+  "/api/v1/testing-environment/iam":
+    put: { tags: [ Testing environments ], responses: {} }
+  "/internal/honeycomb/organizations/{org}/testing-environments/{environment}/operations/{operation}":
+    put: { tags: [ Internal lifecycle ], responses: {} }
+    get: { tags: [ Internal lifecycle ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/hooks":
+    get: { tags: [ Hooks ], responses: {} }
+    post: { tags: [ Hooks ], responses: {} }
+    patch: { tags: [ Hooks ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/hooks/{hook_id}":
+    get: { tags: [ Hooks ], responses: {} }
+    patch: { tags: [ Hooks ], responses: {} }
+    delete: { tags: [ Hooks ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/restore":
+    post: { tags: [ Hooks ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/secret/rotate":
+    post: { tags: [ Hooks ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/endpoint/rotate":
+    post: { tags: [ Hooks ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/events":
+    get: { tags: [ History ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/blocked-requests":
+    get: { tags: [ History ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/events":
+    get: { tags: [ History ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/blocked-requests":
+    get: { tags: [ History ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/deliveries":
+    get: { tags: [ Deliveries ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/deliveries/ack":
+    post: { tags: [ Deliveries ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/deliveries/cursor":
+    get: { tags: [ Deliveries ], responses: {} }
+  "/api/v1/silicons/{silicon_id}/hooks/iam":
+    post: { tags: [ Hooks ], responses: {} }
+  "/api/v1/ws":
+    get:
+      tags:
+        - WebSockets
+      summary: Direct WebSocket delivery
+      x-review-status: planned
+      description: >-
+        Planned contract aligned with DM: every frame contains only type and data at the root. Commands use <command>,
+        <command>.success, and <command>.error. Responses never require another success response. connection.ready,
+        connection.prewarmed, subscription.closed, and new_event are unsolicited notifications. Only new_event requires
+        a delivery ACK. Renamed frames and new confirmations require backend implementation; the protocol version for
+        this change remains pending review.
+
+
+        Connect to wss://backend.hook.teamofsilicons.com/api/v1/ws?silicon_id=cos%3Atos with Authorization: Bearer
+        <access_token> and X-Org-Id: tos. Repeat silicon_id for multiple streams. Optional testing selector:
+        X-Hook-Test-App-Secret OR X-Hook-Test-Key; selectors do not replace actor authentication.
+
+
+        Heartbeat: ping every 30 seconds; 120 seconds without matching ping.success closes the connection. ACKs are
+        cumulative per consumer and Silicon within its environment. Reconnect replays after the saved ACK; explicit
+        resume does not move that saved position. Retained history is currently 14 days.
+
+
+        See the WebSocket events catalogue below for directions, meanings, and JSON examples. Examples use fictional
+        identifiers. Remaining endpoint fields and limits are subject to our review.
+      responses:
+        "101":
+          description: WebSocket upgrade accepted; connection.ready follows authorization.
+      x-websocket:
+        events:
+          - name: connection.ready
+            direction: server → client
+            description: Authorized Silicon streams and this consumer’s stored cursors. A cursor of 6 means automatic replay begins
+              after 6; 0 means no ACK has been stored.
+            example:
+              type: connection.ready
+              data:
+                connection_id: 01995b2a-0000-7000-8000-000000000001
+                silicon_ids:
+                  - cos:tos
+                acknowledged_through:
+                  cos:tos: 6
+          - name: ping
+            direction: server → client
+            description: Every 30 seconds; answer with ping.success carrying the exact ping_id. Heartbeats are never sequenced or
+              ACKed.
+            example:
+              type: ping
+              data:
+                ping_id: ping-1
+          - name: ping.success
+            direction: client → server
+            description: Answers the ping. No further success response is sent.
+            example:
+              type: ping.success
+              data:
+                ping_id: ping-1
+          - name: ping.error
+            direction: client → server
+            description: Client cannot complete the heartbeat. Does not satisfy the 120-second heartbeat deadline.
+            example:
+              type: ping.error
+              data:
+                code: heartbeat_failed
+                message: Unable to complete heartbeat.
+                recoverable: false
+                ping_id: ping-1
+          - name: new_event
+            direction: server → client
+            description: Verified provider request, live or replayed. No generated summary field. delivery_sequence is
+              its ordered position in this Silicon’s stream; ACK after processing.
+            example:
+              type: new_event
+              data:
+                sender: github
+                metadata:
+                  id: 01995b2a-2000-7000-8000-000000000001
+                  org_id: tos
+                  silicon_id: cos:tos
+                  hook_id: 01995b2a-0000-7000-8000-000000000002
+                  provider: github
+                  delivery_sequence: 7
+                  received_at: 2026-09-17T15:30:00Z
+                  request:
+                    method: POST
+                    url: https://hook.example/silicon/cos:tos/example-key?source=repo
+                    path: /silicon/cos:tos/example-key
+                    query_string: source=repo
+                    headers:
+                      - - content-type
+                        - application/json
+                      - - x-github-event
+                        - push
+                    content_type: application/json
+                    body: '{"ref":"refs/heads/main"}'
+                    body_base64: null
+                    remote_ip: 192.0.2.10
+          - name: ack
+            direction: client → server
+            description: Cumulatively confirms all deliveries through this sequence have been processed. Do not skip earlier
+              unprocessed events.
+            example:
+              type: ack
+              data:
+                silicon_id: cos:tos
+                through_sequence: 7
+          - name: ack.success
+            direction: server → client
+            description: Confirms the persisted cumulative position, which never decreases. Older ACKs return the stored position.
+              Do not ACK this response.
+            example:
+              type: ack.success
+              data:
+                silicon_id: cos:tos
+                through_sequence: 7
+          - name: ack.error
+            direction: server → client
+            description: Rejects the ACK; echo available request identifiers. Correct the request before retrying.
+            example:
+              type: ack.error
+              data:
+                code: invalid_ack
+                message: through_sequence exceeds the last emitted sequence.
+                recoverable: true
+                silicon_id: cos:tos
+                through_sequence: 999
+          - name: resume
+            direction: client → server
+            description: Requests retained events strictly after after_sequence without changing the saved ACK. Use 0 for all
+              retained events; 6 starts after 6.
+            example:
+              type: resume
+              data:
+                silicon_id: cos:tos
+                after_sequence: 6
+          - name: resume.success
+            direction: server → client
+            description: Replay request accepted, not completed. Stored ACK is unchanged; acknowledge replayed delivery events
+              normally.
+            example:
+              type: resume.success
+              data:
+                silicon_id: cos:tos
+                after_sequence: 6
+          - name: resume.error
+            direction: server → client
+            description: Rejects an invalid replay request and echoes available request identifiers.
+            example:
+              type: resume.error
+              data:
+                code: invalid_resume
+                message: after_sequence must not be negative.
+                recoverable: true
+                silicon_id: cos:tos
+                after_sequence: -1
+          - name: connection.error
+            direction: server → client
+            description: Malformed or unknown frame that cannot be assigned to a command. Known command failures use that command’s
+              .error type.
+            example:
+              type: connection.error
+              data:
+                code: invalid_frame
+                message: Client frame is not valid protocol JSON.
+                recoverable: true
+          - name: "connection.error: terminal"
+            direction: server → client
+            description: Session failed and will close; recoverable=false. No success response or delivery ACK.
+            example:
+              type: connection.error
+              data:
+                code: internal_error
+                message: The session failed and will close.
+                recoverable: false
+        closeCodes:
+          - code: 4000
+            reason: heartbeat-timeout
+          - code: 4001
+            reason: environment-changed
+          - code: 4003
+            reason: authorization-changed
+          - code: 4004
+            reason: api-version-sunset
+          - code: 1013
+            reason: iam-unavailable
+          - code: 1013
+            reason: contract-unavailable
+          - code: 1011
+            reason: internal-error
+  "/api/v1/relay/ws":
+    get:
+      tags:
+        - WebSockets
+      summary: Shared WebSocket connection
+      x-review-status: planned
+      description: >-
+        Planned contract aligned with DM: every frame contains only type and data at the root. Commands use <command>,
+        <command>.success, and <command>.error. Responses never require another success response. connection.ready,
+        connection.prewarmed, subscription.closed, and new_event are unsolicited notifications. Only new_event requires
+        a delivery ACK. Renamed frames and new confirmations require backend implementation; the protocol version for
+        this change remains pending review.
+
+
+        Connect to wss://backend.hook.teamofsilicons.com/api/v1/relay/ws, then authenticate each profile with subscribe.
+        Wrap subscription commands and notifications in channel → data.subscription_id + data.frame. Both the outer
+        frame and nested frame use type/data. subscribe.success replaces the initial connection.ready inside a
+        subscription.
+
+
+        Answer both outer and inner pings with ping.success at the same level. unsubscribe removes one subscription.
+        Only nested new_event deliveries require ACKs. Hook’s endpoint paths and domain identifiers remain as listed; DM
+        account/message fields are not part of this protocol.
+
+
+        See the WebSocket events catalogue for two profiles, testing, success, failure, and closure examples.
+      responses:
+        "101":
+          description: Physical transport open; connection.prewarmed does not authorize subscriptions.
+      x-websocket:
+        events:
+          - name: connection.prewarmed
+            direction: server → client
+            description: Physical transport is open; no subscription is authenticated yet.
+            example:
+              type: connection.prewarmed
+              data: {}
+          - name: "subscribe: first profile"
+            direction: client → server
+            description: Authenticate one profile. org_id and silicon_ids keep their Hook meanings; subscription_id identifies this
+              independent channel.
+            example:
+              type: subscribe
+              data:
+                subscription_id: main
+                token: <access_token>
+                org_id: tos
+                silicon_ids:
+                  - cos:tos
+          - name: "subscribe: second profile"
+            direction: client → server
+            description: Another profile on the same socket, with independent credentials and stream selection.
+            example:
+              type: subscribe
+              data:
+                subscription_id: ops
+                token: <ops_access_token>
+                org_id: tos
+                silicon_ids:
+                  - ops:tos
+          - name: "subscribe: testing"
+            direction: client → server
+            description: Testing uses a test actor token and app_secret OR test_key. Omit both selectors for production.
+            example:
+              type: subscribe
+              data:
+                subscription_id: testing
+                token: <test_access_token>
+                org_id: tos
+                silicon_ids:
+                  - cos:tos
+                app_secret: <test_app_secret>
+          - name: "channel: subscribe.success"
+            direction: server → client
+            description: This subscription is now authenticated and ready; other subscriptions authenticate independently.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: subscribe.success
+                  data:
+                    connection_id: 01995b2a-0000-7000-8000-000000000001
+                    silicon_ids:
+                      - cos:tos
+                    acknowledged_through:
+                      cos:tos: 6
+          - name: "channel: subscribe.error"
+            direction: server → client
+            description: Only this subscription was rejected. The physical connection and other subscriptions remain usable.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: subscribe.error
+                  data:
+                    code: subscription_rejected
+                    message: Invalid credentials or subscription selection.
+                    recoverable: false
+          - name: unsubscribe
+            direction: client → server
+            description: Remove only the named subscription; other subscriptions remain active.
+            example:
+              type: unsubscribe
+              data:
+                subscription_id: main
+          - name: unsubscribe.success
+            direction: server → client
+            description: Subscription removed. No further success response is required.
+            example:
+              type: unsubscribe.success
+              data:
+                subscription_id: main
+          - name: unsubscribe.error
+            direction: server → client
+            description: The requested subscription could not be removed.
+            example:
+              type: unsubscribe.error
+              data:
+                code: unknown_subscription
+                message: Subscription does not exist.
+                recoverable: true
+                subscription_id: missing
+          - name: "channel: subscription.closed"
+            direction: server → client
+            description: Unsolicited logical closure notice; the physical connection may remain usable.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: subscription.closed
+                  data:
+                    code: 4003
+                    reason: authorization-changed
+                    recoverable: false
+          - name: "channel: ping"
+            direction: server → client
+            description: On the indicated subscription. Every 30 seconds; answer with ping.success carrying the exact ping_id.
+              Heartbeats are never sequenced or ACKed.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: ping
+                  data:
+                    ping_id: ping-1
+          - name: "channel: ping.success"
+            direction: client → server
+            description: On the indicated subscription. Answers the ping. No further success response is sent.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: ping.success
+                  data:
+                    ping_id: ping-1
+          - name: "channel: ping.error"
+            direction: client → server
+            description: On the indicated subscription. Client cannot complete the heartbeat. Does not satisfy the 120-second
+              heartbeat deadline.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: ping.error
+                  data:
+                    code: heartbeat_failed
+                    message: Unable to complete heartbeat.
+                    recoverable: false
+                    ping_id: ping-1
+          - name: "channel: new_event"
+            direction: server → client
+            description: On the indicated subscription. Verified provider request, live or replayed. Hook-specific event payload is
+              unchanged. delivery_sequence is its ordered position in this Silicon’s stream; ACK after processing.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: new_event
+                  data:
+                    sender: github
+                    metadata:
+                      id: 01995b2a-2000-7000-8000-000000000001
+                      org_id: tos
+                      silicon_id: cos:tos
+                      hook_id: 01995b2a-0000-7000-8000-000000000002
+                      provider: github
+                      delivery_sequence: 7
+                      received_at: 2026-09-17T15:30:00Z
+                      request:
+                        method: POST
+                        url: https://hook.example/silicon/cos:tos/example-key?source=repo
+                        path: /silicon/cos:tos/example-key
+                        query_string: source=repo
+                        headers:
+                          - - content-type
+                            - application/json
+                          - - x-github-event
+                            - push
+                        content_type: application/json
+                        body: '{"ref":"refs/heads/main"}'
+                        body_base64: null
+                        remote_ip: 192.0.2.10
+          - name: "channel: ack"
+            direction: client → server
+            description: On the indicated subscription. Cumulatively confirms all deliveries through this sequence have been
+              processed. Do not skip earlier unprocessed events.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: ack
+                  data:
+                    silicon_id: cos:tos
+                    through_sequence: 7
+          - name: "channel: ack.success"
+            direction: server → client
+            description: On the indicated subscription. Confirms the persisted cumulative position, which never decreases. Older
+              ACKs return the stored position. Do not ACK this response.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: ack.success
+                  data:
+                    silicon_id: cos:tos
+                    through_sequence: 7
+          - name: "channel: ack.error"
+            direction: server → client
+            description: On the indicated subscription. Rejects the ACK; echo available request identifiers. Correct the request
+              before retrying.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: ack.error
+                  data:
+                    code: invalid_ack
+                    message: through_sequence exceeds the last emitted sequence.
+                    recoverable: true
+                    silicon_id: cos:tos
+                    through_sequence: 999
+          - name: "channel: resume"
+            direction: client → server
+            description: On the indicated subscription. Requests retained events strictly after after_sequence without changing the
+              saved ACK. Use 0 for all retained events; 6 starts after 6.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: resume
+                  data:
+                    silicon_id: cos:tos
+                    after_sequence: 6
+          - name: "channel: resume.success"
+            direction: server → client
+            description: On the indicated subscription. Replay request accepted, not completed. Stored ACK is unchanged; acknowledge
+              replayed delivery events normally.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: resume.success
+                  data:
+                    silicon_id: cos:tos
+                    after_sequence: 6
+          - name: "channel: resume.error"
+            direction: server → client
+            description: On the indicated subscription. Rejects an invalid replay request and echoes available request identifiers.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: resume.error
+                  data:
+                    code: invalid_resume
+                    message: after_sequence must not be negative.
+                    recoverable: true
+                    silicon_id: cos:tos
+                    after_sequence: -1
+          - name: "channel: connection.error"
+            direction: server → client
+            description: On the indicated subscription. Malformed or unknown frame that cannot be assigned to a command. Known
+              command failures use that command’s .error type.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: connection.error
+                  data:
+                    code: invalid_frame
+                    message: Client frame is not valid protocol JSON.
+                    recoverable: true
+          - name: "channel: connection.error: terminal"
+            direction: server → client
+            description: On the indicated subscription. Session failed and will close; recoverable=false. No success response or
+              delivery ACK.
+            example:
+              type: channel
+              data:
+                subscription_id: main
+                frame:
+                  type: connection.error
+                  data:
+                    code: internal_error
+                    message: The session failed and will close.
+                    recoverable: false
+          - name: "ping: outer transport"
+            direction: server → client
+            description: Physical heartbeat; answer outside channel. Separate from each subscription’s heartbeat.
+            example:
+              type: ping
+              data:
+                ping_id: outer-ping-1
+          - name: "ping.success: outer transport"
+            direction: client → server
+            description: Echo the physical ping_id outside channel.
+            example:
+              type: ping.success
+              data:
+                ping_id: outer-ping-1
+          - name: "ping.error: outer transport"
+            direction: client → server
+            description: Does not satisfy the physical heartbeat deadline.
+            example:
+              type: ping.error
+              data:
+                code: heartbeat_failed
+                message: Unable to complete heartbeat.
+                recoverable: false
+                ping_id: outer-ping-1
+          - name: "connection.error: outer transport"
+            direction: server → client
+            description: Malformed outer frame; known subscribe/unsubscribe failures use their own .error response.
+            example:
+              type: connection.error
+              data:
+                code: invalid_frame
+                message: Client relay frame is not valid protocol JSON.
+                recoverable: true
+        closeCodes:
+          - code: 4000
+            reason: heartbeat-timeout

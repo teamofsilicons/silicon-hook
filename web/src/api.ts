@@ -59,7 +59,6 @@ export interface Event {
   hook_id: string;
   silicon_id: string;
   provider: string;
-  summary?: string;
   received_at: string;
   delivery_sequence?: number;
   reason_code?: string;

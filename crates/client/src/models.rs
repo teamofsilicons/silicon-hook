@@ -197,7 +197,6 @@ pub struct Event {
     pub silicon_id: String,
     pub hook_id: Uuid,
     pub provider: String,
-    pub summary: String,
     pub delivery_sequence: i64,
     pub received_at: String,
     pub request: CapturedRequest,

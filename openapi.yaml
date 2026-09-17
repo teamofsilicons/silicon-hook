@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Silicon Hook API
-  version: 0.5.0
+  version: 0.7.0
   summary: Signed webhook endpoints with ordered, acknowledged delivery to Silicons.
   description: |
     Silicon Hook gives each Silicon signed webhook endpoints at
@@ -816,7 +816,7 @@ paths:
         Each hook event has exactly two top-level fields: `type: new_event` and
         `data`. The data object contains `sender` (the hook provider name at
         receipt) and `metadata` (the complete Event schema, including silicon_id,
-        delivery_sequence, summary and captured request). This shape also applies
+        delivery_sequence and captured request). This shape also applies
         to replays and client/CLI recipient POSTs. Control frames and REST Event
         objects retain their existing shapes.
 
@@ -2365,7 +2365,6 @@ components:
       - silicon_id
       - hook_id
       - provider
-      - summary
       - delivery_sequence
       - received_at
       - request
@@ -2383,9 +2382,6 @@ components:
         provider:
           type: string
           description: Hook name at receipt.
-        summary:
-          type: string
-          description: "`{provider} triggered at HH:MM:SS DD-MM-YYYY IANA_ZONE_ID`"
         delivery_sequence:
           type: integer
           format: int64

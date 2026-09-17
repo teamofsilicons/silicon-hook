@@ -309,8 +309,6 @@ export function EventDetail(p: { event: Event; close: () => void }) {
           <dd>{e().request.remote_ip}</dd>
           <dt>Content type</dt>
           <dd>{e().request.content_type || "—"}</dd>
-          <dt>Summary</dt>
-          <dd>{e().summary || "—"}</dd>
         </dl>
       </Show>
       <Show when={tab() === "json"}>

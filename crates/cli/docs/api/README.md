@@ -1,6 +1,6 @@
 # Silicon Hook API documentation
 
-This document explains every operation in the Silicon Hook OpenAPI contract. The machine-readable contract is in [`openapi.yaml`](./openapi.yaml). The product behavior it implements is [`UNDERSTANDING.md`](./UNDERSTANDING.md).
+This document explains every operation in the Silicon Hook OpenAPI contract. The machine-readable contract is in [`openapi.yaml`](./openapi.yaml). The product behavior it implements is [`UNDERSTANDING.md`](../../understanding/UNDERSTANDING.md).
 
 ## API conventions
 
@@ -74,7 +74,7 @@ Lists a Silicon's hooks. Each item includes the hook `name`, its `endpoint_url`,
 Creates a hook.
 
 - **Required header:** `Idempotency-Key`.
-- **Input:** `name` (the provider name used in every summary), optional `description`, optional IANA `time_zone` (default `UTC`), and an optional `signature` policy.
+- **Input:** `name` (the provider name included in received events), optional `description`, optional IANA `time_zone` (default `UTC`), and an optional `signature` policy.
 - **Returns:** `201` with the hook, its `endpoint_url`, its `endpoint_key`, and `signing_secret`.
 
 Omitting `signature` produces the Standard Webhooks policy with a generated secret of the form `v1.` followed by 32 alphanumeric characters. Give that secret to the provider. When the provider issues its own secret, supply it in `signature.secret` and describe its scheme; the response echoes the supplied secret once. Asymmetric algorithms take `public_key` instead and return `signing_secret: null`.
@@ -209,7 +209,7 @@ Twenty unverified requests from one address to one endpoint block that address f
 
 ### `GET /silicons/{silicon_id}/events` and `GET /silicons/{silicon_id}/hooks/{hook_id}/events`
 
-Return the last `n` verified requests (`limit` 1–10,000, default 100) newest first, account-wide or for one hook. Each record contains the stable `id`, `hook_id`, `provider`, the `summary` line, the `delivery_sequence`, `received_at`, and the captured `request` with its method, URL, headers, `content_type`, `body` (text) or `body_base64`, and `remote_ip`. A 16 MiB page budget may shorten a page; follow `next_cursor`. Logs are kept for 14 days.
+Return the last `n` verified requests (`limit` 1–10,000, default 100) newest first, account-wide or for one hook. Each record contains the stable `id`, `hook_id`, `provider`, the `delivery_sequence`, `received_at`, and the captured `request` with its method, URL, headers, `content_type`, `body` (text) or `body_base64`, and `remote_ip`. A 16 MiB page budget may shorten a page; follow `next_cursor`. Logs are kept for 14 days.
 
 ### `GET /silicons/{silicon_id}/blocked-requests` and `GET /silicons/{silicon_id}/hooks/{hook_id}/blocked-requests`
 
@@ -246,7 +246,7 @@ Client frames:
 
 Hook event deliveries contain exactly `type` and `data` at the top level.
 `data.sender` is the provider name recorded at receipt; `data.metadata` is the
-complete Event object, including `silicon_id`, `delivery_sequence`, summary,
+complete Event object, including `silicon_id`, `delivery_sequence`,
 receive timestamp and the captured request. The same shape is used by the
 client/CLI recipient POST and for replayed events. Read ACK positions from
 `data.metadata.delivery_sequence`. Heartbeat, ready, ACK and error control

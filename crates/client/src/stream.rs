@@ -12,7 +12,7 @@ use tokio_tungstenite::{
 pub struct EventData {
     /// Hook provider name recorded when the request was received.
     pub sender: String,
-    /// Retained event, including stream position, summary and raw request.
+    /// Retained event, including stream position and raw request.
     pub metadata: Box<Event>,
 }
 

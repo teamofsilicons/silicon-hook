@@ -42,3 +42,16 @@ cargo xwin build --locked --release -p silicon-hook-cli --target x86_64-pc-windo
 The Linux cross builds target glibc 2.28 or newer. Collect the outputs from each build directory's `<rust-target>/release/` into the artifact layout above before packaging. Native CI builds use the system libraries of their listed runners.
 
 Locally staged executables can also live at the paths declared by the root manifest: `targets/<honeycomb-target>/bin/<executable>`. Then `honeycomb validate .` verifies the complete local package. Generated `targets/` and `dist/` are kept on disk and excluded from source commits.
+
+## 0.7.0: event payload without summary
+
+REST history/deliveries, WebSocket `new_event` metadata and local recipient payloads
+no longer contain the generated `summary`. The event ID, provider, receipt time,
+request and delivery sequence remain available. No database migration is needed;
+existing stored event rows are preserved.
+
+Update Rust consumers to `silicon-hook-client` 0.7.0. Update the CLI with
+`honeycomb update 'tos>hook'` and restart existing relay daemons before using the
+new backend. Earlier clients require the removed field when decoding events.
+The separate DM-style protocol proposal in `understanding/api.yaml` is not part
+of this release; existing WebSocket message names and ACK/replay behavior remain.

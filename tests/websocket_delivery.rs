@@ -295,11 +295,7 @@ async fn events_are_delivered_live_acknowledged_and_replayed_on_reconnect() -> R
         r#"{"action":"opened"}"#
     );
     assert_eq!(event["data"]["metadata"]["request"]["method"], "POST");
-    let summary = event["data"]["metadata"]["summary"]
-        .as_str()
-        .context("events carry a summary line")?;
-    assert!(summary.starts_with("GitHub triggered at "));
-    assert!(summary.ends_with(" UTC"));
+    assert!(event["data"]["metadata"].get("summary").is_none());
 
     socket
         .send(Message::Text(
@@ -360,6 +356,8 @@ async fn events_are_delivered_live_acknowledged_and_replayed_on_reconnect() -> R
     assert_eq!(pulled["cursor"]["acknowledged_through"], 1);
     assert_eq!(pulled["latest_sequence"], 2);
     assert_eq!(pulled["items"].as_array().map(Vec::len), Some(1));
+    assert!(pulled["items"][0].get("summary").is_none());
+    assert_eq!(pulled["items"][0]["id"], replayed["data"]["metadata"]["id"]);
     Ok(())
 }
 

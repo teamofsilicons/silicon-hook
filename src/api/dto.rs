@@ -380,7 +380,6 @@ pub struct EventResponse {
     silicon_id: String,
     hook_id: HookId,
     provider: String,
-    summary: String,
     delivery_sequence: i64,
     #[serde(with = "time::serde::rfc3339")]
     received_at: OffsetDateTime,
@@ -395,7 +394,6 @@ impl From<&EventRecord> for EventResponse {
             silicon_id: event.silicon_id().as_str().to_owned(),
             hook_id: event.hook_id(),
             provider: event.provider().as_str().to_owned(),
-            summary: event.summary().to_owned(),
             delivery_sequence: event.delivery_sequence().get(),
             received_at: event.received_at(),
             request: CapturedRequestResponse::from_domain(event.request()),
