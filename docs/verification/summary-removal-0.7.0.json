@@ -1,0 +1,140 @@
+{
+  "version": "0.7.0",
+  "source_revision": "7e9efac675cd3f9f45c5bd3ae2988b47f890718a",
+  "verified_on": "2026-09-17",
+  "change": "Remove generated summary from REST events, WebSocket event metadata, SDK/local recipient payloads and frontend. DM-style protocol redesign remains documentation only.",
+  "validation": {
+    "rust_tests_passed": 167,
+    "rust_tests_ignored": 1,
+    "ignored_reason": "Opt-in external telemetry test",
+    "clippy": "passed with warnings denied",
+    "rustdoc": "passed with warnings denied",
+    "frontend_tests_passed": 7,
+    "frontend_build": "passed",
+    "packaging_tests_passed": 4,
+    "docs_pages_checked": 18,
+    "openapi": "passed with three existing lint exceptions",
+    "dependency_policy": "passed; existing duplicate dependency warnings",
+    "anonymous_install": "Public Honeycomb 0.7.0 installed with a fresh home; installed macOS ARM64 hash matches built binary; --version and empty-home login status passed",
+    "runtime_smoke_targets": [
+      "linux-x86_64",
+      "linux-aarch64",
+      "macos-aarch64"
+    ],
+    "architecture_validation_targets": [
+      "linux-x86_64",
+      "linux-aarch64",
+      "macos-x86_64",
+      "macos-aarch64",
+      "windows-x86_64",
+      "windows-aarch64"
+    ],
+    "github_ci": {
+      "run_id": 35254120560,
+      "conclusion": "success",
+      "url": "https://github.com/teamofsilicons/silicon-hook/actions/runs/35254120560"
+    }
+  },
+  "archives": [
+    {
+      "path": "dist/silicon-hook-0.7.0.tar.gz",
+      "bytes": 19602481,
+      "sha256": "2b16c8eaca15ab49a61d0da74b0c7d6d867ee5acc641ef06d7a085f43f26348e"
+    },
+    {
+      "path": "dist/silicon-hook-backend-7e9efac675cd-linux-aarch64.tar.gz",
+      "bytes": 12191587,
+      "sha256": "d673a65587aa4fafb958168bb32846cdaa1020c518203d291f2f623a41bd1920"
+    }
+  ],
+  "backend": {
+    "instance": "i-04398b332e0a3c1b7",
+    "region": "us-east-1",
+    "release": "7e9efac675cd",
+    "ssm_preflight": "cc63f321-1862-45e2-ae46-c305d0977186",
+    "ssm_deploy": "eb004bd5-5926-42db-adf7-065bc25f2365",
+    "ssm_verify": "f75f1302-882f-4b63-b27c-748d192d52ba",
+    "status": "success",
+    "services": {
+      "silicon-hook-api": "active/running; zero restarts",
+      "silicon-hook-worker": "active/running; zero restarts"
+    },
+    "binary_hashes_match_build": true,
+    "backup": "s3://silicon-hook-standalone-artifacts-lxpfsbc0jpuk/backups/native/20260917T174234Z/",
+    "backup_timer": "active",
+    "schema_change": false
+  },
+  "public_checks": {
+    "/healthz": {
+      "status": 200,
+      "body": {
+        "status": "ok"
+      }
+    },
+    "/readyz": {
+      "status": 200,
+      "body": {
+        "status": "ready"
+      }
+    },
+    "/api/version": {
+      "status": 200,
+      "body": {
+        "service": "silicon-hook",
+        "selected_api_version": "v1",
+        "supported_api_versions": [
+          "v1"
+        ],
+        "build": "0.7.0",
+        "commit": "unknown"
+      }
+    },
+    "/api/v1/version": {
+      "status": 200,
+      "body": {
+        "service": "silicon-hook",
+        "version": "0.7.0"
+      }
+    },
+    "/api/v1/auth/iam": {
+      "status": 200,
+      "body": {
+        "app_id": "tos>hook",
+        "iam_url": "https://backend.iam.teamofsilicons.com/",
+        "login_method": "short_lived_token",
+        "testing": false
+      }
+    },
+    "/api/v1/auth/status": {
+      "status": 401,
+      "request": "No credentials"
+    }
+  },
+  "frontend": {
+    "url": "https://hook.teamofsilicons.com",
+    "deployment": "https://silicon-hook-frontend-8i62xo728-saketdev12-5675s-projects.vercel.app",
+    "asset": "/assets/index-8RpIxO8k.js",
+    "status": 200,
+    "summary_field_absent": true
+  },
+  "docs": {
+    "url": "https://docs.hook.teamofsilicons.com",
+    "deployment": "https://silicon-hook-docs-5v8iizui0-saketdev12-5675s-projects.vercel.app",
+    "openapi_version": "0.7.0",
+    "event_summary_absent": true
+  },
+  "publication": {
+    "honeycomb_operation": "d552611e-3f68-4bea-8140-42517b0b495d",
+    "honeycomb_visibility": "public",
+    "crates": [
+      "silicon-hook-client@0.7.0",
+      "silicon-hook-cli@0.7.0"
+    ]
+  },
+  "limitations": [
+    "No authenticated production webhook was created or delivered during this rollout; summary removal covered by real-transport PostgreSQL/WebSocket and SDK recipient tests.",
+    "Windows executables were architecture-checked but not executed. Intel macOS execution was unavailable on this ARM64 host.",
+    "Existing relay daemons must be updated and restarted; older clients require the removed field.",
+    "Public API commit field remains unknown; source identity verified using remote release path and binary SHA-256."
+  ]
+}

@@ -1,5 +1,7 @@
 # Hook implementation and verification
 
+Hook 0.7.0 is published and deployed. Public events and recipient deliveries no longer include `summary`; the frontend and published OpenAPI match. The DM-style WebSocket contract in `understanding/api.yaml` remains a design document. [Release evidence](docs/verification/summary-removal-0.7.0.json) records tests, hashes, backups, deployments and validation limits. Update existing CLI daemons to 0.7.0 and restart them.
+
 The September 16 Honeycomb lifecycle and CLI distribution changes are implemented and deployed. The human-owned requirements file was not edited.
 
 - IAM 1.8 application-secret sandbox selection, empty isolated storage, online lifecycle validation, and separate browser/CLI identities.
