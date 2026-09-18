@@ -44,7 +44,8 @@ It reserves the local port before consuming the SLT. `LoginOptions` and
 notice channel. A Silicon defaults to its own stream; a Carbon with no selected
 streams still has a local request gateway. The default port is 18479; choose a
 different port if a CLI daemon already owns it. Nothing is persisted.
-`Client::new` accepts a pathless HTTPS origin or HTTP on loopback. Redirects
+`Client::new` accepts a pathless HTTPS origin or HTTP on loopback (`localhost`,
+any `*.localhost` name, or a loopback IP address). Redirects
 are disabled so credentials cannot follow a redirect to another service.
 
 Tokens have redacted Debug output and zeroize their owned strings when dropped.

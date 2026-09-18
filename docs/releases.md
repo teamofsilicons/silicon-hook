@@ -55,3 +55,16 @@ Update Rust consumers to `silicon-hook-client` 0.7.0. Update the CLI with
 new backend. Earlier clients require the removed field when decoding events.
 The separate DM-style protocol proposal in `understanding/api.yaml` is not part
 of this release; existing WebSocket message names and ACK/replay behavior remain.
+
+## 0.7.1: localhost subdomain recipients
+
+`hook webhook` and `Recipient::new` now accept plain HTTP recipients on any
+`*.localhost` name, such as `http://chef.bricks.localhost`, in addition to
+`localhost` and loopback IP addresses. Earlier CLIs rejected such a URL with
+`recipient must be HTTPS (or HTTP on loopback)`, which made `silicon connect`
+fail while registering the `tos>hook` webhook. `Client::new` applies the same
+rule to service origins. No backend change is included; the API contract and
+database are unchanged.
+
+Update Rust consumers to `silicon-hook-client` 0.7.1. Update the CLI with
+`honeycomb update 'tos>hook'` and restart existing relay daemons.

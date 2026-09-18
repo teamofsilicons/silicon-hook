@@ -318,3 +318,39 @@ fn notice(sender: &Option<mpsc::Sender<RelayNotice>>, value: RelayNotice) {
         let _ = sender.try_send(value);
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::Recipient;
+
+    #[test]
+    fn plain_http_is_accepted_on_every_loopback_name() {
+        for url in [
+            "http://localhost",
+            "http://localhost:8080",
+            "http://chef.bricks.localhost",
+            "http://hook.localhost:18479/events",
+            "http://127.0.0.1:9000/events",
+            "http://[::1]/events",
+        ] {
+            assert!(
+                Recipient::new(url).is_ok(),
+                "{url} should be a valid recipient"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_http_is_rejected_off_loopback() {
+        for url in [
+            "http://example.com/events",
+            "http://localhost.example.com/events",
+            "http://10.0.0.5/events",
+            "http://user:pass@localhost/events",
+            "http://localhost/events#fragment",
+        ] {
+            assert!(Recipient::new(url).is_err(), "{url} should be rejected");
+        }
+        assert!(Recipient::new("https://example.com/events").is_ok());
+    }
+}

@@ -55,7 +55,8 @@ failures remain errors, so an outage is not reported as a successful login.
 `hook webhook <webhook-url>` sets or replaces the selected profile/environment's
 recipient. It validates the URL locally, stores it beside the tokens, and starts
 the daemon if needed. The destination is never sent to the backend. HTTP is
-accepted only on loopback; remote recipients require HTTPS. Embedded credentials
+accepted only on loopback: `localhost`, any `*.localhost` name, or a loopback IP
+address; remote recipients require HTTPS. Embedded credentials
 and fragments are rejected.
 
 `hook unhook` clears only the selected identity's recipient, retaining its login,
