@@ -1,0 +1,61 @@
+{
+  "version": "0.7.1",
+  "source_revision": "98ff11a421e3d0410e1569b97324ad588436ec5a",
+  "verified_on": "2026-09-18",
+  "change": "Accept plain HTTP webhook recipients on any *.localhost name so silicon connect can register http://<id>.localhost. CLI and client only; no backend, API contract or database change.",
+  "validation": {
+    "rust_tests_passed": 169,
+    "rust_tests_ignored": 1,
+    "ignored_reason": "Opt-in external telemetry test",
+    "new_tests": [
+      "relay::tests::plain_http_is_accepted_on_every_loopback_name",
+      "relay::tests::plain_http_is_rejected_off_loopback"
+    ],
+    "clippy": "passed with warnings denied",
+    "rustdoc": "passed with warnings denied",
+    "packaging_tests_passed": 4,
+    "docs_pages_checked": 18,
+    "dependency_policy": "passed",
+    "github_ci": [
+      {
+        "ref": "main",
+        "run_id": 35331666771,
+        "conclusion": "success",
+        "url": "https://github.com/teamofsilicons/silicon-hook/actions/runs/35331666771"
+      },
+      {
+        "ref": "v0.7.1",
+        "run_id": 35331669069,
+        "conclusion": "success",
+        "url": "https://github.com/teamofsilicons/silicon-hook/actions/runs/35331669069"
+      }
+    ],
+    "release_workflow": {
+      "run_id": 35331668968,
+      "conclusion": "success",
+      "artifact": "hook-honeycomb-release",
+      "url": "https://github.com/teamofsilicons/silicon-hook/actions/runs/35331668968"
+    },
+    "archive_smoke": "macOS ARM64 binary from the archive reports hook 0.7.1; in an empty home `hook webhook http://chef.bricks.localhost` fails only with Not signed in, and http://example.com is still rejected",
+    "anonymous_install": "Public Honeycomb 0.7.1 installed into a fresh home; installed macOS ARM64 binary hash matches the archive binary; --version reports 0.7.1",
+    "end_to_end": "silicon connect on the chef:bricks Silicon reinstalled tos>hook 0.7.1, registered the tos>hook webhook at http://chef.bricks.localhost and connected; the restarted relay daemon reports 0.7.1 with no skipped recipient"
+  },
+  "archives": [
+    {
+      "path": "dist/silicon-hook-0.7.1.tar.gz",
+      "bytes": 19526475,
+      "sha256": "47346a1b08caf7535ae573ce323591c2dc9f957d282081c7e38a2220e1d4543d"
+    }
+  ],
+  "honeycomb_release": {
+    "app_id": "tos>hook",
+    "id": "6b9665b7-4e98-4446-b780-e127d9540adf",
+    "revision": 1,
+    "state": "accepted",
+    "visibility": "public"
+  },
+  "crates_io": {
+    "silicon-hook-client": "0.7.1",
+    "silicon-hook-cli": "0.7.1"
+  }
+}

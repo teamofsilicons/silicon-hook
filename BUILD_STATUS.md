@@ -17,4 +17,6 @@ The September 16 backend changes were deployed on September 17 as native Linux A
 
 The six-platform `tos>hook` app is public, with both publication reviews approved. CLI 0.6.1 fixes unscoped Silicon status and passes anonymous installation and a live before/after regression using an isolated synthetic revoked session. The exact reported user session has not been tested. Linux and macOS smoke tests pass; Windows executables have architecture/import validation only. The earlier client/CLI 0.5.0 publication on crates.io is separate from Honeycomb distribution.
 
+CLI and client 0.7.1 accept plain HTTP webhook recipients on any `*.localhost` name, which `silicon connect` uses for `http://<id>.localhost`; 0.7.0 rejected them and failed while registering the `tos>hook` webhook. The six-platform archive was built by the tag-triggered release workflow, validated, uploaded to Honeycomb, installed anonymously, published to crates.io and verified with a live `silicon connect`. See [the 0.7.1 record](docs/verification/localhost-recipients-0.7.1.json).
+
 Database/configuration backups, including quiesced dumps before migration, are stored in the encrypted private bucket. See [native deployment](deploy/native/README.md) and [verification evidence](docs/verification/current.md).
