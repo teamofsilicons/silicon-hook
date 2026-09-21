@@ -64,29 +64,39 @@ async fn run(
     args: &[&str],
 ) -> (Output, Vec<(String, Option<String>, Option<String>)>) {
     let requests: Requests = Arc::default();
-    let app = Router::new()
-        .route(
-            "/api/version",
-            get(|| async { Json(json!({"service":"silicon-hook","selected_api_version":"v1"})) }),
-        )
-        .route("/api/v1/auth/status", get(status))
-        .route(
-            "/api/v1/auth/refresh",
-            post(
-                |State(requests): State<Requests>, headers: HeaderMap| async move {
-                    requests.lock().unwrap().push((
-                        "refresh".into(),
-                        headers
-                            .get("x-org-id")
-                            .and_then(|v| v.to_str().ok())
-                            .map(str::to_owned),
-                        None,
-                    ));
-                    Json(session("testsi:tos", "silicon", None, "oat_refreshed")["tokens"].clone())
-                },
-            ),
-        )
-        .with_state(requests.clone());
+    let app =
+        Router::new()
+            .route(
+                "/api/version",
+                get(|| async {
+                    Json(json!({"service":"silicon-hook","selected_api_version":"v1"}))
+                }),
+            )
+            .route("/api/v1/auth/status", get(status))
+            .route(
+                "/api/v1/auth/refresh",
+                post(
+                    |State(requests): State<Requests>,
+                     headers: HeaderMap,
+                     Json(body): Json<Value>| async move {
+                        requests.lock().unwrap().push((
+                            "refresh".into(),
+                            headers
+                                .get("x-org-id")
+                                .and_then(|v| v.to_str().ok())
+                                .map(str::to_owned),
+                            None,
+                        ));
+                        let mut tokens =
+                            session("testsi:tos", "silicon", None, "oat_refreshed")["tokens"]
+                                .clone();
+                        tokens["refresh_token"] =
+                            json!(format!("{}_next", body["refresh_token"].as_str().unwrap()));
+                        Json(tokens)
+                    },
+                ),
+            )
+            .with_state(requests.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     profile["url"] = json!(format!("http://{}", listener.local_addr().unwrap()));
     profile["telemetry"] = json!(false);
@@ -180,6 +190,25 @@ async fn refresh_keeps_the_inferred_organization_for_the_following_status() {
             ("status".into(), Some("tos".into()), None)
         ]
     );
+}
+
+#[tokio::test]
+async fn old_or_delayed_pending_refresh_is_replayed_then_renewed_before_status() {
+    for started in [Value::Null, json!(1)] {
+        let mut saved = session("testsi:tos", "silicon", None, "oat_expired");
+        saved["expires_at"] = json!(0);
+        saved["pending_refresh_key"] = json!("original-refresh-attempt");
+        saved["refresh_started_at"] = started;
+        let (output, requests) = run(json!({"session":saved}), &[]).await;
+        authenticated(&output, true);
+        assert_eq!(
+            requests
+                .iter()
+                .map(|request| request.0.as_str())
+                .collect::<Vec<_>>(),
+            ["refresh", "refresh", "status"]
+        );
+    }
 }
 
 #[tokio::test]

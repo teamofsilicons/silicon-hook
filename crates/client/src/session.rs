@@ -329,6 +329,7 @@ async fn refresh_session(
             return Ok(());
         }
         let mutation = Mutation::new();
+        let started_at = std::time::Instant::now();
         let mut delay = 1u64;
         loop {
             let refresh = tokio::select! {
@@ -336,7 +337,12 @@ async fn refresh_session(
                 _ = stop.changed() => return Ok(()),
             };
             match refresh {
-                Ok(refreshed) => {
+                Ok(mut refreshed) => {
+                    // A retry may replay the original response after its access token
+                    // has aged; expose and schedule only the remaining lifetime.
+                    refreshed.expires_in = refreshed
+                        .expires_in
+                        .saturating_sub(started_at.elapsed().as_secs());
                     tokens = refreshed;
                     let client = authenticated(&base, &tokens);
                     clients.send_replace(client.clone());

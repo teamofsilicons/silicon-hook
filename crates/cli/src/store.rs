@@ -32,6 +32,8 @@ pub struct Session {
     /// Persisted before refresh so a lost response can be retried safely.
     #[serde(default)]
     pub pending_refresh_key: Option<String>,
+    #[serde(default)]
+    pub refresh_started_at: Option<u64>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -290,44 +292,66 @@ pub async fn refresh_if_needed(
     url: Option<&str>,
     org: Option<&str>,
 ) -> Result<()> {
+    for _ in 0..2 {
+        let profile = store.profile(name);
+        let session = match env {
+            Some(id) => profile.test_sessions.get(&id),
+            None => profile.session.as_ref(),
+        };
+        let Some(session) = session else {
+            return Ok(());
+        };
+        if session.expires_at > now() + 60 && session.pending_refresh_key.is_none() {
+            return Ok(());
+        }
+        let client = select_client(profile, env, url, org)?;
+        let mut session = session.clone();
+        let mutation = match &session.pending_refresh_key {
+            Some(key) => Mutation::with_key(key.clone())?,
+            None => Mutation::new(),
+        };
+        let started_at = session.refresh_started_at.unwrap_or_else(|| {
+            if session.pending_refresh_key.is_some() {
+                0
+            } else {
+                now()
+            }
+        });
+        session.refresh_started_at = Some(started_at);
+        session.pending_refresh_key = Some(mutation.key().to_owned());
+        match env {
+            Some(id) => {
+                profile.test_sessions.insert(id, session.clone());
+            }
+            None => profile.session = Some(session.clone()),
+        }
+        // The lock and durable write span the request: another CLI process or the
+        // daemon must never rotate the same refresh token with a different key.
+        store.save()?;
+        let tokens = client.refresh(session.tokens.refresh_token.expose(), &mutation)
+        .await.context("Session refresh failed; retry the command, or sign in again with hook login --slt-file <file>")?;
+        session.expires_at = started_at.saturating_add(tokens.expires_in);
+        session.tokens = tokens;
+        session.pending_refresh_key = None;
+        session.refresh_started_at = None;
+        let profile = store.profile(name);
+        match env {
+            Some(id) => {
+                profile.test_sessions.insert(id, session);
+            }
+            None => profile.session = Some(session),
+        };
+        store.save()?;
+    }
+    // Recheck after persisting a replay whose original access token had expired.
     let profile = store.profile(name);
     let session = match env {
         Some(id) => profile.test_sessions.get(&id),
         None => profile.session.as_ref(),
     };
-    let Some(session) = session else {
-        return Ok(());
-    };
-    if session.expires_at > now() + 60 && session.pending_refresh_key.is_none() {
-        return Ok(());
-    }
-    let client = select_client(profile, env, url, org)?;
-    let mut session = session.clone();
-    let mutation = match &session.pending_refresh_key {
-        Some(key) => Mutation::with_key(key.clone())?,
-        None => Mutation::new(),
-    };
-    session.pending_refresh_key = Some(mutation.key().to_owned());
-    match env {
-        Some(id) => {
-            profile.test_sessions.insert(id, session.clone());
-        }
-        None => profile.session = Some(session.clone()),
-    }
-    // The lock and durable write span the request: another CLI process or the
-    // daemon must never rotate the same refresh token with a different key.
-    store.save()?;
-    let tokens = client.refresh(session.tokens.refresh_token.expose(), &mutation)
-        .await.context("Session refresh failed; retry the command, or sign in again with hook login --slt-file <file>")?;
-    session.expires_at = now() + tokens.expires_in;
-    session.tokens = tokens;
-    session.pending_refresh_key = None;
-    let profile = store.profile(name);
-    match env {
-        Some(id) => {
-            profile.test_sessions.insert(id, session);
-        }
-        None => profile.session = Some(session),
-    };
-    store.save()
+    anyhow::ensure!(
+        session.is_some_and(|s| s.expires_at > now() + 60),
+        "refreshed access token has no usable lifetime; retry the command"
+    );
+    Ok(())
 }

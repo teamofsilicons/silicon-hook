@@ -410,6 +410,7 @@ async fn run(cli: &Cli) -> Result<()> {
                     .collect(),
                 relay_token: Some(Secret::new(uuid::Uuid::new_v4().simple().to_string())),
                 pending_refresh_key: None,
+                refresh_started_at: None,
                 tokens,
                 webhook_url: args.webhook_url.clone(),
             };
