@@ -18,5 +18,7 @@ successful ARM64 native build, both API and worker active, and readiness 200.
 The existing public version endpoint reports the package version and an unknown
 commit; the immutable archive and systemd release paths identify this deployment.
 
-This records compatibility readiness before IAM's canonical database switch.
-Retained authentication and online delivery checks follow the central cutover.
+After IAM's canonical database switch, Maharaj's existing `silicon ls --json`
+registration and local path were unchanged. `silicon ping chef:bricks` returned
+online through the retained connection. This verifies post-switch authentication
+and reachability without disconnecting or recreating the Silicon registration.
