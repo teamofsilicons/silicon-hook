@@ -240,14 +240,19 @@ test("organization discovery uses the selected private session and IAM grant pag
         {
           host: "127.0.0.1",
           port,
-          path: (telemetry ? "/console/telemetry?plane=" : "/console/organizations?plane=") + plane,
+          path:
+            (telemetry
+              ? "/console/telemetry?plane="
+              : "/console/organizations?plane=") + plane,
           method: telemetry ? "POST" : "GET",
           headers: {
             host: "hook.example",
             origin: cfg.origin,
             "x-hook-frontend": "1",
             "x-hook-telemetry": telemetry ? "on" : "off",
-            ...(telemetry ? { "x-org-id": "first", "content-type": "application/json" } : {}),
+            ...(telemetry
+              ? { "x-org-id": "first", "content-type": "application/json" }
+              : {}),
             ...(cookie ? { cookie: "__Host-hook-session=" + id } : {}),
           },
         },
@@ -284,5 +289,114 @@ test("organization discovery uses the selected private session and IAM grant pag
     fetchMock.mock.restore();
     await new Promise<void>((resolve) => server.close(() => resolve()));
     await rm(folder, { recursive: true, force: true });
+  }
+});
+
+test("stale access and delayed refresh replies recover without changing mutation identity", async (t) => {
+  for (const replay of [false, true]) {
+    const folder = await mkdtemp(join(tmpdir(), "hook-refresh-"));
+    const cfg = config({
+      HOOK_WEB_ORIGIN: "https://hook.example",
+      HOOK_SESSION_DIR: folder,
+    });
+    const store = new SessionStore(folder, cfg.sessionKey),
+      id = store.newId(),
+      session = await store.read(id);
+    const tokens = {
+      access_token: "old-access",
+      refresh_token: "old-refresh",
+      expires_in: 1800,
+      actor: { type: "carbon", id: "actor" },
+      scopes: [],
+    };
+    const plane = session.planes.production;
+    plane.tokens = tokens;
+    plane.expiresAt = replay ? 0 : Date.now() + 3600000;
+    if (replay)
+      plane.refresh = {
+        key: "original-refresh-key",
+        started: Date.now() - 3600000,
+      };
+    await store.save(id, session);
+    const keys: string[] = [],
+      bodies: unknown[] = [];
+    let refreshes = 0;
+    const mock = t.mock.method(
+      globalThis,
+      "fetch",
+      async (input: URL | string, init: RequestInit) => {
+        const headers = new Headers(init.headers);
+        if (String(input).endsWith("/auth/refresh")) {
+          refreshes++;
+          if (replay && refreshes === 1)
+            assert.equal(
+              headers.get("idempotency-key"),
+              "original-refresh-key",
+            );
+          if (replay && refreshes === 2)
+            assert.equal(
+              JSON.parse(String(init.body)).refresh_token,
+              "rotated-1",
+            );
+          return Response.json({
+            ...tokens,
+            access_token: `access-${refreshes}`,
+            refresh_token: `rotated-${refreshes}`,
+          });
+        }
+        keys.push(headers.get("idempotency-key")!);
+        bodies.push(init.body);
+        return headers.get("authorization") === "Bearer old-access"
+          ? Response.json(
+              { error: { code: "unauthenticated" } },
+              { status: 401 },
+            )
+          : Response.json({ ok: true });
+      },
+    );
+    const app = gateway(cfg),
+      server = createServer(app.handle);
+    await new Promise<void>((resolve) =>
+      server.listen(0, "127.0.0.1", resolve),
+    );
+    try {
+      const status = await new Promise<number>((resolve, reject) => {
+        const req = httpRequest(
+          {
+            host: "127.0.0.1",
+            port: (server.address() as { port: number }).port,
+            path: "/console/proxy/api/v1/silicons/actor/hooks?plane=production",
+            method: "POST",
+            headers: {
+              host: "hook.example",
+              origin: cfg.origin,
+              "x-hook-frontend": "1",
+              "x-org-id": "tos",
+              "idempotency-key": "original-mutation",
+              "content-type": "application/json",
+              cookie: "__Host-hook-session=" + id,
+            },
+          },
+          (res) => {
+            res.resume();
+            res.on("end", () => resolve(res.statusCode!));
+          },
+        );
+        req.on("error", reject);
+        req.end('{"name":"unchanged"}');
+      });
+      assert.equal(status, 200);
+      assert.equal(refreshes, replay ? 2 : 1);
+      assert.ok(keys.every((key) => key === "original-mutation"));
+      assert.ok(bodies.every((body) => body === bodies[0]));
+      const saved = (await store.read(id)).planes.production;
+      assert.equal(saved.tokens?.refresh_token, `rotated-${refreshes}`);
+      assert.equal(saved.refresh, undefined);
+      assert.ok(saved.expiresAt! > Date.now());
+    } finally {
+      mock.mock.restore();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(folder, { recursive: true, force: true });
+    }
   }
 });

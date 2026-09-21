@@ -249,25 +249,40 @@ export function gateway(cfg: Config) {
     }
   }
   async function refresh(id: string, session: Session, plane: Plane) {
-    if (
-      !plane.tokens ||
-      (!plane.refresh && (plane.expiresAt || 0) > Date.now() + 60000)
-    )
-      return;
-    plane.refresh ??= { key: crypto.randomUUID(), started: Date.now() };
-    await store.save(id, session);
-    const tokens = (await upstream(
-      "/api/v1/auth/refresh",
-      "POST",
-      plane,
-      "",
-      { refresh_token: plane.tokens.refresh_token },
-      plane.refresh.key,
-    )) as Tokens;
-    plane.tokens = tokens;
-    plane.expiresAt = plane.refresh.started + tokens.expires_in * 1000;
-    delete plane.refresh;
-    await store.save(id, session);
+    // A recovered reply can already be expired. Persist its rotated credential
+    // before one bounded renewal of the new generation.
+    for (let attempt = 0; attempt < 2; attempt++) {
+      if (
+        !plane.tokens ||
+        (!plane.refresh && (plane.expiresAt || 0) > Date.now() + 60000)
+      )
+        return;
+      plane.refresh ??= { key: crypto.randomUUID(), started: Date.now() };
+      await store.save(id, session);
+      const tokens = (await upstream(
+        "/api/v1/auth/refresh",
+        "POST",
+        plane,
+        "",
+        { refresh_token: plane.tokens.refresh_token },
+        plane.refresh.key,
+      )) as Tokens;
+      if (
+        typeof tokens.access_token !== "string" ||
+        typeof tokens.refresh_token !== "string" ||
+        !Number.isFinite(tokens.expires_in) ||
+        tokens.expires_in <= 0
+      )
+        throw new GatewayError(
+          502,
+          "invalid_refresh",
+          "Hook returned an unreadable session response. Please retry.",
+        );
+      plane.tokens = tokens;
+      plane.expiresAt = plane.refresh.started + tokens.expires_in * 1000;
+      delete plane.refresh;
+      await store.save(id, session);
+    }
   }
   function publicSession(session: Session) {
     return {
@@ -409,10 +424,17 @@ export function gateway(cfg: Config) {
         const plane = Object.hasOwn(session.planes, planeId)
           ? session.planes[planeId]
           : undefined;
-        for (const saved of Object.values(session.planes)) saved.telemetry = req.headers["x-hook-telemetry"] !== "off";
+        for (const saved of Object.values(session.planes))
+          saved.telemetry = req.headers["x-hook-telemetry"] !== "off";
         if (url.pathname === "/console/telemetry" && req.method === "POST") {
           if (plane?.telemetry !== false && plane?.tokens) {
-            await upstream("/api/v1/telemetry", "POST", plane, String(req.headers["x-org-id"] || plane.tokens.org_id || ""), body);
+            await upstream(
+              "/api/v1/telemetry",
+              "POST",
+              plane,
+              String(req.headers["x-org-id"] || plane.tokens.org_id || ""),
+              body,
+            );
           }
           return { accepted: true };
         }
@@ -433,7 +455,11 @@ export function gateway(cfg: Config) {
           const env = await upstream(
             "/api/v1/testing-session",
             "GET",
-            { name: "Test", appSecret: body.app_secret, telemetry: req.headers["x-hook-telemetry"] !== "off" },
+            {
+              name: "Test",
+              appSecret: body.app_secret,
+              telemetry: req.headers["x-hook-telemetry"] !== "off",
+            },
             "",
           );
           if (
@@ -677,14 +703,31 @@ export function gateway(cfg: Config) {
           !path.endsWith("/version")
         )
           await refresh(id, session, plane);
-        const data = await upstream(
-          full,
-          req.method || "GET",
-          plane,
-          String(req.headers["x-org-id"] || ""),
-          ["GET", "DELETE"].includes(req.method || "GET") ? undefined : body,
-          req.method === "GET" ? undefined : mutation(req),
-        );
+        const requestKey = req.method === "GET" ? undefined : mutation(req);
+        const send = () =>
+          upstream(
+            full,
+            req.method || "GET",
+            plane,
+            String(req.headers["x-org-id"] || ""),
+            ["GET", "DELETE"].includes(req.method || "GET") ? undefined : body,
+            requestKey,
+          );
+        let data;
+        try {
+          data = await send();
+        } catch (error) {
+          if (
+            !(error instanceof GatewayError) ||
+            error.status !== 401 ||
+            root ||
+            !plane.tokens
+          )
+            throw error;
+          plane.expiresAt = 0;
+          await refresh(id, session, plane);
+          data = await send();
+        }
         if (
           path.startsWith("/api/v1/testing-environments") &&
           data?.key &&
@@ -763,10 +806,11 @@ export function gateway(cfg: Config) {
           "silicon-hook-api-version": "v1",
         };
         if (plane.key) headers["x-hook-test-key"] = plane.key;
-    if (plane.appSecret) headers["x-hook-test-app-secret"] = plane.appSecret;
+        if (plane.appSecret)
+          headers["x-hook-test-app-secret"] = plane.appSecret;
         const org = url.searchParams.get("org");
         if (plane.telemetry === false) headers["x-hook-telemetry"] = "off";
-    if (plane.telemetry === false) headers["x-hook-telemetry"] = "off";
+        if (plane.telemetry === false) headers["x-hook-telemetry"] = "off";
         if (org) headers["x-org-id"] = org;
         wss.handleUpgrade(req, socket, head, (client) => {
           const upstream = new WebSocket(target, {
