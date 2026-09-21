@@ -1,0 +1,63 @@
+name: Build deployment artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  backend:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.98.0
+          targets: aarch64-unknown-linux-gnu
+      - uses: Swatinem/rust-cache@v2
+      - run: pipx install ziglang==0.14.1 && cargo install cargo-zigbuild --locked --version 0.20.1
+      - run: cargo zigbuild --locked --release -p silicon-hook --bins --target aarch64-unknown-linux-gnu.2.28
+      - run: python3 scripts/package-backend.py --artifacts target/aarch64-unknown-linux-gnu/release --output artifacts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hook-deployment-backend
+          path: artifacts/
+          if-no-files-found: error
+  images:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        image: [gateway]
+    env:
+      IMAGE_KIND: ${{ matrix.image }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - name: Build exact source and export image
+        shell: bash
+        run: |
+          set -euo pipefail
+          image="silicon-hook-${IMAGE_KIND}:${GITHUB_SHA}"
+          labels=(--label "org.opencontainers.image.revision=${GITHUB_SHA}")
+          if [ "$IMAGE_KIND" = backend ]; then
+            base="silicon-hook-build:${GITHUB_SHA}"
+            docker build --platform linux/arm64 "${labels[@]}" --tag "$base" .
+            docker build --platform linux/arm64 "${labels[@]}" --file deploy/aws/Dockerfile.runtime --build-arg "BACKEND_IMAGE=$base" --tag "$image" .
+          else
+            docker build --platform linux/arm64 "${labels[@]}" --file web/Dockerfile --tag "$image" web
+          fi
+          mkdir artifacts
+          docker image inspect "$image" > "artifacts/${IMAGE_KIND}.metadata.json"
+          docker save --output "artifacts/${IMAGE_KIND}.tar" "$image"
+          cd artifacts
+          sha256sum "${IMAGE_KIND}.tar" "${IMAGE_KIND}.metadata.json" > SHA256SUMS
+          sha256sum --check SHA256SUMS
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hook-deployment-${{ matrix.image }}
+          path: artifacts/
+          if-no-files-found: error
+          compression-level: 0
