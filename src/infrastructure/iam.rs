@@ -928,9 +928,9 @@ mod tests {
 
     fn silicon_profile() -> serde_json::Value {
         serde_json::json!({
-            "id": Uuid::now_v7(), "principal_id": Uuid::now_v7(), "membership_id": Uuid::now_v7(),
+            "membership_id": "cos:tos[tos]",
             "silicon_id": "cos:tos", "org_id": "tos", "display_name": "COS", "timezone": "UTC",
-            "profile_photo": "https://example.test/cos.png", "job_role": "engineer", "tags": [],
+            "profile_photo": "https://example.test/cos.png", "job_description": "engineer", "tags": [],
             "hierarchy_level": 1, "webhook_configured": false, "status": "active", "version": 1,
             "created_at": "2026-09-02T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z"
         })
@@ -1006,7 +1006,7 @@ mod tests {
     fn introspection(actor_type: &str) -> serde_json::Value {
         serde_json::json!({
             "active": true,
-            "principal_id": Uuid::now_v7(),
+            "public_id": "alice",
             "actor_type": actor_type,
             "client_id": APP_ID,
             "org_id": "tos",
@@ -1018,8 +1018,8 @@ mod tests {
             "expires_at": 1_700_001_800,
             "authorization_epoch": 4,
             "authorization": {
-                "principal_id": Uuid::now_v7(), "actor_type": actor_type, "public_id": "alice",
-                "organization_id": Uuid::now_v7(), "org_id": "tos", "membership_id": Uuid::now_v7(),
+                "actor_type": actor_type, "public_id": "alice",
+                "organization_id": Uuid::now_v7(), "org_id": "tos", "membership_id": "alice[tos]",
                 "membership_version": 1, "authorization_epoch": 4, "audience": APP_ID,
                 "testing_environment_id": null, "scopes": ["roles.read", "memberships.read"],
                 "org_role": "member", "tags": []
