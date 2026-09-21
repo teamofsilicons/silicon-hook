@@ -330,7 +330,7 @@ async fn run(cli: &Cli) -> Result<()> {
                     | Environment::ConfigureIam { .. }
             }
     ) {
-        store::refresh_if_needed(
+        let status = store::verified_status(
             &mut stored,
             &cli.profile,
             cli.test,
@@ -338,6 +338,10 @@ async fn run(cli: &Cli) -> Result<()> {
             cli.org.as_deref(),
         )
         .await?;
+        anyhow::ensure!(
+            status.authenticated,
+            "Session is no longer valid; sign in again with hook login"
+        );
     }
     let profile = stored.profile(&cli.profile).clone();
     // Attaching is the bootstrap operation for a test environment, so it
@@ -652,7 +656,7 @@ async fn run(cli: &Cli) -> Result<()> {
 }
 
 async fn login_status(cli: &Cli, stored: &mut LockedStore) -> Result<()> {
-    if let Err(error) = store::refresh_if_needed(
+    let status = match store::verified_status(
         stored,
         &cli.profile,
         cli.test,
@@ -661,31 +665,29 @@ async fn login_status(cli: &Cli, stored: &mut LockedStore) -> Result<()> {
     )
     .await
     {
-        if !matches!(
-            error.downcast_ref::<silicon_hook_client::Error>(),
-            Some(silicon_hook_client::Error::Api { status: 401, .. })
-        ) {
-            return Err(error);
+        Ok(status) => status,
+        Err(error)
+            if matches!(
+                error.downcast_ref::<silicon_hook_client::Error>(),
+                Some(silicon_hook_client::Error::Api { status: 401, .. })
+            ) =>
+        {
+            return print(
+                &serde_json::json!({"authenticated":false,"actor":null,"profile":cli.profile,"test":cli.test}),
+            );
         }
-        return print(&serde_json::json!({"authenticated":false,"actor":null,
-            "profile":cli.profile,"test":cli.test}));
-    }
-    let p = stored.profile(&cli.profile);
+        Err(error) => return Err(error),
+    };
+    let profile = stored.profile(&cli.profile);
     let session = match cli.test {
-        Some(id) => p.test_sessions.get(&id),
-        None => p.session.as_ref(),
+        Some(id) => profile.test_sessions.get(&id),
+        None => profile.session.as_ref(),
     };
-    let Some(session) = session else {
-        return print(&serde_json::json!({"authenticated":false,"actor":null,
-            "profile":cli.profile,"test":cli.test}));
-    };
-    let client = store::select_client(p, cli.test, cli.url.as_deref(), cli.org.as_deref())?;
-    let status = client.login_status().await?;
     print(
         &serde_json::json!({"authenticated":status.authenticated,"actor":status.actor,
         "org_id":status.org_id,"profile":cli.profile,"test":cli.test,
-        "expires_at":session.expires_at,"webhook_url":session.webhook_url,
-        "hooked":session.webhook_url.is_some()}),
+        "expires_at":session.map(|s| s.expires_at),"webhook_url":session.and_then(|s| s.webhook_url.as_ref()),
+        "hooked":session.is_some_and(|s| s.webhook_url.is_some())}),
     )
 }
 

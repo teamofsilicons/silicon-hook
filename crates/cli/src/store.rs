@@ -355,3 +355,35 @@ pub async fn refresh_if_needed(
     );
     Ok(())
 }
+
+/// Verify access online and recover one early-invalidated generation. The caller
+/// owns the session lock, so the successor is persisted before it is exposed.
+pub async fn verified_status(
+    store: &mut LockedStore,
+    name: &str,
+    env: Option<Uuid>,
+    url: Option<&str>,
+    org: Option<&str>,
+) -> Result<silicon_hook_client::models::LoginStatus> {
+    refresh_if_needed(store, name, env, url, org).await?;
+    for attempt in 0..2 {
+        let profile = store.profile(name);
+        let status = select_client(profile, env, url, org)?
+            .login_status()
+            .await?;
+        if status.authenticated || attempt == 1 {
+            return Ok(status);
+        }
+        let session = match env {
+            Some(id) => profile.test_sessions.get_mut(&id),
+            None => profile.session.as_mut(),
+        };
+        let Some(session) = session else {
+            return Ok(status);
+        };
+        session.expires_at = 0;
+        store.save()?;
+        refresh_if_needed(store, name, env, url, org).await?;
+    }
+    unreachable!("the second status check returns directly")
+}

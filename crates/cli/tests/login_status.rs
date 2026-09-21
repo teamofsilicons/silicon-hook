@@ -24,7 +24,7 @@ impl Drop for Home {
 }
 
 fn session(actor: &str, kind: &str, org: Option<&str>, token: &str) -> Value {
-    json!({"tokens":{"access_token":token,"refresh_token":"ort_fixture","token_type":"Bearer",
+    json!({"tokens":{"access_token":token,"refresh_token":match token {"revoked"=>"revoked-refresh", "repeat"=>"repeat-refresh", _=>"ort_fixture"},"token_type":"Bearer",
         "expires_in":3600,"scopes":[],"actor":{"type":kind,"id":actor},"org_id":org},
         "expires_at":4_000_000_000u64})
 }
@@ -42,7 +42,7 @@ async fn status(State(requests): State<Requests>, headers: HeaderMap) -> axum::r
             .map(str::to_owned),
     ));
     let status = match headers.get("authorization").and_then(|v| v.to_str().ok()) {
-        Some("Bearer revoked") => StatusCode::UNAUTHORIZED,
+        Some("Bearer revoked" | "Bearer early" | "Bearer repeat") => StatusCode::UNAUTHORIZED,
         Some("Bearer forbidden") => StatusCode::FORBIDDEN,
         Some("Bearer unavailable") => StatusCode::SERVICE_UNAVAILABLE,
         _ if org.is_none() => StatusCode::BAD_REQUEST,
@@ -60,6 +60,15 @@ async fn status(State(requests): State<Requests>, headers: HeaderMap) -> axum::r
 }
 
 async fn run(
+    profile: Value,
+    args: &[&str],
+) -> (Output, Vec<(String, Option<String>, Option<String>)>) {
+    let mut command = vec!["login", "status", "--json"];
+    command.extend_from_slice(args);
+    run_command(profile, &command).await
+}
+
+async fn run_command(
     mut profile: Value,
     args: &[&str],
 ) -> (Output, Vec<(String, Option<String>, Option<String>)>) {
@@ -73,6 +82,11 @@ async fn run(
                 }),
             )
             .route("/api/v1/auth/status", get(status))
+            .route("/api/v1/silicons/testsi:tos/hooks", get(|State(requests): State<Requests>, headers: HeaderMap| async move {
+                assert_eq!(headers["authorization"], "Bearer oat_refreshed");
+                requests.lock().unwrap().push(("list".into(), Some("tos".into()), None));
+                Json(json!({"items":[]}))
+            }))
             .route(
                 "/api/v1/auth/refresh",
                 post(
@@ -87,12 +101,16 @@ async fn run(
                                 .map(str::to_owned),
                             None,
                         ));
+                        if body["refresh_token"] == "revoked-refresh" {
+                            return (StatusCode::UNAUTHORIZED, Json(json!({"error":{"code":"invalid_token","message":"family revoked"}}))).into_response();
+                        }
                         let mut tokens =
                             session("testsi:tos", "silicon", None, "oat_refreshed")["tokens"]
                                 .clone();
+                        if body["refresh_token"] == "repeat-refresh" { tokens["access_token"] = json!("repeat"); }
                         tokens["refresh_token"] =
                             json!(format!("{}_next", body["refresh_token"].as_str().unwrap()));
-                        Json(tokens)
+                        Json(tokens).into_response()
                     },
                 ),
             )
@@ -115,7 +133,6 @@ async fn run(
         .env_remove("SILICON_HOOK_URL")
         .env_remove("SILICON_HOOK_ORG")
         .env("SILICON_HOOK_TELEMETRY", "off")
-        .args(["login", "status", "--json"])
         .args(args)
         .output()
         .await
@@ -222,7 +239,7 @@ async fn absent_and_revoked_sessions_are_false_but_permission_and_service_errors
     )
     .await;
     authenticated(&output, false);
-    assert_eq!(requests.len(), 1);
+    assert_eq!(requests.len(), 2);
     for token in ["forbidden", "unavailable"] {
         let (output, requests) = run(
             json!({"session":session("testsi:tos","silicon",None,token)}),
@@ -233,4 +250,47 @@ async fn absent_and_revoked_sessions_are_false_but_permission_and_service_errors
         assert!(output.stdout.is_empty());
         assert_eq!(requests.len(), 1);
     }
+}
+
+#[tokio::test]
+async fn early_access_rejection_renews_the_still_active_family_once() {
+    let (output, requests) = run(
+        json!({"session":session("testsi:tos","silicon",None,"early")}),
+        &[],
+    )
+    .await;
+    authenticated(&output, true);
+    assert_eq!(
+        requests.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        ["status", "refresh", "status"]
+    );
+    assert!(requests.iter().all(|r| r.1.as_deref() == Some("tos")));
+}
+
+#[tokio::test]
+async fn ordinary_reads_recover_before_dispatch_and_repeated_rejection_is_bounded() {
+    let (output, requests) = run_command(
+        json!({"session":session("testsi:tos","silicon",None,"early")}),
+        &["list", "--json"],
+    )
+    .await;
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(
+        requests.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        ["status", "refresh", "status", "list"]
+    );
+    let (output, requests) = run(
+        json!({"session":session("testsi:tos","silicon",None,"repeat")}),
+        &[],
+    )
+    .await;
+    authenticated(&output, false);
+    assert_eq!(
+        requests.iter().map(|r| r.0.as_str()).collect::<Vec<_>>(),
+        ["status", "refresh", "status"]
+    );
 }
