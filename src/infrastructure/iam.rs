@@ -772,8 +772,22 @@ fn build_verifier(settings: &IamWebhookSettings) -> Result<WebhookVerifier, IamE
 fn sdk_error(error: silicon_iam_client::Error) -> IamError {
     use silicon_iam_client::Error;
     match error {
+        // Application credentials belong to this deployment, not the user's
+        // refresh family. A configuration failure must remain retryable.
+        Error::Api(error) if error.code == "invalid_client" => {
+            IamError::UnexpectedStatus(error.status)
+        }
+        Error::Api(error)
+            if matches!(error.status, 400 | 401)
+                && matches!(
+                    error.code.as_str(),
+                    "invalid_grant" | "refresh_token_reuse" | "unauthenticated" | "invalid_token"
+                ) =>
+        {
+            IamError::InvalidCredential
+        }
         Error::Api(error) => match error.status {
-            401 => IamError::InvalidCredential,
+            401 => IamError::UnexpectedStatus(error.status),
             403 => IamError::Forbidden,
             404 => IamError::NotFound,
             status => IamError::Rejected { status },
@@ -898,6 +912,44 @@ fn local_silicon_webhook(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn provider_failures_preserve_sessions_and_invalid_grants_end_them() {
+        for (status, code, expired) in [
+            (401, "invalid_client", false),
+            (403, "invalid_client", false),
+            (401, "unknown_auth_failure", false),
+            (400, "invalid_grant", true),
+            (401, "invalid_grant", true),
+            (400, "refresh_token_reuse", true),
+            (401, "unauthenticated", true),
+        ] {
+            let error = silicon_iam_client::ApiError {
+                status,
+                code: code.to_owned(),
+                message: "provider response".to_owned(),
+                details: None,
+                request_id: None,
+            };
+            let mapped = AppError::from(sdk_error(error.into()));
+            if expired {
+                assert!(matches!(mapped, AppError::Unauthenticated));
+            } else {
+                assert!(matches!(mapped, AppError::ProviderUnavailable));
+            }
+        }
+        let invalid_request = silicon_iam_client::ApiError {
+            status: 400,
+            code: "invalid_request".to_owned(),
+            message: "provider response".to_owned(),
+            details: None,
+            request_id: None,
+        };
+        assert!(matches!(
+            sdk_error(invalid_request.into()),
+            IamError::Rejected { status: 400 }
+        ));
+    }
+
     use std::time::Duration;
 
     use hmac::{Hmac, Mac as _};
@@ -913,10 +965,12 @@ mod tests {
 
     use super::{
         AuthorizationRequest, IamClient, IamError, actor_from_directory, iam_idempotency_key,
+        sdk_error,
     };
     use crate::{
         config::{IamSettings, IamWebhookSettings},
         domain::{ActorKind, OrganizationId, OrganizationRole, SiliconId},
+        error::AppError,
     };
 
     const APP_ID: &str = "tos>hook";
