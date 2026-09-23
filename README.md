@@ -3,7 +3,10 @@
 Silicon Hook gives every Silicon its own set of signed webhook endpoints. A
 provider such as GitHub, Stripe, or Silicon IAM posts to an endpoint, Hook
 verifies the request with the hook's configured signature scheme, records it,
-and delivers it to the Silicon over an ordered, acknowledged WebSocket stream.
+and queues a compact event reference for internal delivery through Ting.
+The receiving application fetches the original request with its current Hook
+authorization. The enclosing app handles delivery setup; users do not need to
+configure Hook or Ting separately.
 Unverified requests are withheld, logged separately, and counted against the
 sending address.
 
@@ -54,7 +57,8 @@ Start with the [documentation index](docs/README.md), [Rust client guide](docs/c
 The official Rust client lives in `crates/client` as `silicon-hook-client`.
 The `hook` binary lives in `crates/cli` and uses the client for all network actions. It negotiates the API major with
 `GET /api/version` on connect, pins every request to it, and covers hook
-management, history, deliveries, the WebSocket stream, and Carbon sign-in.
+management, history, publication status, and Carbon sign-in. The stateless SDK
+validates Ting callbacks and hydrates events without starting a Hook relay.
 
 ## Lifecycle
 
@@ -68,21 +72,20 @@ management, history, deliveries, the WebSocket stream, and Carbon sign-in.
 
 ## Receiving and delivery
 
-Every request to an active endpoint is answered with `200` and
-`{"status":"webhook.ok","receipt_id":...}` as soon as it is captured. Verified
-requests join the Silicon's ordered delivery stream; withheld requests go to
+Accepted requests receive `200` and
+`{"status":"webhook.ok","receipt_id":...}` after the request and pending
+publication are committed together. Verified requests receive a per-Silicon
+sequence; withheld requests go to
 the blocked log. Both logs keep 14 days of history and are readable by the
 Silicon and by Carbons who can see it.
 
-Delivery is over `GET /api/v1/ws?silicon_id=...`. On connect the server sends
-every event the consumer has not acknowledged, then live events as they
-arrive, each with a per-Silicon `delivery_sequence`. The client acknowledges
-with `{"type":"ack","silicon_id":...,"through_sequence":N}`. The server sends a
-JSON `ping` every 30 seconds; a client that fails to answer with the matching
-`pong` for two minutes is closed with code `4000` and reason
-`heartbeat-timeout`. The same stream is available by polling
-`GET /api/v1/silicons/{silicon_id}/deliveries` and acknowledging with
-`POST /api/v1/silicons/{silicon_id}/deliveries/ack`.
+API v2 uses Ting's shared transport. Hook retries each publication with the
+same producer key until Ting confirms storage. Receivers hydrate the compact
+reference through Hook, durably accept and deduplicate the event, then complete
+the Ting batch acknowledgment. Delivery can replay or arrive out of order;
+an ACK never implies that a Silicon has completed its work. V1's old transport
+remains deprecated under the contract sunset policy. See
+[internal delivery](docs/ting-delivery.md) and [known Ting constraints](docs/ting-integration-issues.md).
 
 ## Safety
 
@@ -96,34 +99,35 @@ The repository is one Rust modular monolith with independently scalable
 processes:
 
 - `hook-api` serves sign-in, management, ingress, history, the Silicon IAM
-  connection, IAM event receipt, and the WebSocket delivery stream. Every replica listens for PostgreSQL
-  notifications so an event accepted on one replica reaches sessions on any.
+  connection and event receipt, and publishes committed records through Ting.
+  Deprecated v1 delivery remains available during migration.
 - `hook-worker` purges 14-day logs, expired 45-day deletions, stale address
   blocks, and expired idempotency records in bounded, fair batches.
 - `hook-migrate` is the only process that applies PostgreSQL migrations.
 
 PostgreSQL is authoritative: hooks, encrypted secrets, request logs, delivery
-sequences, acknowledgment cursors, and address blocks all live there, and IAM
+sequences, pending publications, encrypted publisher credentials, observer
+bindings and address blocks all live there, and IAM
 authorization is checked online for every management call.
 
 ## Silicon IAM
 
 Hook is a registered Silicon IAM Application and talks to IAM through the
-official `silicon-iam` crate. At startup the crate performs IAM's fail-closed
+official `silicon-iam-client` crate. At startup the crate performs IAM's fail-closed
 compatibility handshake, so `hook-api` does not start against an IAM it
 cannot talk to.
 
-- **Who calls Hook.** Silicons present the access token IAM issued them.
-  Carbons sign in through `POST /api/v1/auth/login` and
-  `POST /api/v1/auth/callback`, which run IAM's PKCE flow and return Hook
-  Application tokens; `refresh` and `logout` complete the set.
+- **Who calls Hook.** Silicons and Carbons exchange a Hook-bound IAM SLT through
+  `POST /api/v2/auth/login`; `refresh` and `logout` complete the session APIs.
+  The browser gateway acquires Hook and Ting SLTs through one IAM batch login
+  and retains both service sessions internally.
 - **How Hook decides.** Every management call resolves the bearer online: a
   Hook-issued token is introspected through the crate, and every token is
   read back from IAM's organization directory to learn the public Carbon or
   Silicon ID and the organization role. A Carbon's view of a Silicon is
   confirmed with IAM per request. Hook caches nothing and exposes no OBO
   endpoints.
-- **IAM events for a Silicon.** `POST /api/v1/silicons/{silicon_id}/hooks/iam`
+- **IAM events for a Silicon.** `POST /api/v2/silicons/{silicon_id}/hooks/iam`
   creates the Silicon's `Silicon IAM` hook, registers its endpoint as the
   Silicon's IAM webhook with the caller's own bearer, and stores the `swhs_`
   secret IAM issues. Logouts, removals, and directory changes then reach the

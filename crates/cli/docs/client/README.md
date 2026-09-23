@@ -1,181 +1,175 @@
 # Stateless Rust client
 
 The package is `silicon-hook-client`; the Rust import is `silicon_hook_client`.
-For this source workspace use a path dependency on `crates/client`. Consumers
-of a published release use its matching crates.io version. The SDK does not
-persist authentication, environment keys or recipient configuration. Your
-program owns those values. A login session refreshes tokens in memory and owns
-its relay tasks; your program controls its lifetime and shutdown.
+In this workspace use a path dependency on `crates/client`. Consumers of a
+published release use its matching crates.io version.
 
-Version 0.3.0 uses the `new_event` delivery envelope with `data.sender` and
-`data.metadata`. Upgrade the client/CLI and backend together; consumers of
-0.2.x must update their event matching and field access to the new format.
+This client uses Hook API v2 for management and authenticated event lookup.
+The enclosing application handles IAM login, token storage and refresh, and
+internal Ting receiving. Hook and Ting remain internal services; the user
+does not need separate setup for either one. The SDK stores no credentials,
+starts no listener or daemon, and owns no delivery connection.
 
 ## Sign in
 
-Obtain an IAM short-lived token for `tos>hook` through IAM's existing
-Carbon/Silicon login. Do not ask the user for their password or OTP in Hook.
+The host obtains an IAM short-lived token for the selected Hook application
+through its existing Carbon/Silicon login. Hook does not collect passwords or OTPs.
 
 ```rust,no_run
 use silicon_hook_client::{Client, Mutation};
 
 # async fn example() -> Result<(), Box<dyn std::error::Error>> {
 let base = Client::new("https://backend.hook.teamofsilicons.com")?;
-let iam = base.iam().await?;
-println!("IAM application: {:?}", iam.app_id);
 let slt = std::env::var("HOOK_SLT")?;
 let login = Mutation::new();
-let session = base.login_without_webhook(&slt, &login).await?;
-session.webhook("http://127.0.0.1:9000/events")?;
-let client = session.client();
+let tokens = base.login(&slt, &login).await?;
+let client = base.with_token(tokens.access_token.expose())
+    .with_organization("tos");
 let hooks = client.list_hooks("cos:tos", false).await?;
 println!("{} hooks", hooks.items.len());
-// Keep session alive while your application serves events.
-session.shutdown().await?;
 # Ok(()) }
 ```
 
-`Recipient` validates HTTPS or local HTTP and rejects embedded credentials and
-fragments. Configure it after login with `session.webhook(url)`, or pass it to
-`Client::login` for the combined flow. It is never serialized to the backend. Login
-starts the local request gateway, WebSocket relay and automatic token refresh.
-It reserves the local port before consuming the SLT. `LoginOptions` and
-`login_with_options` select Carbon streams, a different local port, or a relay
-notice channel. A Silicon defaults to its own stream; a Carbon with no selected
-streams still has a local request gateway. The default port is 18479; choose a
-different port if a CLI daemon already owns it. Nothing is persisted.
+`login(slt, mutation)` and `authenticate(slt, mutation)` return the same `Tokens`
+model. Neither changes the original client or configures receiving. Keep the
+access and refresh tokens together in the host's secure session storage.
+Before `expires_in` elapses, call `refresh(refresh_token, mutation)` explicitly
+and atomically replace the complete pair. Keep one mutation key for retries of
+the same exchange or refresh; an uncertain response may have consumed or rotated
+the credential already.
+
+To revoke the session family, call `logout(&mutation)` on a client whose bearer
+is the current refresh token. Dropping a client has no remote side effects.
+
+Tokens redact Debug output and zeroize their owned strings when dropped.
+`Secret::expose()` gives plaintext only where needed. Serialization is explicit
+because hosts may need to save credentials securely; never log serialized token,
+hook-secret, or environment-key responses.
+
+`iam()` discovers public application configuration before login.
+`login_status()` checks the current bearer and selected organization online.
+Absent credentials or a 401 return `authenticated: false`; outages and other
+errors remain errors. If the token exchange did not bind an organization, the
+host selects one with `with_organization`.
+
+## Version and environment selection
+
+`with_token`, `with_organization`, `with_test_key`, and `with_test_app_secret`
+return immutable configurations. API calls first negotiate `/api/version`,
+advertise only `v2`, verify `service = silicon-hook` and the selected major,
+then use `/api/v2/` with `silicon-hook-api-version: v2`. A v1-only backend is
+rejected before sending an SLT or a management mutation.
+
 `Client::new` accepts a pathless HTTPS origin or HTTP on loopback (`localhost`,
-any `*.localhost` name, or a loopback IP address). Redirects
-are disabled so credentials cannot follow a redirect to another service.
+`*.localhost`, or a loopback IP). Redirects are disabled. Authenticated requests
+and test selectors stay on the configured Hook origin.
 
-Tokens have redacted Debug output and zeroize their owned strings when dropped.
-Use `Secret::expose()` only where plaintext is required. Serialization is
-explicitly allowed because applications need to save credentials securely.
-Avoid logging serialized token, hook-creation or environment-key responses.
-
-The returned `RelaySession` automatically refreshes before token expiry; call
-`session.client()` again to get the latest immutable client. Its `local_client()`
-forwards identity-bound requests, `local_token()` supplies the local bearer,
-`health()` queries its gateway, and `wait()` reports terminal relay failures.
-`shutdown()` stops local work without revoking IAM; dropping it cancels its tasks.
-To revoke, use its current refresh token with `logout`, then shut down.
-
-Hosts that already manage a persistent relay, such as the CLI, use
-`authenticate(slt, mutation)` and manage refresh themselves. The compatibility
-`exchange_slt` method accepts a recipient but also only sends the SLT.
-For this lower-level flow, refresh before `expires_in` elapses. Create one `Mutation`, pass it to
-`refresh`, and retain it for retries. Replace the complete old token pair
-atomically. To sign out the whole session family, construct a client with the
-refresh token as bearer and call `logout(&mutation)`.
-
-`session.webhook(url)` replaces the current destination; `session.unhook()`
-detaches delivery while retaining authentication, token refresh and the local
-gateway. Relay work is cancelled when the background task next runs; an in-flight
-request may already have reached the old recipient. Unacknowledged events replay
-when a destination is configured again. `session.recipient()` reads the local
-setting. All of this state stays in memory. `LoginOptions::default()` starts
-without a recipient; `LoginOptions::new(recipient)` starts with one.
-
-`client.iam()` returns public configuration from the selected production/test
-backend before login. `client.login_status()` verifies the current bearer and
-organization membership online, returning an actor with `authenticated: true`.
-Absent credentials or a 401 produce `authenticated: false`; outages and other
-errors propagate. Select the organization with `with_organization` if the token
-exchange did not bind one.
-
-## Client selection and versioning
-
-`with_token`, `with_organization`, `with_test_key` and `with_auto_update` return
-clones with immutable configuration. They do not modify earlier clients. API
-requests first negotiate `/api/version`, verify `service = silicon-hook` and
-API v1, then pin requests with `silicon-hook-api-version: v1`.
-
-A test client carries both a Hook test root key and a token minted in the linked
-IAM test world. See [testing with Rust](../testing/client.md). Never attach a
-production token to a test client as a fallback after a failed test login.
+A test client uses a Hook test key or the linked IAM application's test secret,
+plus an actor token from that test world. Changing to an application secret or
+leaving testing clears the previous actor and organization. See
+[testing with Rust](../testing/client.md). A failed test login must not fall
+back to a production credential.
 
 ## Operations
 
 | Area | Methods |
 |---|---|
-| Authentication | `login`, `login_without_webhook`, `login_with_options`, `authenticate`, `exchange_slt`, `login_status`, `refresh`, `logout` |
+| Authentication | `login`, `authenticate`, `login_status`, `refresh`, `logout` |
 | Discovery | `iam`, `negotiate`, `version`, `health` |
 | Hooks | `list_hooks`, `get_hook`, `create_hook`, `update_hook`, `delete_hook`, `restore_hook` |
-| Activation | `set_enabled` with one or more hook UUIDs |
-| Credentials | `rotate_endpoint`, `rotate_secret` |
-| History | `events`, `blocked_requests` |
-| Delivery | `deliveries`, `acknowledge`, `delivery_cursor`, `stream` |
+| Activation | `set_enabled` |
+| Credentials | `rotate_endpoint`, `rotate_secret`, `set_secret` |
+| History and lookup | `events`, `blocked_requests`, `event` |
+| Internal receiving | `delivery_context`, `register_recipient`, `receiving_subscription`, `subscribe`, `unsubscribe`, `resolve_notification`, `hydrate_notification` |
+| Scoped sandbox observation | `receiver_scope`, `bootstrap_receiver`, `renew_receiver` |
+| Delivery status | `publication` |
+| Internal publisher administration | `provision_publisher`, `replace_rejected_publisher` |
 | IAM | `connect_iam_hook` |
-| Test administration | `create_environment`, `list_environments`, `environment`, `environment_key`, `rotate_environment_key`, `delete_environment`, `restore_environment`, `list_environments_page` |
-| Test root operations | `current_environment`, `clean_environment`, `configure_test_iam` |
-| Local service | `RelaySession`, `Relay::run`, `local::serve_local`, `local::LocalClient` |
+| Test administration | `create_environment`, `list_environments`, `list_environments_page`, `environment`, `environment_key`, `rotate_environment_key`, `delete_environment`, `restore_environment` |
+| Selected testing | `selected_environment`, `current_environment`, `clean_environment`, `configure_test_iam` |
 | Release discovery | Explicit read-only `updater::check` |
 
-All wire models are under `models`. `CreateHook::default()` plus a nonempty
-name enables default HMAC-SHA256 verification. A `Signature` override changes
-only fields supplied. `UpdateHook.description` and `Signature.public_key`
-distinguish omission (`None`) from explicit clearing (`Some(None)`).
+Wire models live under `models`; receiving types live under `delivery`.
+`CreateHook::default()` with a nonempty name enables default HMAC-SHA256
+verification. A `Signature` override changes only supplied fields.
+`UpdateHook.description` and `Signature.public_key` distinguish omission
+(`None`) from explicit clearing (`Some(None)`).
 
 ```rust,no_run
-# async fn example(client: silicon_hook_client::Client) -> silicon_hook_client::Result<()> {
+# async fn example(client: &silicon_hook_client::Client) -> silicon_hook_client::Result<()> {
 use silicon_hook_client::{Mutation, models::{CreateHook, UpdateHook}};
-let mutation = Mutation::new();
 let created = client.create_hook("cos:tos", &CreateHook {
     name: "GitHub".into(), ..Default::default()
-}, &mutation).await?;
+}, &Mutation::new()).await?;
 client.update_hook("cos:tos", created.hook.id, &UpdateHook {
     description: Some(None), ..Default::default()
 }, &Mutation::new()).await?;
 # Ok(()) }
 ```
 
+## Internal receiving
+
+An organization owner/admin Carbon configures the backend's dedicated Silicon
+publisher using `provision_publisher(&Secret, &Mutation)`. The SLT must be newly issued
+for that server-owned Hook session, not an interactive session's refresh token.
+The returned `PublisherMetadata` contains only organization, actor and expiry.
+Reuse the same SLT and mutation for an uncertain provisioning result. To recover
+a publisher whose session was rejected, explicitly call
+`replace_rejected_publisher(slt, mutation)` with a fresh dedicated SLT and a new
+operation key. This does not replace a currently usable publisher. See
+[service setup](../ting-delivery.md) for scopes and notification-type provisioning.
+
+The host configures its shared Ting session and destination internally, then
+uses `delivery::Receiver` to validate the callback and hydrate compact event
+references. See [receiving through Ting](relay.md) for the acceptance boundary.
+There is no Hook WebSocket, local gateway, daemon, webhook destination setting,
+cumulative cursor, or Hook ACK API in this client.
+
+For sandbox inbox/watch observation, `receiver_scope` verifies the current
+actor/app/organization/environment. Persist that scope and a caller-owned
+`Mutation` before `bootstrap_receiver`. Retry them unchanged after uncertainty;
+renew the original receiver ID using `renew_receiver` with a new mutation.
+`ReceiverCapability` redacts its secret in Debug and retains the original expiry
+on replay, even if expired. Check expiry before using it. The host owns the
+scoped Ting inbox/watch transport and renewal; this capability cannot attach a
+native destination, enable required delivery or ACK events. See
+[sandbox receiving](../testing/client.md).
+
+Silicons receive their own events after recipient setup. An authorized Carbon
+uses `subscribe(silicon)` to request future events for a visible Silicon.
+`unsubscribe` cancels that Carbon's queued sends without affecting the primary
+Silicon. Already accepted Ting notifications cannot be retracted. The backend
+checks current IAM visibility when hydrating every original webhook.
+
+New primary Silicon sends use required automation delivery. Registration reports
+the separate `required_delivery` opt-in, while publication and receipt expose
+`DeliveryMode`. A silent required event can still reach a destination. The
+enclosing app handles the recipient's explicit opt-in through its own Ting
+session; the Hook client never enables it through application authority.
+
 ## Failures, retries and limits
 
-`Error::Api` includes HTTP status, stable code, message, request ID and optional
-Retry-After. Transport errors mean the outcome of a mutation may be unknown.
-Reuse its `Mutation` for a retry; do not generate a new key. Server error bodies
-are decoded as structured Hook errors and are not dumped wholesale.
+`Error::Api` includes HTTP status, stable code, message, request ID, and optional
+Retry-After. A transport error may leave a mutation's outcome unknown; reuse its
+`Mutation` when retrying. Error bodies are decoded rather than dumped wholesale.
+Requests time out after 30 seconds. Response buffering stops at 64 MiB, and
+history is paginated within a backend byte budget. A 1–10000 item request may
+return fewer records; continue with `next_cursor`.
 
-HTTP and WebSocket connection timeouts are 30 seconds. Stream writes time out
-after 5 seconds, and 125 seconds without any server traffic causes reconnect in
-the relay. WebSocket frames/messages are bounded at 4 MiB. Response buffering stops at 64 MiB; history is
-already paginated within a backend byte budget. A request may ask for 1–10000
-history records, but a byte-limited page can contain fewer: continue with
-`next_cursor`. Delivery pulls allow up to 1000 events per call. Reading history
-or pulling deliveries does not ACK them.
+Reading history or hydrating a notification does not acknowledge delivery.
+Ting is at least once: the host must durably accept and deduplicate every item
+in a callback batch before returning exactly HTTP 204. Acceptance by Ting,
+delivery to a destination, and application processing are separate states.
+`Receiver::resolve` returns an explicit unavailable result for a validated
+reference whose original returns Hook's authenticated `404 not_found`. Persist
+and report that result without treating it as work, so retained old notifications
+do not block newer events. Authority and service failures remain retryable errors.
 
-Delivery is at least once. Only ACK after successfully processing all earlier
-retained events for that Silicon. ACK is cumulative per identity/Silicon, so
-multiple consumers using the same identity share a cursor. Use separate IAM
-identities when every consumer needs an independent copy.
+The one-shot `management_login` example lists hooks and revokes its temporary
+session. Run `cargo run -p silicon-hook-client --example management_login` with
+the environment variables documented in its source.
 
-## Streams and relay
-
-`stream(&[silicon_ids])` yields Ready, Ping, NewEvent, AckRecorded and Error frames.
-`ServerFrame::NewEvent { data }` carries the hook name in `data.sender` and the
-complete event in `data.metadata`. On the wire it has exactly `type: new_event`
-and `data` at the top level. Use the metadata's `silicon_id` and
-`delivery_sequence` when acknowledging.
-`Stream::next` immediately answers application and protocol pings. Keep calling
-it while doing recipient work. `Stream::acknowledge` and `resume` send the
-corresponding frames. Closing a stream never acknowledges pending events.
-
-Use [the relay module](relay.md) for ordered local HTTP delivery with reconnect
-and retry when your host manages its own lifecycle. Its credentials come through an in-memory watch channel. Your
-program can refresh and replace them without restarting the application.
-
-The interactive `crates/client/examples/relay_login.rs` example exercises login
-and a live SDK relay. Run `cargo run -p silicon-hook-client --example relay_login`
-with its documented environment variables; enter one command at a time.
-
-## Updates
-
-The Rust client is a normal project dependency. It never runs Cargo, modifies a lockfile, or schedules runtime updates. Update it through your project’s normal dependency workflow. `with_auto_update` remains a compatibility no-op. Honeycomb owns CLI updates.
-
-## Bring your own secret (BYOS)
-
-Version 0.5.0 adds `Client::set_secret`. Creation and updates also accept
-`Signature::secret` to configure the verification policy and secret together.
+## Bring your own secret
 
 ```rust,no_run
 # async fn example(client: &silicon_hook_client::Client) -> silicon_hook_client::Result<()> {
@@ -188,16 +182,20 @@ let created = client.create_hook("cos:tos", &CreateHook {
         ..Signature::default()
     }),
     ..CreateHook::default()
-}, &Mutation::default()).await?;
+}, &Mutation::new()).await?;
 client.set_secret("cos:tos", created.hook.id,
-    Secret::new("replacement-secret"), None, &Mutation::default()).await?;
+    Secret::new("replacement-secret"), None, &Mutation::new()).await?;
 # Ok(()) }
 ```
 
-`None` retains the current secret encoding; pass `Some("hex".into())` (or another
-supported encoding) to change it. The previous secret stops verifying immediately.
-Replacement preserves the URL, other policy fields and activation state and
-returns no secret. You may create with a generated secret first, then set your
-own after provider registration. A client selected with `with_test_key` applies
-the same operations in the isolated testing environment. `Secret` redacts Debug
-output; do not log serialized requests, which necessarily contain the secret.
+`None` retains the secret encoding. Pass an encoding such as `Some("hex".into())`
+to change it. The previous secret stops verifying immediately. Replacement
+preserves the URL, other policy fields, and activation state and returns no
+secret. The same operations work in the selected testing environment.
+
+## Updates
+
+The Rust client is a normal dependency. It never runs Cargo, modifies a
+lockfile, or schedules runtime updates. Update through the consuming project's
+dependency workflow. `with_auto_update` remains a compatibility no-op;
+Honeycomb owns CLI installation and updates.

@@ -7,6 +7,7 @@ export interface Plane {
   name: string;
   attached: boolean;
   authenticated: boolean;
+  logout_pending?: boolean;
   actor?: Actor;
   org_id?: string;
   expires_at?: number;
@@ -56,14 +57,42 @@ export interface Captured {
 }
 export interface Event {
   id: string;
+  org_id: string;
   hook_id: string;
   silicon_id: string;
   provider: string;
   received_at: string;
+  summary?: string;
   delivery_sequence?: number;
   reason_code?: string;
   reason_detail?: string;
   request: Captured;
+}
+export interface Publication {
+  event_id: string;
+  recipient_id: string;
+  state: "pending" | "accepted_by_ting" | "accepted_silently";
+  delivery: "ordinary" | "required";
+  silent: boolean | null;
+  attempts: number;
+  ting_id: string | null;
+  last_error_code: string | null;
+  accepted_at: string | null;
+  next_attempt_at: string;
+  expires_at: string;
+  recipient_status_error: string | null;
+  recipient_receipt: {
+    id: string;
+    read: boolean;
+    silent: boolean;
+    delivery: "ordinary" | "required";
+    more_destinations: boolean;
+    deliveries: {
+      webhook_id: string;
+      delivery_acked: boolean;
+      read_acked: boolean;
+    }[];
+  } | null;
 }
 export interface Page<T> {
   items: T[];
@@ -130,7 +159,17 @@ export async function request<T>(
       "Could not reach Hook. Check your connection and try again.",
     );
   }
-  const result = await response.json();
+  if (response.status === 204) return undefined as T;
+  let result;
+  try {
+    result = await response.json();
+  } catch {
+    throw new ApiError(
+      response.status,
+      "invalid_response",
+      "The service returned an unreadable response.",
+    );
+  }
   if (!response.ok)
     throw new ApiError(
       response.status,
@@ -151,8 +190,8 @@ export function api<T>(
 ) {
   if (
     !ctx.org &&
-    (path.startsWith("/api/v1/testing-environments") ||
-      path.startsWith("/api/v1/silicons/"))
+    (path.startsWith("/api/v2/testing-environments") ||
+      path.startsWith("/api/v2/silicons/"))
   )
     throw new Error(
       "Choose an organization shared through IAM in the sidebar first.",
@@ -166,7 +205,7 @@ export function gatewayOrigin(): string {
 }
 export function scoped(ctx: Context, suffix = "") {
   if (!ctx.silicon) throw new Error("Choose a Silicon in the sidebar first.");
-  return "/api/v1/silicons/" + encodeURIComponent(ctx.silicon) + suffix;
+  return "/api/v2/silicons/" + encodeURIComponent(ctx.silicon) + suffix;
 }
 export const query = (
   params: Record<string, string | number | boolean | undefined>,
@@ -201,18 +240,55 @@ export function download(
 let telemetryPreference: boolean | undefined;
 export function telemetryEnabled(): boolean {
   if (telemetryPreference !== undefined) return telemetryPreference;
-  try { return localStorage.getItem("hook.telemetry") !== "off"; } catch { return true; }
+  try {
+    return localStorage.getItem("hook.telemetry") !== "off";
+  } catch {
+    return true;
+  }
 }
 export function setTelemetry(enabled: boolean) {
   telemetryPreference = enabled;
-  try { localStorage.setItem("hook.telemetry", enabled ? "on" : "off"); } catch {}
-}
-export async function track(ctx: Context, step: "page_view" | "interaction" | "error", operation: string) {
-  if (!telemetryEnabled() || !["overview","hooks","events","blocked","deliveries","live","testing","connections"].includes(operation)) return;
   try {
-    await request("/console/telemetry?plane=" + encodeURIComponent(ctx.plane), "POST", {
-      event_id: crypto.randomUUID(), trace_id: crypto.randomUUID(), source: "web", step,
-      outcome: step === "error" ? "failed" : "succeeded", operation, version: "0.5.0", progress: 1,
-    }, undefined, ctx.org);
-  } catch { /* Diagnostics must never interrupt the product. */ }
+    localStorage.setItem("hook.telemetry", enabled ? "on" : "off");
+  } catch {}
+}
+export async function track(
+  ctx: Context,
+  step: "page_view" | "interaction" | "error",
+  operation: string,
+) {
+  if (
+    !telemetryEnabled() ||
+    ![
+      "overview",
+      "hooks",
+      "events",
+      "blocked",
+      "deliveries",
+      "live",
+      "testing",
+      "connections",
+    ].includes(operation)
+  )
+    return;
+  try {
+    await request(
+      "/console/telemetry?plane=" + encodeURIComponent(ctx.plane),
+      "POST",
+      {
+        event_id: crypto.randomUUID(),
+        trace_id: crypto.randomUUID(),
+        source: "web",
+        step,
+        outcome: step === "error" ? "failed" : "succeeded",
+        operation,
+        version: "0.5.0",
+        progress: 1,
+      },
+      undefined,
+      ctx.org,
+    );
+  } catch {
+    /* Diagnostics must never interrupt the product. */
+  }
 }

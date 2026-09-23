@@ -1,165 +1,106 @@
-# Relay and local API
+# Receiving through Ting
 
-A relay connects a single Silicon stream using one IAM identity and sends its
-events to that identity's configured local recipient. Run several `Relay`
-instances for independent Silicons or recipients. A Carbon can subscribe to
-several Silicons it may access. Distinct identities have distinct backend
-cursors. Two relays using the same identity and Silicon share a cursor.
+The enclosing application owns the internal Ting login, daemon or transport,
+destination, callback listener, and session refresh. Hook's Rust client starts
+none of these. Users continue through the application's normal login and setup.
 
-## Embedded relay
+The host needs separate Hook and Ting sessions from the same authorized IAM
+actor and organization. A Hook application token cannot bootstrap a Ting
+session. Acquire the required application sessions through the host's IAM
+login flow; never reuse Hook's test app secret as Ting's credential.
 
-`Client::login` starts and owns these tasks automatically in a `RelaySession`,
-including the loopback gateway and token refresh. Keep that session alive.
-Use `Client::login_without_webhook` to authenticate first, then
-`session.webhook(url)` to enable delivery. `session.unhook()` detaches delivery
-while keeping authentication and the gateway alive.
-The lower-level example below is for applications that already supervise their
-own authentication and server lifetimes (the CLI uses this approach).
+## Setup
+
+After Hook login, call `register_recipient()` to grant the authenticated actor
+receipt of this application's notifications. A Carbon interested in a visible
+Silicon calls `subscribe(silicon)`; that operation grants the current recipient
+and records interest in future events. No older events are backfilled.
+Silicons receive their own primary events without an observer subscription.
+
+The host registers its internal receiving destination with Ting and retains the
+destination ID and a high-entropy bearer secret. The receiving URL stays in Ting's
+local configuration. Use `delivery_context()` to obtain the trusted Hook
+application, actor, organization, and environment; never take that context from
+an incoming callback.
 
 ```rust,no_run
-use silicon_hook_client::{Client, Recipient, Relay};
-use tokio::sync::watch;
-# async fn example(client: Client) -> silicon_hook_client::Result<()> {
-let (credentials, current) = watch::channel(client);
-let (stop, shutdown) = watch::channel(false);
-let relay = Relay {
-    silicon_id: "cos:tos".into(),
-    recipient: Recipient::new("http://127.0.0.1:9000/events")?,
-};
-// Another task retains `credentials`, refreshes tokens, and calls send_replace.
-// To shut down, call stop.send(true). Dropping the senders also stops the relay.
-relay.run(current, shutdown, None).await?;
-# drop((credentials, stop)); Ok(()) }
+use silicon_hook_client::{Client, Secret, delivery::Receiver};
+
+# async fn example(client: &Client) -> silicon_hook_client::Result<()> {
+let context = client.delivery_context().await?;
+let receiver = Receiver::new(context, "destination-id",
+    Secret::new("a-host-generated-bearer-secret-at-least-32-characters"))?;
+// Retain this immutable receiver alongside the host's destination configuration.
+# let _ = receiver;
+# Ok(()) }
 ```
 
-Every recipient POST has three top-level fields: `type`, `data`, and `metadata`.
-`type` is `new_event`. `data` contains `sender` (the hook's provider name at
-receipt) and `metadata` (the complete retained event). For example:
+## Callback acceptance
 
-```json
-{
-  "type": "new_event",
-  "metadata": {"event_id":"00000000-0000-4000-8000-000000000001","delivery_sequence":42,"silicon_id":"cos:tos"},
-  "data": {
-    "sender": "stripe",
-    "metadata": {
-      "id": "00000000-0000-4000-8000-000000000001",
-      "org_id": "tos",
-      "silicon_id": "cos:tos",
-      "hook_id": "00000000-0000-4000-8000-000000000002",
-      "provider": "stripe",
-      "delivery_sequence": 42,
-      "received_at": "2026-09-11T12:00:00Z",
-      "request": {
-        "method": "POST",
-        "url": "https://hook.teamofsilicons.com/silicon/cos:tos/ABCDEFGH/",
-        "path": "/silicon/cos:tos/ABCDEFGH/",
-        "query_string": "",
-        "headers": [["content-type", "application/json"]],
-        "content_type": "application/json",
-        "body": "{\"example\":true}",
-        "body_base64": null,
-        "remote_ip": "203.0.113.1"
-      }
-    }
-  }
-}
+Ting sends `{"tings":[...]}`. Each Hook notification has the registered
+`<hook-app-id>.webhook.received` type and a compact `new_event` envelope inside
+`data`. The reference identifies the original event and its source environment.
+Provider headers and raw body remain in Hook.
+
+For each callback, the host:
+
+1. Requires exactly one `Authorization` and `Ting-Webhook-Id` header and gives
+   their values and the unmodified body to `Receiver::decode`.
+2. Calls `Receiver::resolve(&client, &notifications)` with a current Hook token
+   and the same selected environment. All references are checked before fetching
+   any payload. Hook checks current IAM visibility on each lookup.
+3. Durably accepts and deduplicates available events, keyed by Ting ID and the
+   Hook event identity. Records and reports each `Unavailable` result separately;
+   it is not completed application work. A durable application queue is
+   sufficient for available events if that queue owns later processing retries.
+4. Returns exactly HTTP 204 only after the complete batch is accepted.
+
+```rust,no_run
+# async fn decode_and_hydrate(
+#     receiver: &silicon_hook_client::delivery::Receiver,
+#     client: &silicon_hook_client::Client,
+#     authorization: &str,
+#     webhook_id: &str,
+#     body: &[u8],
+# ) -> silicon_hook_client::Result<()> {
+let notifications = receiver.decode(authorization, webhook_id, body)?;
+let outcomes = receiver.resolve(client, &notifications).await?;
+// Persist/deduplicate every Event or Unavailable result before responding 204.
+# let _ = outcomes;
+# Ok(()) }
 ```
 
-The server’s WebSocket frame retains `type` and `data`, including replays. The local receiver adds delivery identity under top-level `metadata`. Event ID, Silicon ID, sequence, timestamp and original request remain available under `data.metadata`. Non-UTF-8 request bytes
-remain available in `data.metadata.request.body_base64`.
-Headers `silicon-hook-event-id` and `silicon-hook-delivery-sequence` make
-HTTP deduplication convenient. Consumers of the previous `type: event` shape
-must switch to `type: new_event` and read event details from `data.metadata`.
+The SDK does not mark a fetched event as accepted, keep deduplication state, or
+acknowledge Ting. Only Hook's structured `404 not_found`, after reference
+validation and current authorization, produces an `Unavailable` result. Hook
+retains payloads for 14 days; Ting can retain the reference longer. Saving this
+terminal result lets later deliveries continue without inventing missing work.
+The strict `hydrate` method instead fails on any missing original. Invalid,
+unauthorized, transient and protocol failures still reject the batch. Do not
+acknowledge a valid subset. A shared callback host must route
+notifications for other applications separately; this receiver rejects
+unhandled types. Batches are limited to 100 items and 2 MiB.
 
-A 2xx status acknowledges receipt. Redirects are not followed; 3xx, 4xx, 5xx,
-connection failures and the 20-second timeout all retry, with exponential delays
-up to 30 seconds. Responses do not need a special JSON body. Only after a
-successful response does the relay send upstream ACK. Deduplicate by event ID:
-a connection can fail after the recipient commits but before Hook receives ACK.
+The hydrated `Event` preserves the original provider request. Binary payloads
+use `request.body_base64`. `summary`, the source event ID, and the recorded
+`delivery_sequence` remain available; sequence is useful metadata and does not
+imply that Ting delivers in order.
 
-Each Silicon is processed sequentially. The WebSocket reader runs alongside
-delivery and continues answering pings during recipient retries. The backend
-limits each stream to 32 outstanding events; the relay has a bounded queue.
-Reconnect starts at the backend's persisted cursor. No separate local event
-spool is required, and stopping the relay does not lose pending deliveries.
-The backend's 14-day retention remains the maximum recovery horizon.
+## Lifecycle and delivery status
 
-Credential updates cancel old work and reconnect. Environment key rotation,
-reset or reconfiguration closes old sessions, so supply the current test key.
-A reset also clears delivery positions and retained events.
+Token refresh is explicit and owned by the host. Replace both credentials
+atomically and use the refreshed immutable `Client` for subsequent hydration.
+Environment rotation or restore preserves retained events and their original
+source generation. Clean destroys the old events, so queued references from
+before a clean cannot hydrate in the new world.
 
-## Local request API
+`publication(silicon, event_id)` separates pending publication, acceptance by
+Ting, and any available recipient receipt. Silent acceptance can occur when
+Ting has muted notifications; it does not prove the destination received one.
+Likewise a destination's HTTP 204 confirms its acceptance boundary, not that
+later application processing finished.
 
-The CLI daemon listens on `127.0.0.1:18479`, named
-`http://hook.localhost:18479`. `local::LocalClient` explicitly resolves that
-name to loopback. Programs using another HTTP client may use 127.0.0.1 directly
-or provide its equivalent resolver setting.
-
-Every `/request` call requires a local bearer token selecting one saved
-profile/environment. Obtain it with `hook [context] daemon token`. This token
-is separate from the IAM access token. The daemon injects the selected IAM
-bearer, organization and Hook test key; callers cannot override them. Requests
-with an Origin header are rejected, and Host must name the loopback service.
-
-POST `/request` with:
-
-```json
-{
-  "method": "GET",
-  "path": "/api/v1/silicons/cos:tos/hooks",
-  "query": [],
-  "headers": [],
-  "body_base64": ""
-}
-```
-
-Allowed methods are GET, POST, PUT, PATCH and DELETE. Paths must be literal
-public Hook API routes, `/api/version` or `/readyz`; encoded/traversal paths are
-rejected. Only Content-Type, Accept and Idempotency-Key can be set by the
-caller. Query entries are name/value pairs. Body bytes use standard base64.
-The local request limit is 2 MiB including the JSON envelope.
-
-The response acknowledges receipt with `received: true`, echoes the exact input
-JSON bytes as `request.body_base64`, the query string and original headers as
-`headers_base64` name/base64-value pairs, and includes the backend `response.status`,
-response headers and base64 body. This receipt confirms the local request was
-received; inspect the nested backend status to determine whether the action
-succeeded. On transport failure the nested response contains an error; retry a
-mutation using the same Idempotency-Key. Echoes are returned only to the caller
-and are not posted back to the provider or stored as Hook events.
-
-`local::serve_local` offers the same interface for embedded applications. Supply
-a watch channel of `LocalIdentity` values, a random control secret and a stop
-channel. The separate control secret authenticates `/health` and
-`POST /control/stop`. No network destination beyond loopback can be bound by
-this server API.
-
-
-## Shared system-daemon transport (client/CLI 0.5)
-
-The CLI daemon now prewarms one physical connection to `/api/v1/relay/ws`, even with no recipients. Each identity subscribes independently:
-
-```json
-{"type":"subscribe","subscription_id":"identity-1","token":"<actor-access-token>","org_id":"tos","silicon_ids":["cos:tos"],"app_secret":null,"test_key":null}
-```
-
-A sandbox subscription supplies `app_secret`; a legacy root-key subscription supplies `test_key`. Never supply both. These are TLS-protected frame bodies, never query parameters. The backend validates each actor, organization, target and sandbox independently. One failed subscription does not grant authority to another.
-
-The initial transport frame is `{"type":"relay_ready","protocol_version":1}`. Ordinary protocol-1 ready/event/ping/ack frames are wrapped as `{"type":"frame","subscription_id":"identity-1","frame":{...}}`. Send acknowledgments and logical pongs in that same wrapper. Physical `ping` frames receive an unwrapped `pong` carrying `ping_id`. Subscription closure is scoped to its identity. The direct `/api/v1/ws` contract remains available for existing consumers.
-
-Credential or destination changes replace the connection and replay unacknowledged events. Bounded per-stream queues and concurrent recipient workers keep heartbeats responsive while a receiver retries. There is one Hook origin per system daemon. Stateless SDK hosts can pass several `RelayRegistration` values to `run_shared_relay`.
-
-## Receiver metadata and optional signing
-
-Local receiver requests preserve the existing `type` and `data` and add top-level `metadata` containing `event_id`, `delivery_sequence`, `silicon_id` and optional `isi`. Accept additive fields. A successful response acknowledges only that identity's stream; other subscribers retain their own cursors.
-
-With `hook webhook <url> --secret-file ./key`, each local request carries:
-
-```text
-Silicon-Hook-Signature: t=<unix-seconds>,v1=<lowercase-hex-HMAC-SHA256>
-```
-
-Compute the HMAC over `<timestamp>.<complete raw body>` using the configured local secret. Reject old timestamps and compare signatures in constant time. Retries reuse the event ID and sequence but get a fresh timestamp/signature. The secret stays on the client and is never transmitted to Hook.
-
-For sandbox delivery, loopback is the default safe destination. Explicitly mark a remote sandbox receiver with `--test-destination` (Rust: `Recipient::with_test_destination(true)`). That receiver must simulate any email, SMS, payment or other production side effect.
+`unsubscribe(silicon)` removes only the current Carbon's receiving interest and
+queued observer sends. It preserves the primary Silicon's sends. An in-flight
+notification already accepted by Ting may still arrive and must pass current
+authorization during hydration.

@@ -5,7 +5,7 @@
 
 This understanding contains everything about how silicon hook would work, and what all is expected from the system. 
 
-So silicon hooks are webhooks on the system that silicons could utilize as webhook connections for various apps. 
+So silicon hook is our internal service to receive, verify and store webhooks from various apps. Ting will only be used as our internal delivery layer to send these events to silicons and carbons. The user never needs to know about Hook or Ting, the app using them handles the setup and authorization internally.
 
 # Glossary
 
@@ -33,7 +33,7 @@ For any silicon that authenticates onto silicon hook, see if they have a valid s
 
 There should be an endpoint to get all the hooks, it should return the name of the hook, the hook url, and when it last reached out.
 
-For every single request sent it should be sent in the format:
+For every single hook event sent through Ting, the hook event should be in the format:
 ```
 "type": "new_event",
 "data": {
@@ -44,7 +44,7 @@ For every single request sent it should be sent in the format:
 }
 ```
 
-Just these 2 feilds must be present in all sent. And metadata included inside data itself.
+Just these 2 feilds must be present in the hook event. And metadata included inside data itself. Ting wraps this in its own delivery format internally.
 
 
 # Rotate
@@ -171,7 +171,7 @@ For each endpoint maintain the logs for the requests that have been recieved fro
 
 {provider} triggered at HH:MM:SS DD-MM-YYYY IANA_ZONE_ID - this must be included in each hook request that is actuallty sent over, this keeps it clear which provider (name of the hook) sent it and when.
 
-For any new request if the signing for the webhook is enabled, use it to verify based on the defined algorithm and the signature defined to verify the request. Only if the request is verified send it over the websocket connections. 
+For any new request if the signing for the webhook is enabled, use it to verify based on the defined algorithm and the signature defined to verify the request. Only if the request is verified send it through Ting.
 
 
 # Safety
@@ -181,7 +181,7 @@ If an ip sends 20 requests that were unverified for an signature required webhoo
 
 # Accepted
 
-As soon as a webhook request is recieved let the sendee know that the message has been recieved successfully with a webhook.ok endpoint.  
+As soon as a webhook request is accepted and stored let the sendee know that the message has been recieved successfully with a webhook.ok endpoint. Store the pending Ting delivery along with the event, so if Ting is unavailable Hook can still receive webhooks and send them later.
 
 
 # Blocked
@@ -189,20 +189,16 @@ As soon as a webhook request is recieved let the sendee know that the message ha
 Maintain a seperate blocked_logs list, this would include all the unverified logs that weren't sent to the silicon, there should be an endpoint to even read the logs from the blocked_logs, the blocked_logs should have a ttl of 14 days, so only the blocked_logs of recent 14 days would be stored. 
 
 
-# Websocket
+# Delivery
 
-We maintain a websocket connection with the client (a client can serve single or multiple silicons/carbons). While authentication they will tell these are the silicon(s) it's trying to connect to.
+Hook sends events through Ting. Ting handles the shared websocket, local daemon and forwarding to the right silicon or carbon. Hook doesn't need its own delivery websocket or daemon.
 
-The server sends an application-level JSON `ping` every 30 seconds. The adapter must immediately reply with a minimal `pong` carrying the same `ping_id`. If no valid pong is received for two minutes, the backend closes with application code `4000` and reason `heartbeat-timeout`. Ping and pong are not stored, do not require ACK, and do not consume per-SID delivery sequences.
-
-The rust client for hook installed for silicon(s) on a local server, starts a daemon locally that would setup the listening endpoint at the time of authentication, this listening endpoint is not sent to the backend this is just for the client/cli to know which port to redirect the requests to for the said silicon. This link is required for client and cli login's. This would be the endpoint that the said silicon listens to so all the messages are reached, for each said message acknowledgment event is send, for each message that silicon desires to send we acknowledge the send along with repeating their exact request.) 
-
-Prewarm the websocket for each websocket connection maintiained. 
+The app handles recipient registration and authorization with IAM and Ting internally. No seperate login or delivery setup is needed from the user.
 
 
 # Acknowledgment
 
-For each hook event that was recieved and sent via websocket or even normal api request must recieve an acknowledged from the server for that particular webhook request that was sent via silicon hook onto the server. For all the unacknowledged webhook events it must automatically be attached in the next websocket connection.
+Hook keeps retrying the pending send until Ting confirms it has stored the event, using the same key for retries. Ting handles delivery acknowledgments, retries and reconnects after that. Delivery acknowledgment means the event was received, it doesn't mean the silicon has finished the work.
 
 
 # OBO
@@ -234,13 +230,13 @@ When a test environment is created, it would start empty.
 
 Honeycomb manages environment creation and lifecycle. Hook prepares its own isolated data when instructed, while IAM still handles test identities, authentication and webhooks.
 
-A test environment is basically the same hook where creating hooks, testing them, etc is possible. It uses test IAM and test hook together, so the entire flow can be tested inside one sandbox.
+A test environment is basically the same hook where creating hooks, testing them, etc is possible. It uses test IAM, test hook and test Ting together, so the entire flow can be tested inside one sandbox.
 
 ### Environment Lifecycle
 
 Hook would accept authenticated instructions from Honeycomb to prepare, update the key version, clean, disable, restore and permanently remove its test data. Use the shared environment_id, make operations safe to retry and report pending, completed or failed. These instructions must work even when test sessions are disabled.
 
-Cleaning clears the environment's hook endpoints, signing secrets, received events, delivery queues and logs and other test records. Keep Hook linked to the environment so later deletion, restoration and permanent removal still reach it. Check the environment revision and cleaning generation so old incoming requests, websocket deliveries or retries cannot recreate cleared events. Report completion only after Hook's cleanup finishes.
+Cleaning clears the environment's hook endpoints, signing secrets, received events, delivery queues and logs and other test records. Keep Hook linked to the environment so later deletion, restoration and permanent removal still reach it. Check the environment revision and cleaning generation so old incoming requests, Ting deliveries or retries cannot recreate cleared events. Report completion only after Hook's cleanup finishes.
 
 Only allow test access once shared readiness is confirmed, using IAM's current environment state where it enforces this. Disabling blocks access and deliveries immediately; restoring allows access again once ready and does not undo a clean. Report activity for retention decisions instead of independently retiring the environment.
 
@@ -272,7 +268,7 @@ Production credentials must not work in testing, and credentials from one test e
 
 If a supplied test secret is invalid, revoked, or belongs to an unavailable environment, return an error. Never silently continue in production.
 
-Each test hook URL, event and websocket subscription must resolve to its own environment. Disabled or cleared test endpoints must not accept new events, and test events must never reach production subscriptions.
+Each test hook URL, event and Ting delivery must resolve to its own environment. Disabled or cleared test endpoints must not accept new events, and test events must never reach production recipients.
 
 
 ### Webhooks and External Actions
@@ -302,7 +298,7 @@ Only above this line is what the hook backend would hold, below this would be th
 
 # Rust Package & CLI
 
-The Rust package & cli using that rust package are first hand client with an always running deamon if needed in the background. the UI will be a subset of the cli. make sure everything works via the CLI first, and then we'll make the UI. Everyone should be able to use the CLI/Rust Package (carbons, silicons, org, access keys, api keys, read, write, patch, delete, everything).
+The Rust package & cli using that rust package are for apps integrating with Hook and internal management. Delivery is handled by Ting. the UI will be a subset of the cli. make sure everything works via the CLI first, and then we'll make the UI. Everyone with the required access should be able to use the CLI/Rust Package (carbons, silicons, org, access keys, api keys, read, write, patch, delete, everything).
 
 The rust package would be stateless whereas the cli would be statefull. CLI built on top of the rust package.
 
@@ -332,14 +328,12 @@ And there should be an command to configure the home directory where the informa
 
 The Rust client package remains a normal project dependency and does not update itself at runtime. CLI releases and updates follow the Updates section below.
 
-Whenever someone authenticates as a silicon or carbon the client and cli both would have to give an webhook url to send the data to, so the webhook url would be configured after logging in. The webhook url would be the endpoint where we inform the said silicon or carbon, this is just required in the client and the cli. This endpoint won't be sent to the backend instead stored locally in a file along with the auth in case of cli. The client and cli acts as a relay and a daemon is launched for keeping the websocket connection alive with the backend for it, and when a message comes routing the message to the correct silicon or carbon via the webhook url assigned. And when you get a message to send or any request for that matter, acknowledge that you recieved the message along with the entire request. 
+The Hook client and cli don't need a receiving webhook url or a delivery daemon. The app handles Ting delivery setup internally.
 
 It should also expose these specific endpoints:
 1) `--help` which would give all the help documentation on how to use hook. So the user should be able to run `hook --help` and get the help docs.
 2) `iam --json` the user should be able to run `hook iam --json` which returns `app_id` alongside other information.
 3) `login status --json` the user should be able to run `hook login status --json`, reports successful authentication reports `authenticated: true`, alongside which carbon or silicon is it authenticated as.
-4) `webhook <webhook-url>` the user should be able to run `hook webhook <webhook-url>` to configure the webhook endpoint in case of silicon hook, this is the webhook you send all the requests to for that silicon. 
-5) `unhook` the user should be able to run `hook unhook` to unhook the configured webhook connection which would simply unhook the said user.
 
 
 # Email
@@ -349,7 +343,7 @@ We use postmark as our mail provider. You have an email at [hook@teamofsilicons.
 
 # Cli experience
 
-CLI is the primary way to interact with IAM Apps. It should be built for both Carbons & Silicons. Any other interface (like website) will be a subset of the CLI.
+CLI is the primary way to manage Hook internally. It should be built for both Carbons & Silicons. Any other interface (like website) will be a subset of the CLI.
 
 The cli should never ask for credentials from either silicon or carbon. it should just ask for short lived tokens that the user can generate from the official iam cli, or from the web where the the user is sent to auth concent screen.
 
@@ -365,12 +359,10 @@ every app cli must support the following commands:
 
 `app login status --json` tells if its {authenticated: true, ...}
 
-If your app is not just reactive, but also proactive (sends msg upfront to a silicon), it must also support the following commands:
-`app webhook "..."` takes in the URL to send updates to. optionally a secret.
-`app unhook` to remove receiving updates.
+Sending events to a silicon is handled internally through Ting, so Hook doesn't need its own webhook/unhook commands for delivery.
 
 App Internals:
-All apps are suggested to make a rust library which is stateless. then 2 things that uses the rust library: always running daemon, and a cli interface that talks to the daemon.
+Hook has a stateless rust library and a cli built on it. Ting handles the delivery daemon.
 
 On the docs page, show `honeycomb install 'tos>hook'` to install the CLI, followed by how to log in.
 
@@ -396,14 +388,7 @@ Give the information of the github repo, online docs, rust package, etc inside t
 
 The CLI as i told before is a tree of documentation. Show possible paths, and then let someone go deeper along with documentation.
 
-for webhooks, the daemon prewarms ONE websocket with server and subscribes to updates for all the silicons that have registered with the daemon. DO NOT CONNECT MULTIPLE WEBSOCKETS FOR SILICONS ON THE SAME SYSTEM.
-
-send the request to the silicon over at the webhook link in the following shape:
-{
-	"type": "...",
-	"data": {...},
-	"metadata": {...}
-}
+Ting handles the shared websocket and local delivery format for the hook events described above.
 
 
 # Docs
@@ -412,7 +397,7 @@ There are two kinds of documentations: informative & instructive.
 
 Always keep instructive documentation up front, easy to use, direct with clear instructions & link to informative documents to know why its done this way. Instructive documents should be the landing point of the product for both carbons & silicons.
 
-It can give carbon the instructions on how to install & use it, or how to ask their silicon to use it.
+For carbons managing Hook internally, it can give instructions on how to install & use it, or how to ask their silicon to use it.
 
 For silicons, it can be that, but also how to do a lot more with it. Esp. things like building on top of it. Make it very clear what is expected, what is mandatory and how does the system work.
 

@@ -86,10 +86,11 @@ pub(super) async fn scope(
 ) -> Response {
     match resolve(&mut state, request.uri().path(), request.headers()).await {
         Ok(()) => {
-            let contract_headers = if request.uri().path().starts_with("/api/v1/")
-                && request.uri().path() != "/api/v1/relay/ws"
+            let contract_headers = if let Some((major, relative)) =
+                super::version::split_path(request.uri().path())
+                && !(major == "v1" && relative == "relay/ws")
             {
-                match super::contracts::admit(&state).await {
+                match super::contracts::admit_major(&state, major).await {
                     Ok(headers) => headers,
                     Err(error) => return error.into_response(),
                 }
@@ -124,19 +125,22 @@ pub(crate) async fn resolve(
 ) -> Result<(), AppError> {
     let key = test_key(headers)?;
     let selector = app_secret(headers)?;
+    let versioned = super::version::split_path(path);
     if selector.is_some()
-        && (!path.starts_with("/api/v1/")
+        && (versioned.is_none()
             || path.contains("/silicon/")
-            || path.starts_with("/api/v1/testing-environment"))
+            || versioned.is_some_and(|(_, relative)| relative.starts_with("testing-environment")))
     {
         return Err(AppError::Forbidden);
     }
     // Root administration must work before IAM application bootstrap. Its
     // handlers validate the test key directly without creating an actor session.
-    if path.starts_with("/api/v1/testing-environment/") || path == "/api/v1/testing-environment" {
+    if versioned.is_some_and(|(_, relative)| {
+        relative.starts_with("testing-environment/") || relative == "testing-environment"
+    }) {
         return Ok(());
     }
-    if path.starts_with("/api/v1/testing-environments") {
+    if versioned.is_some_and(|(_, relative)| relative.starts_with("testing-environments")) {
         if key.is_some() {
             return Err(AppError::validation("production_identity_required"));
         }
@@ -161,7 +165,7 @@ pub(crate) async fn resolve(
     } else if let Some(secret) = selector {
         Some(service(state)?.resolve_app_secret(secret).await?)
     } else if let Some(key) = key {
-        if !path.starts_with("/api/v1/") {
+        if versioned.is_none() {
             return Err(AppError::bad_request("test_key_not_allowed_on_ingress"));
         }
         Some(service(state)?.resolve_key(key).await?)

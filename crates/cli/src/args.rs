@@ -5,9 +5,9 @@ use uuid::Uuid;
 #[command(
     name = "hook",
     version,
-    about = "Signed webhooks for Silicons, with reliable local delivery.",
-    long_about = "Manage Silicon Hook through its official Rust client. Sign in with an IAM short-lived token, then configure your delivery URL with hook webhook. Use the same commands in a sandbox with --test <environment-id>.",
-    after_help = "Start: hook iam --json; hook login <slt> --org tos\nDelivery: hook webhook http://127.0.0.1:9000/events\nThen: hook --silicon cos:tos create GitHub\nExplore: hook commands; hook <command> --help\nDocs: https://docs.hook.teamofsilicons.com · Source: https://github.com/teamofsilicons/silicon-hook\nRust: https://crates.io/crates/silicon-hook-client · Bugs: hook report --help"
+    about = "Manage signed provider webhooks and their delivery status.",
+    long_about = "Manage Silicon Hook through its official Rust client. Sign in with an IAM short-lived token. Applications handle receiving internally; this CLI does not run a delivery daemon. Use the same commands in a sandbox with --test <environment-id>.",
+    after_help = "Start: hook iam --json; hook login <slt> --org tos\nThen: hook --silicon cos:tos create GitHub\nInspect: hook events; hook publication <event-id>\nExplore: hook commands; hook <command> --help\nDocs: https://docs.hook.teamofsilicons.com · Source: https://github.com/teamofsilicons/silicon-hook\nRust: https://crates.io/crates/silicon-hook-client · Bugs: hook report --help"
 )]
 pub struct Cli {
     #[arg(
@@ -53,13 +53,6 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
-        env = "ISI",
-        help = "Optional internal Silicon identifier stored in local delivery metadata"
-    )]
-    pub isi: Option<String>,
-    #[arg(
-        long,
-        global = true,
         help = "Structured JSON output without next-step prose"
     )]
     pub json: bool,
@@ -90,19 +83,6 @@ pub enum Command {
     Login(Login),
     /// Discover the IAM app_id needed to request a short-lived token; no login needed.
     Iam,
-    /// Configure or replace this identity's local delivery URL and start its relay.
-    Webhook {
-        webhook_url: String,
-        #[arg(long, help = "Optional local delivery HMAC key file; '-' reads stdin")]
-        secret_file: Option<String>,
-        #[arg(
-            long,
-            help = "Explicitly mark a remote webhook as a sandbox-only destination"
-        )]
-        test_destination: bool,
-    },
-    /// Detach this identity's local delivery URL, retaining login and pending events.
-    Unhook,
     /// Revoke the saved refresh-token family and remove the local session.
     Logout,
     /// Show local session metadata without exposing tokens.
@@ -177,18 +157,22 @@ pub enum Command {
     Events(History),
     /// Read withheld request history, retained for 14 days.
     Blocked(History),
-    /// Pull, acknowledge or inspect durable delivery positions.
-    Deliveries {
+    /// Fetch one retained event and its original provider request.
+    Event { id: Uuid },
+    /// Inspect publication and available recipient receipts for one event.
+    Publication { event_id: Uuid },
+    /// Administer the organization's dedicated internal delivery publisher.
+    Publisher {
         #[command(subcommand)]
-        action: Deliveries,
+        action: Publisher,
+    },
+    /// Manage internal receiving registration and the current Carbon's interest.
+    Receiving {
+        #[command(subcommand)]
+        action: Receiving,
     },
     /// Register this Silicon's IAM notifications as a Hook connection.
     ConnectIam,
-    /// Read a live WebSocket stream; answer heartbeats automatically.
-    Listen {
-        #[arg(long, help = "Acknowledge each event after it is written to stdout")]
-        ack: bool,
-    },
     /// Create, configure, reset and recover isolated testing environments.
     Env {
         #[command(subcommand)]
@@ -199,11 +183,6 @@ pub enum Command {
         #[command(subcommand)]
         action: Config,
     },
-    /// Manage the persistent local relay and identity-specific subscriptions.
-    Daemon {
-        #[command(subcommand)]
-        action: Daemon,
-    },
     /// Inspect backend readiness and API compatibility.
     System {
         #[command(subcommand)]
@@ -211,7 +190,7 @@ pub enum Command {
     },
     /// Discover every command and its complete usage, without signing in.
     Commands,
-    /// Read bundled guides: overview, api, client, cli, iam, signatures, testing, testing-api, testing-client, testing-cli, relay, contracts, configuration, telemetry, deployment.
+    /// Read bundled guides: overview, api, client, cli, iam, signatures, testing, testing-api, testing-client, testing-cli, delivery, delivery-issues, relay, contracts, configuration, telemetry, deployment.
     Docs {
         #[arg(default_value = "overview")]
         topic: String,
@@ -222,7 +201,7 @@ pub enum Command {
 #[command(
     args_conflicts_with_subcommands = true,
     subcommand_negates_reqs = true,
-    after_help = "Next: hook webhook <webhook-url> to receive events; hook login status --json to verify your identity."
+    after_help = "Next: hook login status --json to verify your identity; hook list to inspect provider webhooks. Applications handle receiving internally."
 )]
 pub struct Login {
     #[command(subcommand)]
@@ -245,11 +224,6 @@ pub struct Login {
         help = "File containing only the short-lived token; '-' reads stdin"
     )]
     pub slt_file: Option<String>,
-    #[arg(
-        long,
-        help = "Local recipient URL; retained locally and never sent to the backend"
-    )]
-    pub webhook_url: Option<String>,
 }
 
 #[derive(Debug, Subcommand)]
@@ -273,18 +247,48 @@ pub struct History {
     pub cursor: Option<String>,
 }
 #[derive(Debug, Subcommand)]
-pub enum Deliveries {
-    /// Pull pending events without acknowledging them.
-    List {
-        #[arg(long, default_value_t = 100)]
-        limit: u32,
-        #[arg(long)]
-        after: Option<i64>,
+pub enum Publisher {
+    /// Provision the publisher as a Carbon owner/admin; prints only safe metadata.
+    #[command(
+        after_help = "Internal application setup. Requires --idempotency-key; reuse the same key and SLT file after an interrupted request. No --silicon selection is needed."
+    )]
+    Provision {
+        #[arg(long, help = "Dedicated publisher's Hook SLT file; '-' reads stdin")]
+        slt_file: String,
+        #[arg(
+            long,
+            help = "Explicitly recover an existing rejected publisher family"
+        )]
+        replace_rejected: bool,
     },
-    /// Confirm all deliveries through this contiguous sequence.
-    Ack { through: i64 },
-    /// Read this identity's stored acknowledgment cursor.
-    Cursor,
+}
+#[derive(Debug, Subcommand)]
+pub enum Receiving {
+    /// Print the validated non-secret scope for an internal testing receiver.
+    Scope,
+    /// Write a scoped testing capability to a new private file; starts no receiver.
+    #[command(
+        after_help = "Requires a selected test environment and --idempotency-key. Save `hook receiving scope` to a file first. Retry uncertainty with the same scope file and key. Renew explicitly with --receiver-id and a new key. The output file must not already exist; no token is printed and no daemon is started. Windows uses a verified owner-only ACL and may retain an empty reservation after failure; retry with a new output path and the original scope and key."
+    )]
+    Bootstrap {
+        #[arg(long, help = "Pinned JSON scope file, retained unchanged for retries")]
+        scope_file: String,
+        #[arg(long, help = "New private 0600 capability file; never overwritten")]
+        output: String,
+        #[arg(
+            long,
+            help = "Existing receiver ID to renew explicitly with a new operation key"
+        )]
+        receiver_id: Option<String>,
+    },
+    /// Register the authenticated actor for internal application delivery; starts no receiver.
+    Register,
+    /// Read this Carbon's subscription for the selected --silicon.
+    Status,
+    /// Receive future events for the selected --silicon, subject to current IAM visibility.
+    Subscribe,
+    /// Stop this Carbon's future and queued observer sends for the selected --silicon.
+    Unsubscribe,
 }
 #[derive(Debug, Subcommand)]
 pub enum Environment {
@@ -372,27 +376,6 @@ pub enum System {
     Health,
 }
 
-#[derive(Debug, Subcommand)]
-pub enum Daemon {
-    /// Start the background relay, if it is not already running.
-    Start,
-    /// Run in the foreground; useful under a service manager.
-    Run,
-    /// Show daemon health and number of configured identities.
-    Status,
-    /// Stop the relay; backend events remain pending for replay.
-    Stop,
-    /// Replace the selected identity's subscribed Silicons. No IDs unsubscribes all.
-    Subscribe { silicons: Vec<String> },
-    /// Print the selected identity's local API token. Treat the output as a secret.
-    Token,
-    /// Send a LocalRequest JSON file through this identity and echo the exact receipt.
-    Request {
-        #[arg(long)]
-        file: String,
-    },
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -402,11 +385,7 @@ mod tests {
         let cli = Cli::try_parse_from(["hook", "login", "opaque-slt"]).unwrap();
         assert!(matches!(
             cli.command,
-            Command::Login(Login {
-                token: Some(_),
-                webhook_url: None,
-                ..
-            })
+            Command::Login(Login { token: Some(_), .. })
         ));
         let cli = Cli::try_parse_from(["hook", "login", "status", "--json"]).unwrap();
         assert!(cli.json);
@@ -422,11 +401,15 @@ mod tests {
     }
 
     #[test]
-    fn delivery_and_discovery_support_test_context() {
+    fn receiving_and_discovery_support_test_context() {
         for command in [
             vec!["iam", "--json"],
-            vec!["webhook", "http://127.0.0.1/events"],
-            vec!["unhook"],
+            vec!["receiving", "register"],
+            vec!["receiving", "status"],
+            vec!["receiving", "subscribe"],
+            vec!["receiving", "unsubscribe"],
+            vec!["event", "00000000-0000-4000-8000-000000000001"],
+            vec!["publication", "00000000-0000-4000-8000-000000000001"],
         ] {
             let mut args = vec![
                 "hook",
@@ -439,6 +422,24 @@ mod tests {
             let cli = Cli::try_parse_from(args).unwrap();
             assert!(cli.test.is_some());
             assert_eq!(cli.profile, "reviewer");
+        }
+    }
+
+    #[test]
+    fn retired_transports_and_login_destination_flags_are_not_accepted() {
+        for command in [
+            vec!["webhook", "http://127.0.0.1/events"],
+            vec!["unhook"],
+            vec!["daemon", "start"],
+            vec!["listen"],
+            vec!["deliveries", "cursor"],
+            vec!["deliveries", "ack", "1"],
+            vec!["login", "slt", "--webhook-url", "http://127.0.0.1/events"],
+            vec!["--isi", "internal-id", "iam"],
+        ] {
+            let mut args = vec!["hook"];
+            args.extend(command);
+            assert!(Cli::try_parse_from(args).is_err());
         }
     }
 

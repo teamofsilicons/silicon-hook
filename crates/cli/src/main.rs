@@ -1,9 +1,9 @@
 mod args;
-mod daemon;
+mod receiving;
 mod store;
 
 use anyhow::{Context as _, Result};
-use args::{Cli, Command, Config, Deliveries, Environment, Rotate, System};
+use args::{Cli, Command, Config, Environment, Publisher, Receiving, Rotate, System};
 use clap::{CommandFactory as _, FromArgMatches as _};
 use serde::Serialize;
 use silicon_hook_client::{Client, Mutation, models::*};
@@ -180,11 +180,6 @@ fn target(cli: &Cli, profile: &store::Profile) -> Result<String> {
                 .filter(|s| s.tokens.actor.kind == "silicon")
                 .map(|s| s.tokens.actor.id.clone())
         })
-        .or_else(|| {
-            session
-                .filter(|s| s.silicons.len() == 1)
-                .and_then(|s| s.silicons.first().cloned())
-        })
         .context("Choose a Silicon with --silicon <id>, or sign in as that Silicon")
 }
 
@@ -216,9 +211,37 @@ async fn run(cli: &Cli) -> Result<()> {
     if let Command::Docs { topic } = &cli.command {
         return docs(topic);
     }
-    if let Command::Daemon { action } = &cli.command {
-        return daemon::command(cli, action).await;
+    if matches!(cli.command, Command::Publisher { .. }) {
+        anyhow::ensure!(
+            cli.idempotency_key.is_some(),
+            "publisher provision requires --idempotency-key; reuse the same key and SLT when retrying"
+        );
     }
+    if matches!(
+        cli.command,
+        Command::Receiving {
+            action: Receiving::Scope | Receiving::Bootstrap { .. }
+        }
+    ) {
+        anyhow::ensure!(
+            cli.test.is_some() && !cli.production,
+            "scoped receiving requires a selected test environment"
+        );
+    }
+    let mut receiver_bootstrap = if let Command::Receiving {
+        action: Receiving::Bootstrap {
+            scope_file, output, ..
+        },
+    } = &cli.command
+    {
+        let key = cli.idempotency_key.as_ref().context("receiving bootstrap requires --idempotency-key; reuse the same scope file and key after uncertainty")?;
+        Mutation::with_key(key.clone())?;
+        let scope =
+            receiving::read_scope(scope_file, cli.test.context("select a test environment")?)?;
+        Some((scope, receiving::PrivateOutput::reserve(output)?))
+    } else {
+        None
+    };
     let mut stored = LockedStore::open()?;
     if let Command::Env {
         action: Environment::Use { app_secret_file },
@@ -229,6 +252,9 @@ async fn run(cli: &Cli) -> Result<()> {
         let client = store::select_client(p, None, cli.url.as_deref(), None)?
             .with_test_app_secret(secret.expose())?;
         let env = client.selected_environment().await?;
+        // select_client already rejects changing an existing credential-bound
+        // profile. Bind a fresh profile to the origin that verified this secret.
+        p.url = client.base_url().as_str().to_owned();
         p.test_app_secrets.insert(env.id, secret);
         p.test_names.insert(env.id, env.name.clone());
         p.test_orgs.insert(env.id, env.org_id.clone());
@@ -250,62 +276,6 @@ async fn run(cli: &Cli) -> Result<()> {
     if matches!(&cli.command, Command::Login(args) if args.action.is_some()) {
         return login_status(cli, &mut stored).await;
     }
-    if matches!(cli.command, Command::Webhook { .. } | Command::Unhook) {
-        let recipient = match &cli.command {
-            Command::Webhook { webhook_url, .. } => {
-                Some(silicon_hook_client::Recipient::new(webhook_url)?)
-            }
-            _ => None,
-        };
-        let p = stored.profile(&cli.profile);
-        // Validate profile binding before modifying local configuration.
-        store::select_client(p, cli.test, cli.url.as_deref(), cli.org.as_deref())?;
-        let session = match cli.test {
-            Some(id) => p.test_sessions.get_mut(&id),
-            None => p.session.as_mut(),
-        }
-        .context("Not signed in; run hook login <slt> first")?;
-        if let Command::Webhook {
-            secret_file,
-            test_destination,
-            ..
-        } = &cli.command
-        {
-            session.webhook_secret = secret_file.as_deref().map(read_secret).transpose()?;
-            session.test_destination = *test_destination;
-            session.isi = cli.isi.clone().or(session.isi.clone());
-            if let Some(recipient) = &recipient {
-                recipient
-                    .clone()
-                    .with_test_destination(*test_destination)
-                    .validate_plane(cli.test.is_some())?;
-            }
-        } else {
-            session.webhook_secret = None;
-        }
-        session.webhook_url = recipient.as_ref().map(|r| r.url().to_string());
-        let destination = session.webhook_url.clone();
-        stored.save()?;
-        drop(stored);
-        if recipient.is_some() {
-            daemon::ensure_started().await?;
-        }
-        print(
-            &serde_json::json!({"hooked":destination.is_some(),"webhook_url":destination,
-            "profile":cli.profile,"test":cli.test,"applies_within_seconds":5}),
-        )?;
-        if !cli.json {
-            eprintln!(
-                "{}",
-                if recipient.is_some() {
-                    "Next: hook login status --json; hook daemon status"
-                } else {
-                    "Delivery detached. Reconnect with hook webhook <webhook-url>."
-                }
-            );
-        }
-        return Ok(());
-    }
     if let Command::Whoami = &cli.command {
         let p = stored.profile(&cli.profile);
         let session = match cli.test {
@@ -314,7 +284,7 @@ async fn run(cli: &Cli) -> Result<()> {
         };
         let s = session.context("Not signed in; run hook login --help")?;
         return print(
-            &serde_json::json!({"profile":cli.profile,"test":cli.test,"actor":s.tokens.actor,"org_id":s.tokens.org_id,"expires_at":s.expires_at,"webhook_url":s.webhook_url}),
+            &serde_json::json!({"profile":cli.profile,"test":cli.test,"actor":s.tokens.actor,"org_id":s.tokens.org_id,"expires_at":s.expires_at}),
         );
     }
     if !matches!(
@@ -374,11 +344,6 @@ async fn run(cli: &Cli) -> Result<()> {
     match &cli.command {
         Command::Login(args) => {
             let mut stored = stored.take().context("missing login state")?;
-            let recipient = args
-                .webhook_url
-                .as_deref()
-                .map(silicon_hook_client::Recipient::new)
-                .transpose()?;
             let slt = zeroize::Zeroizing::new(match &args.slt {
                 Some(s) => s.clone(),
                 None => match &args.token {
@@ -390,7 +355,7 @@ async fn run(cli: &Cli) -> Result<()> {
                     )?,
                 },
             });
-            let tokens = client.authenticate(&slt, &mutation).await?;
+            let tokens = client.login(&slt, &mutation).await?;
             let actor = tokens.actor.clone();
             let p = stored.profile(&cli.profile);
             if let Some(url) = &cli.url {
@@ -398,50 +363,34 @@ async fn run(cli: &Cli) -> Result<()> {
             }
             let org = cli.org.clone().or(tokens.org_id.clone());
             let session = Session {
-                webhook_secret: None,
-                isi: cli.isi.clone(),
-                test_destination: false,
-                expires_at: store::now() + tokens.expires_in,
-                silicons: cli
-                    .silicon
-                    .clone()
-                    .into_iter()
-                    .chain(if cli.silicon.is_none() && actor.kind == "silicon" {
-                        Some(actor.id.clone())
-                    } else {
-                        None
-                    })
-                    .collect(),
-                relay_token: Some(Secret::new(uuid::Uuid::new_v4().simple().to_string())),
+                expires_at: store::now().saturating_add(tokens.expires_in),
                 pending_refresh_key: None,
                 refresh_started_at: None,
                 tokens,
-                webhook_url: args.webhook_url.clone(),
             };
             if let Some(id) = cli.test {
                 p.test_sessions.insert(id, session);
                 if let Some(org) = org {
                     p.test_orgs.insert(id, org);
                 }
+                if let Some(silicon) = &cli.silicon {
+                    p.test_silicons.insert(id, silicon.clone());
+                }
             } else {
                 p.session = Some(session);
                 p.org = org;
+                if let Some(silicon) = &cli.silicon {
+                    p.silicon = Some(silicon.clone());
+                }
             }
             stored.save()?;
             drop(stored);
-            daemon::ensure_started().await?;
             print(
-                &serde_json::json!({"signed_in":true,"authenticated":true,"actor":actor,"profile":cli.profile,"test":cli.test,"webhook_url":args.webhook_url,"relay":"http://hook.localhost:18479"}),
+                &serde_json::json!({"signed_in":true,"authenticated":true,"actor":actor,"profile":cli.profile,"test":cli.test}),
             )?;
-            if !cli.json && recipient.is_none() {
+            if !cli.json {
                 eprintln!(
-                    "Next: hook webhook <webhook-url> to receive events. Check your identity with hook login status --json."
-                );
-            }
-            if !cli.json && actor.kind == "carbon" && cli.silicon.is_none() {
-                eprintln!(
-                    "Choose streams for this Carbon: hook --profile {} daemon subscribe <silicon-id>...",
-                    cli.profile
+                    "Next: hook login status --json; hook list. Applications handle receiving internally."
                 );
             }
             return Ok(());
@@ -589,18 +538,56 @@ async fn run(cli: &Cli) -> Result<()> {
                 )
                 .await?,
         )?,
-        Command::Deliveries { action } => match action {
-            Deliveries::List { limit, after } => print(
+        Command::Event { id } => print(&client.event(&target(cli, &profile)?, *id, None).await?)?,
+        Command::Publication { event_id } => {
+            print(
                 &client
-                    .deliveries(&target(cli, &profile)?, *limit, *after)
+                    .publication(&target(cli, &profile)?, *event_id)
                     .await?,
-            )?,
-            Deliveries::Ack { through } => print(
-                &client
-                    .acknowledge(&target(cli, &profile)?, *through, &mutation)
-                    .await?,
-            )?,
-            Deliveries::Cursor => print(&client.delivery_cursor(&target(cli, &profile)?).await?)?,
+            )?;
+        }
+        Command::Publisher { action } => match action {
+            Publisher::Provision {
+                slt_file,
+                replace_rejected,
+            } => {
+                let slt = read_secret(slt_file)?;
+                let metadata = if *replace_rejected {
+                    client.replace_rejected_publisher(&slt, &mutation).await?
+                } else {
+                    client.provision_publisher(&slt, &mutation).await?
+                };
+                print(&metadata)?;
+            }
+        },
+        Command::Receiving { action } => match action {
+            Receiving::Scope => print(&client.receiver_scope().await?)?,
+            Receiving::Bootstrap { receiver_id, .. } => {
+                let (scope, mut output) = receiver_bootstrap
+                    .take()
+                    .context("missing receiver output reservation")?;
+                let capability = if let Some(id) = receiver_id {
+                    client.renew_receiver(&scope, id, &mutation).await?
+                } else {
+                    client.bootstrap_receiver(&scope, &mutation).await?
+                };
+                print(&output.write(&capability)?)?;
+            }
+            Receiving::Register => print(&client.register_recipient().await?)?,
+            Receiving::Status => {
+                let subscription = client
+                    .receiving_subscription(&target(cli, &profile)?)
+                    .await?;
+                print(
+                    &serde_json::json!({"receiving":subscription.is_some(),"subscription":subscription}),
+                )?;
+            }
+            Receiving::Subscribe => print(&client.subscribe(&target(cli, &profile)?).await?)?,
+            Receiving::Unsubscribe => {
+                let silicon = target(cli, &profile)?;
+                client.unsubscribe(&silicon).await?;
+                print(&serde_json::json!({"receiving":false,"silicon_id":silicon}))?;
+            }
         },
         Command::ConnectIam => print(
             &client
@@ -621,36 +608,19 @@ async fn run(cli: &Cli) -> Result<()> {
             System::Version => print(&client.version().await?)?,
             System::Health => print(&client.health().await?)?,
         },
-        Command::Listen { ack } => {
-            let silicon = target(cli, &profile)?;
-            // Never hold the state lock while a long-lived stream is running.
-            drop(stored);
-            let mut stream = client.stream(&[silicon]).await?;
-            loop {
-                tokio::select! {
-                    _=tokio::signal::ctrl_c()=>{stream.close().await?;break;},
-                    frame=stream.next()=>match frame? {
-                        Some(frame)=>{print(&frame)?;if *ack && let silicon_hook_client::ServerFrame::NewEvent{data}=frame {stream.acknowledge(&data.metadata.silicon_id,data.metadata.delivery_sequence).await?;}},
-                        None=>break,
-                    }
-                }
-            }
-            return Ok(());
-        }
-        Command::Webhook { .. }
-        | Command::Unhook
-        | Command::Whoami
+        Command::Whoami
         | Command::Commands
         | Command::Report { .. }
         | Command::About
         | Command::Docs { .. }
-        | Command::Config { .. }
-        | Command::Daemon { .. } => {
+        | Command::Config { .. } => {
             unreachable!()
         }
     }
     if !cli.json {
-        eprintln!("Next: hook list · hook events · hook deliveries list · hook <command> --help");
+        eprintln!(
+            "Next: hook list · hook events · hook publication <event-id> · hook <command> --help"
+        );
     }
     Ok(())
 }
@@ -686,8 +656,7 @@ async fn login_status(cli: &Cli, stored: &mut LockedStore) -> Result<()> {
     print(
         &serde_json::json!({"authenticated":status.authenticated,"actor":status.actor,
         "org_id":status.org_id,"profile":cli.profile,"test":cli.test,
-        "expires_at":session.map(|s| s.expires_at),"webhook_url":session.and_then(|s| s.webhook_url.as_ref()),
-        "hooked":session.is_some_and(|s| s.webhook_url.is_some())}),
+        "expires_at":session.map(|s| s.expires_at)}),
     )
 }
 
@@ -885,9 +854,11 @@ fn docs(topic: &str) -> Result<()> {
         "testing-api" => include_str!("../docs/testing/api.md"),
         "testing-client" => include_str!("../docs/testing/client.md"),
         "testing-cli" => include_str!("../docs/testing/cli.md"),
-        "delivery" | "relay" => include_str!("../docs/client/relay.md"),
+        "delivery" => include_str!("../docs/ting-delivery.md"),
+        "delivery-issues" => include_str!("../docs/ting-integration-issues.md"),
+        "relay" => include_str!("../docs/client/relay.md"),
         _ => anyhow::bail!(
-            "Unknown guide; choose overview, api, client, cli, iam, signatures, testing, testing-api, testing-client, testing-cli, relay, contracts, configuration, telemetry or deployment"
+            "Unknown guide; choose overview, api, client, cli, iam, signatures, testing, testing-api, testing-client, testing-cli, delivery, delivery-issues, relay, contracts, configuration, telemetry or deployment"
         ),
     };
     println!("{text}");

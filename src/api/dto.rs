@@ -381,6 +381,7 @@ pub struct EventResponse {
     hook_id: HookId,
     provider: String,
     delivery_sequence: i64,
+    summary: String,
     #[serde(with = "time::serde::rfc3339")]
     received_at: OffsetDateTime,
     request: CapturedRequestResponse,
@@ -395,6 +396,7 @@ impl From<&EventRecord> for EventResponse {
             hook_id: event.hook_id(),
             provider: event.provider().as_str().to_owned(),
             delivery_sequence: event.delivery_sequence().get(),
+            summary: event.summary().to_owned(),
             received_at: event.received_at(),
             request: CapturedRequestResponse::from_domain(event.request()),
         }
@@ -494,16 +496,6 @@ pub(super) struct HealthResponse {
 pub(super) struct VersionResponse {
     pub(super) service: &'static str,
     pub(super) version: &'static str,
-}
-
-/// Outcome of the unversioned API-version handshake.
-#[derive(Clone, Copy, Debug, Serialize)]
-pub(super) struct ApiVersionResponse {
-    pub(super) service: &'static str,
-    pub(super) selected_api_version: &'static str,
-    pub(super) supported_api_versions: &'static [&'static str],
-    pub(super) build: &'static str,
-    pub(super) commit: &'static str,
 }
 
 #[cfg(test)]

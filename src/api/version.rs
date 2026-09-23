@@ -13,7 +13,7 @@ use http::{HeaderMap, HeaderName, HeaderValue, header};
 use crate::error::AppError;
 
 /// API majors this build serves, highest first.
-pub const SUPPORTED_API_VERSIONS: &[&str] = &["v1"];
+pub const SUPPORTED_API_VERSIONS: &[&str] = &["v2", "v1"];
 /// Request header carrying the client's supported majors.
 pub const SUPPORTED_API_VERSIONS_HEADER: HeaderName =
     HeaderName::from_static("silicon-hook-supported-api-versions");
@@ -21,7 +21,6 @@ pub const SUPPORTED_API_VERSIONS_HEADER: HeaderName =
 /// client pins it, on every versioned request.
 pub const API_VERSION_HEADER: HeaderName = HeaderName::from_static("silicon-hook-api-version");
 const VARY_VALUE: HeaderValue = HeaderValue::from_static("Silicon-Hook-Supported-API-Versions");
-const VERSIONED_PREFIX: &str = "/api/v1/";
 const MAX_ADVERTISED_VERSIONS: usize = 16;
 
 /// Selects the highest API major both sides support.
@@ -34,8 +33,19 @@ const MAX_ADVERTISED_VERSIONS: usize = 16;
 /// Returns `400 invalid_api_version_header` for an empty or oversized list
 /// and `406 api_version_unsupported` when no major is shared.
 pub fn negotiate(advertised: Option<&str>) -> Result<&'static str, AppError> {
+    negotiate_available(advertised, SUPPORTED_API_VERSIONS)
+}
+
+/// Selects a supported major whose persisted contract has not sunset.
+pub(super) fn negotiate_available(
+    advertised: Option<&str>,
+    available: &[&'static str],
+) -> Result<&'static str, AppError> {
     let Some(advertised) = advertised else {
-        return Ok(SUPPORTED_API_VERSIONS[0]);
+        return available
+            .first()
+            .copied()
+            .ok_or(AppError::ApiVersionUnsupported);
     };
     let requested = advertised
         .split(',')
@@ -46,7 +56,7 @@ pub fn negotiate(advertised: Option<&str>) -> Result<&'static str, AppError> {
     if requested.is_empty() || requested.len() > MAX_ADVERTISED_VERSIONS {
         return Err(AppError::bad_request("invalid_api_version_header"));
     }
-    SUPPORTED_API_VERSIONS
+    available
         .iter()
         .copied()
         .find(|supported| {
@@ -55,6 +65,17 @@ pub fn negotiate(advertised: Option<&str>) -> Result<&'static str, AppError> {
                 .any(|candidate| candidate.eq_ignore_ascii_case(supported))
         })
         .ok_or(AppError::ApiVersionUnsupported)
+}
+
+/// Returns the served major and relative path for a versioned API route.
+#[must_use]
+pub(super) fn split_path(path: &str) -> Option<(&'static str, &str)> {
+    SUPPORTED_API_VERSIONS.iter().copied().find_map(|major| {
+        path.strip_prefix("/api/")?
+            .strip_prefix(major)?
+            .strip_prefix('/')
+            .map(|relative| (major, relative))
+    })
 }
 
 /// Reads the client's advertisement, which must occur at most once.
@@ -93,9 +114,9 @@ pub fn response_headers(selected: &'static str) -> HeaderMap {
 /// Returns `400 api_version_mismatch` when the pin disagrees with the route
 /// and `400 duplicate_header` when the pin is repeated.
 pub fn check_pinned(headers: &HeaderMap, path: &str) -> Result<(), AppError> {
-    if !path.starts_with(VERSIONED_PREFIX) {
+    let Some((major, _)) = split_path(path) else {
         return Ok(());
-    }
+    };
     let mut values = headers.get_all(&API_VERSION_HEADER).iter();
     let Some(value) = values.next() else {
         return Ok(());
@@ -106,7 +127,7 @@ pub fn check_pinned(headers: &HeaderMap, path: &str) -> Result<(), AppError> {
     let pinned = value
         .to_str()
         .map_err(|_| AppError::bad_request("invalid_header_encoding"))?;
-    if pinned.trim().eq_ignore_ascii_case("v1") {
+    if pinned.trim().eq_ignore_ascii_case(major) {
         Ok(())
     } else {
         Err(AppError::bad_request("api_version_mismatch"))
@@ -122,11 +143,11 @@ mod tests {
 
     #[test]
     fn negotiation_prefers_the_highest_shared_major() {
-        assert_eq!(negotiate(None).ok(), Some("v1"));
-        assert_eq!(negotiate(Some("v2, v1")).ok(), Some("v1"));
+        assert_eq!(negotiate(None).ok(), Some("v2"));
+        assert_eq!(negotiate(Some("v2, v1")).ok(), Some("v2"));
         assert_eq!(negotiate(Some("V1")).ok(), Some("v1"));
         assert!(matches!(
-            negotiate(Some("v2,v3")),
+            negotiate(Some("v3,v4")),
             Err(AppError::ApiVersionUnsupported)
         ));
         assert!(matches!(
@@ -156,6 +177,7 @@ mod tests {
         assert!(check_pinned(&pinned, "/api/v1/version").is_ok());
         assert!(check_pinned(&pinned, "/healthz").is_ok());
         pinned.insert("silicon-hook-api-version", HeaderValue::from_static("v2"));
+        assert!(check_pinned(&pinned, "/api/v2/version").is_ok());
         assert!(matches!(
             check_pinned(&pinned, "/api/v1/version"),
             Err(AppError::BadRequest { .. })

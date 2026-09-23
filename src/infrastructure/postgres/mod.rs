@@ -15,7 +15,10 @@ mod models;
 mod readiness;
 mod safety;
 mod schema_contract;
+mod ting;
 mod types;
+pub(crate) use ting::enqueue_ting_for_subscription;
+pub use ting::{TingOutboxClaim, TingOutboxStatus, TingSendFailure};
 
 use std::str::FromStr as _;
 

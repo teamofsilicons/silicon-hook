@@ -59,6 +59,30 @@ impl PostgresStore {
             DeliverySequence::new(sequence).map_err(|error| StoreError::corrupt("event", error))?;
         let event = EventRecord::accept(command.event_id, &command.hook, command.request, sequence);
         insert_event(&mut transaction, &event).await?;
+        let (environment_id, environment_generation): (Uuid, i64) = sqlx::query_as(
+            "SELECT hook_private.environment_id(), COALESCE(NULLIF(current_setting('hook.environment_generation', true), ''), '0')::bigint",
+        )
+        .fetch_one(&mut *transaction)
+        .await?;
+        let body = crate::delivery::prepare_event(
+            &command.delivery_app_id,
+            &event,
+            event.silicon_id().as_str(),
+            environment_id,
+            environment_generation,
+            crate::infrastructure::ting::TingDeliveryMode::Required,
+        )
+        .map_err(|error| StoreError::corrupt("ting_outbox", error))?;
+        super::ting::enqueue_ting(&mut transaction, &event, event.silicon_id().as_str(), &body)
+            .await?;
+        crate::delivery::subscriptions::enqueue_observers(
+            &mut transaction,
+            &event,
+            &command.delivery_app_id,
+            environment_id,
+            environment_generation,
+        )
+        .await?;
         sqlx::query("SELECT pg_notify($1, $2)")
             .bind(DELIVERY_CHANNEL)
             .bind(event.silicon_id().as_str())
@@ -147,6 +171,37 @@ impl PostgresStore {
             },
         )
         .await
+    }
+
+    /// Loads one retained event within its complete authorized tenant scope.
+    ///
+    /// # Errors
+    /// Returns database or stored-domain validation failures.
+    pub async fn get_event(
+        &self,
+        org_id: &crate::domain::OrganizationId,
+        silicon_id: &crate::domain::SiliconId,
+        event_id: crate::domain::EventId,
+        expected_source_generation: Option<i64>,
+    ) -> Result<Option<EventRecord>, StoreError> {
+        let row: Option<EventRow> = sqlx::query_as(
+            "SELECT event.id, event.hook_id, event.org_id, event.silicon_id, event.provider,
+                    event.summary, event.delivery_sequence, event.method, event.url, event.path,
+                    event.query_string, event.headers, event.body, event.remote_ip, event.received_at
+             FROM hook.events AS event JOIN hook.hooks AS hook
+               ON hook.id=event.hook_id AND hook.org_id=event.org_id AND hook.silicon_id=event.silicon_id
+             WHERE event.org_id=$1 AND event.silicon_id=$2 AND event.id=$3
+               AND ($4::bigint IS NULL OR event.source_generation=$4)
+               AND event.expires_at > clock_timestamp()
+               AND (hook.deleted_at IS NULL OR hook.deleted_at >= clock_timestamp() - INTERVAL '45 days')",
+        )
+        .bind(org_id.as_str())
+        .bind(silicon_id.as_str())
+        .bind(event_id.as_uuid())
+        .bind(expected_source_generation)
+        .fetch_optional(&self.pool)
+        .await?;
+        row.map(EventRecord::try_from).transpose()
     }
 }
 

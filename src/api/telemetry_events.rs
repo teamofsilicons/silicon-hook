@@ -28,7 +28,12 @@ impl RequestEvent {
         let collect = opted_in
             && !matches!(
                 path,
-                "/healthz" | "/readyz" | "/api/v1/telemetry" | "/api/v1/relay/ws"
+                "/healthz"
+                    | "/readyz"
+                    | "/api/v1/telemetry"
+                    | "/api/v2/telemetry"
+                    | "/api/v1/relay/ws"
+                    | "/api/v2/relay/ws"
             );
         let mut event = Event::new("backend", "request", "started");
         // Only route templates are collected; never paths, queries, headers or bodies.

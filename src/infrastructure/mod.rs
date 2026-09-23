@@ -3,3 +3,4 @@
 pub mod crypto;
 pub mod iam;
 pub mod postgres;
+pub mod ting;

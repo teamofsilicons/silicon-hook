@@ -7,6 +7,17 @@ openapi.yaml:
   operation-2xx-response:
     - '#/paths/~1api~1v1~1ws/get/responses'
     - '#/paths/~1api~1v1~1relay~1ws/get/responses'
+    # V2 transport tombstones intentionally have only a 410 response.
+    - '#/paths/~1api~1v2~1ws/get/responses'
+    - '#/paths/~1api~1v2~1relay~1ws/get/responses'
+    - '#/paths/~1api~1v2~1silicons~1{silicon_id}~1deliveries/get/responses'
+    - '#/paths/~1api~1v2~1silicons~1{silicon_id}~1deliveries~1pull/get/responses'
+    - '#/paths/~1api~1v2~1silicons~1{silicon_id}~1deliveries~1ack/post/responses'
+    - '#/paths/~1api~1v2~1silicons~1{silicon_id}~1deliveries~1cursor/get/responses'
   # IAM's configured receiver includes a trailing slash; both spellings are served.
   no-path-trailing-slash:
     - '#/paths/~1webhook~1'
+  # This outgoing data schema is consumed by Ting, not a Hook HTTP endpoint.
+  # It is linked from x-ting-notification for integration documentation.
+  no-unused-components:
+    - '#/components/schemas/TingHookEvent'

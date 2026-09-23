@@ -124,6 +124,7 @@ impl HookApplication {
         };
         self.store
             .accept_event(AcceptEvent {
+                delivery_app_id: self.delivery_app_id.clone(),
                 event_id: EventId::new(),
                 hook,
                 request,

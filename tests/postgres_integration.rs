@@ -361,7 +361,7 @@ async fn migrations_apply_and_readiness_proves_the_schema_contract() -> Result<(
     let applied = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _sqlx_migrations")
         .fetch_one(pool)
         .await?;
-    assert_eq!(applied, 9);
+    assert_eq!(applied, 16);
 
     let mut absent_environment = pool.begin().await?;
     sqlx::query("SELECT set_config('hook.environment_id', $1, true)")
@@ -1702,8 +1702,8 @@ async fn deprecated_contract_sunsets_only_after_seven_request_free_days() -> Res
         sqlx::query_scalar("SELECT status FROM hook_private.contract_status('v1',true)")
             .fetch_one(pool)
             .await?;
-    assert_eq!(status, "active");
-    sqlx::query("UPDATE hook_private.contract_versions SET status='deprecated', deprecated_at=clock_timestamp()-INTERVAL '8 days', last_requested_at=clock_timestamp()-INTERVAL '6 days'").execute(pool).await?;
+    assert_eq!(status, "deprecated");
+    sqlx::query("UPDATE hook_private.contract_versions SET status='deprecated', deprecated_at=clock_timestamp()-INTERVAL '8 days', last_requested_at=clock_timestamp()-INTERVAL '6 days' WHERE major='v1'").execute(pool).await?;
     assert_eq!(
         sqlx::query_scalar::<_, String>(
             "SELECT status FROM hook_private.contract_status('v1',false)"
@@ -1715,9 +1715,9 @@ async fn deprecated_contract_sunsets_only_after_seven_request_free_days() -> Res
     sqlx::query("SELECT * FROM hook_private.contract_status('v1',true)")
         .execute(pool)
         .await?;
-    let recent: bool = sqlx::query_scalar("SELECT last_requested_at > clock_timestamp()-INTERVAL '1 minute' FROM hook_private.contract_versions").fetch_one(pool).await?;
+    let recent: bool = sqlx::query_scalar("SELECT last_requested_at > clock_timestamp()-INTERVAL '1 minute' FROM hook_private.contract_versions WHERE major='v1'").fetch_one(pool).await?;
     assert!(recent);
-    sqlx::query("UPDATE hook_private.contract_versions SET last_requested_at=clock_timestamp()-INTERVAL '7 days'").execute(pool).await?;
+    sqlx::query("UPDATE hook_private.contract_versions SET last_requested_at=clock_timestamp()-INTERVAL '7 days' WHERE major='v1'").execute(pool).await?;
     assert_eq!(
         sqlx::query_scalar::<_, String>(
             "SELECT status FROM hook_private.contract_status('v1',true)"
@@ -1726,10 +1726,172 @@ async fn deprecated_contract_sunsets_only_after_seven_request_free_days() -> Res
         .await?,
         "sunset"
     );
-    let count: i64 = sqlx::query_scalar("SELECT request_count FROM hook_private.contract_versions")
-        .fetch_one(pool)
-        .await?;
+    let count: i64 = sqlx::query_scalar(
+        "SELECT request_count FROM hook_private.contract_versions WHERE major='v1'",
+    )
+    .fetch_one(pool)
+    .await?;
     assert_eq!(count, 2, "rejected calls cannot revive a sunset contract");
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one background worker scenario checks idle scheduling and stale-lease recovery together"
+)]
+async fn assert_idle_test_publisher_avoids_iam(
+    service: &silicon_hook::application::environments::EnvironmentService,
+    context: &silicon_hook::application::environments::EnvironmentContext,
+    issuer: &wiremock::MockServer,
+    owner: &PgPool,
+) -> Result<()> {
+    use silicon_hook::{delivery::publisher, infrastructure::ting::TingClient};
+    let app = application(context.store.clone(), OffsetDateTime::now_utc())?.for_test_environment(
+        context.store.clone(),
+        context.environment.id,
+        context.environment.generation,
+    );
+    let identity = FixtureIdentity::new()?;
+    let hook = create_hook(
+        &app,
+        &identity,
+        "idle-publisher",
+        SigningPatch::default(),
+        "idle-publisher-create",
+    )
+    .await?;
+    let headers = standard_webhook_headers(&secret_of(&hook)?, "idle-event", "1700000000", b"{}")?;
+    let ReceiveOutcome::Accepted(event) = receive(
+        &app,
+        &identity,
+        hook.hook.endpoint_key(),
+        headers,
+        b"{}",
+        PROVIDER_IP,
+    )
+    .await?
+    else {
+        bail!("fixture event was not accepted");
+    };
+    let event_id = event.id().as_uuid();
+    let bytes: Vec<u8> =
+        sqlx::query_scalar("SELECT request_body FROM hook_private.ting_outbox WHERE event_id=$1")
+            .bind(event_id)
+            .fetch_one(owner)
+            .await?;
+    sqlx::query("UPDATE hook_private.ting_outbox SET next_attempt_at=clock_timestamp()+INTERVAL '1 hour' WHERE event_id=$1")
+        .bind(event_id).execute(owner).await?;
+    let calls = issuer
+        .received_requests()
+        .await
+        .context("IAM requests")?
+        .len();
+    let receiver = wiremock::MockServer::start().await;
+    let (stop, shutdown) = tokio::sync::watch::channel(false);
+    let task = tokio::spawn(publisher::run_tests(
+        app,
+        service.clone(),
+        TingClient::new(&receiver.uri(), StdDuration::from_secs(1))?,
+        StdDuration::from_millis(5),
+        shutdown,
+    ));
+    tokio::time::sleep(StdDuration::from_millis(100)).await;
+    assert_eq!(
+        issuer
+            .received_requests()
+            .await
+            .context("IAM requests")?
+            .len(),
+        calls,
+        "future retries must not revalidate idle IAM contexts"
+    );
+    sqlx::query("UPDATE hook_private.ting_outbox SET next_attempt_at=clock_timestamp(), lease_id=gen_random_uuid(), lease_until=clock_timestamp()+INTERVAL '1 hour' WHERE event_id=$1")
+        .bind(event_id).execute(owner).await?;
+    tokio::time::sleep(StdDuration::from_millis(100)).await;
+    assert_eq!(
+        issuer
+            .received_requests()
+            .await
+            .context("IAM requests")?
+            .len(),
+        calls,
+        "a current lease is not due work"
+    );
+    // Rotation makes that old lease reclaimable; the hint must preserve this path.
+    sqlx::query("UPDATE hook_control.environments SET generation=generation+1 WHERE id=$1")
+        .bind(context.environment.id)
+        .execute(owner)
+        .await?;
+    tokio::time::timeout(StdDuration::from_secs(3), async {
+        loop {
+            let attempts: i64 = sqlx::query_scalar(
+                "SELECT attempts FROM hook_private.ting_outbox WHERE event_id=$1",
+            )
+            .bind(event_id)
+            .fetch_one(owner)
+            .await?;
+            if attempts > 0 {
+                return Ok::<(), anyhow::Error>(());
+            }
+            tokio::time::sleep(StdDuration::from_millis(10)).await;
+        }
+    })
+    .await??;
+    assert!(
+        issuer
+            .received_requests()
+            .await
+            .context("IAM requests")?
+            .len()
+            > calls,
+        "actual sends still revalidate IAM"
+    );
+    // No publisher is configured: the real sender must defer, never contact Ting.
+    assert!(
+        receiver
+            .received_requests()
+            .await
+            .context("Ting requests")?
+            .is_empty()
+    );
+    sqlx::query("UPDATE hook_private.ting_outbox SET accepted_at=clock_timestamp(),ting_id='msg_fixture',silent=false,last_error_code=NULL,lease_id=NULL,lease_until=NULL WHERE event_id=$1")
+        .bind(event_id).execute(owner).await?;
+    let calls = issuer
+        .received_requests()
+        .await
+        .context("IAM requests")?
+        .len();
+    tokio::time::sleep(StdDuration::from_millis(100)).await;
+    assert_eq!(
+        issuer
+            .received_requests()
+            .await
+            .context("IAM requests")?
+            .len(),
+        calls,
+        "accepted sends must not poll IAM"
+    );
+    stop.send(true)?;
+    task.await?;
+    assert_eq!(
+        sqlx::query_scalar::<_, Vec<u8>>(
+            "SELECT request_body FROM hook_private.ting_outbox WHERE event_id=$1"
+        )
+        .bind(event_id)
+        .fetch_one(owner)
+        .await?,
+        bytes
+    );
+    // Leave the enclosing lifecycle scenario at its original generation.
+    sqlx::query("DELETE FROM hook.hooks WHERE id=$1")
+        .bind(hook.hook.id().as_uuid())
+        .execute(owner)
+        .await?;
+    sqlx::query("UPDATE hook_control.environments SET generation=$2 WHERE id=$1")
+        .bind(context.environment.id)
+        .bind(context.environment.generation)
+        .execute(owner)
+        .await?;
     Ok(())
 }
 
@@ -1749,7 +1911,7 @@ async fn application_secret_selects_empty_isolated_storage_and_revalidates_lifec
         Mock, MockServer, ResponseTemplate,
         matchers::{header, method, path},
     };
-    let database = TestDatabase::start().await?;
+    let (database, _, _) = TestDatabase::start_with_runtime_roles().await?;
     let server = MockServer::start().await;
     Mock::given(method("GET")).and(path("/api/version")).respond_with(ResponseTemplate::new(200).insert_header("silicon-iam-api-version","v1").insert_header("vary","Silicon-IAM-Supported-API-Versions").set_body_json(serde_json::json!({"service":"silicon-iam","selected_api_version":"v1","supported_api_versions":["v1"],"build":"test","commit":"test"}))).mount(&server).await;
     let secret = format!("ask_{}", "A".repeat(43));
@@ -1785,7 +1947,7 @@ async fn application_secret_selects_empty_isolated_storage_and_revalidates_lifec
     .await?;
     let db = DatabaseSettings {
         url: secrecy::SecretString::from(format!(
-            "postgres://postgres:postgres@{}:{}/postgres",
+            "postgres://silicon_hook_api:api-secret@{}:{}/postgres",
             database.container.get_host().await?,
             database.container.get_host_port_ipv4(5432).await?
         )),
@@ -1806,6 +1968,7 @@ async fn application_secret_selects_empty_isolated_storage_and_revalidates_lifec
     assert!(first.iam.is_testing());
     let again = service.resolve_app_secret(&secret).await?;
     assert_eq!(again.environment.id, id);
+    assert_idle_test_publisher_avoids_iam(&service, &first, &server, database.store.pool()).await?;
     let count: i64 = sqlx::query_scalar("SELECT count(*) FROM hook_control.environments")
         .fetch_one(database.store.pool())
         .await?;
@@ -2075,6 +2238,10 @@ async fn honeycomb_lifecycle_fences_cleanup_retries_and_retains_binding() -> Res
     // The protected route bypasses test headers, but never service authentication.
     let router = silicon_hook::api::router(
         silicon_hook::api::ApiDependencies {
+            ting: silicon_hook::infrastructure::ting::TingClient::new(
+                "http://127.0.0.1:1",
+                StdDuration::from_secs(1),
+            )?,
             application: application(api.clone(), database_now(api.pool()).await?)?,
             environments: Some(service.clone()),
             iam: iam.clone(),

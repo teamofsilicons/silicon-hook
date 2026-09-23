@@ -27,6 +27,7 @@ pub struct HookApplication {
     pub(super) clock: Arc<dyn Clock>,
     pub(super) public_base_url: Url,
     pub(super) environment: Option<(uuid::Uuid, i64)>,
+    pub(super) delivery_app_id: String,
 }
 
 impl std::fmt::Debug for HookApplication {
@@ -80,7 +81,15 @@ impl HookApplication {
             clock,
             public_base_url,
             environment: None,
+            delivery_app_id: "tos>hook".to_owned(),
         }
+    }
+
+    /// Selects the IAM application that owns outgoing Ting event types.
+    #[must_use]
+    pub fn with_delivery_application(mut self, app_id: &str) -> Self {
+        app_id.clone_into(&mut self.delivery_app_id);
+        self
     }
 
     /// Binds this application clone to an isolated test pool and generation.
@@ -142,6 +151,32 @@ impl HookApplication {
     #[must_use]
     pub const fn store(&self) -> &PostgresStore {
         &self.store
+    }
+
+    /// Creates the scoped, exclusively server-owned publishing session manager.
+    #[must_use]
+    pub fn publisher_credentials(
+        &self,
+        iam: crate::infrastructure::iam::IamClient,
+    ) -> crate::delivery::credentials::PublisherCredentials {
+        crate::delivery::credentials::PublisherCredentials::new(
+            self.store.clone(),
+            self.secret_cipher.clone(),
+            iam,
+        )
+    }
+
+    /// Uses the selected store and encryption key to check Carbon publication authority.
+    #[must_use]
+    pub fn observer_authorities(
+        &self,
+        iam: crate::infrastructure::iam::IamClient,
+    ) -> crate::delivery::observer_authority::ObserverAuthorities {
+        crate::delivery::observer_authority::ObserverAuthorities::new(
+            self.store.clone(),
+            self.secret_cipher.clone(),
+            iam,
+        )
     }
 
     /// Builds the canonical public URL of an endpoint.

@@ -117,6 +117,10 @@ impl Harness {
         let app = router(
             ApiDependencies {
                 environments: None,
+                ting: silicon_hook::infrastructure::ting::TingClient::new(
+                    "http://127.0.0.1:1",
+                    Duration::from_secs(1),
+                )?,
                 application,
                 iam,
                 trusted_proxy_hops: 0,
@@ -295,7 +299,11 @@ async fn events_are_delivered_live_acknowledged_and_replayed_on_reconnect() -> R
         r#"{"action":"opened"}"#
     );
     assert_eq!(event["data"]["metadata"]["request"]["method"], "POST");
-    assert!(event["data"]["metadata"].get("summary").is_none());
+    assert!(
+        event["data"]["metadata"]["summary"]
+            .as_str()
+            .is_some_and(|summary| summary.starts_with("GitHub triggered at "))
+    );
 
     socket
         .send(Message::Text(
@@ -356,7 +364,11 @@ async fn events_are_delivered_live_acknowledged_and_replayed_on_reconnect() -> R
     assert_eq!(pulled["cursor"]["acknowledged_through"], 1);
     assert_eq!(pulled["latest_sequence"], 2);
     assert_eq!(pulled["items"].as_array().map(Vec::len), Some(1));
-    assert!(pulled["items"][0].get("summary").is_none());
+    assert!(
+        pulled["items"][0]["summary"]
+            .as_str()
+            .is_some_and(|summary| summary.starts_with("GitHub triggered at "))
+    );
     assert_eq!(pulled["items"][0]["id"], replayed["data"]["metadata"]["id"]);
     Ok(())
 }

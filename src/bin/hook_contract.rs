@@ -7,12 +7,12 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help") {
         println!(
-            "hook-contract <status|deprecate|activate> v1 [test-environment-uuid]\nUses HOOK_DATABASE_URL for production; a sandbox UUID selects HOOK_TEST_DATABASE_URL.\nDeprecation starts a seven-day idle window. Activity restarts that window. Only deprecated contracts sunset.\nOperator database credentials are required. No actor sessions are accepted."
+            "hook-contract <status|deprecate|activate> <v2|v1> [test-environment-uuid]\nUses HOOK_DATABASE_URL for production; a sandbox UUID selects HOOK_TEST_DATABASE_URL.\nDeprecation starts a seven-day idle window. Activity restarts that window. Only deprecated contracts sunset.\nOperator database credentials are required. No actor sessions are accepted."
         );
         return Ok(());
     }
     anyhow::ensure!(
-        (2..=3).contains(&args.len()) && args[1] == "v1",
+        (2..=3).contains(&args.len()) && matches!(args[1].as_str(), "v1" | "v2"),
         "use hook-contract --help"
     );
     let settings = MigrationSettings::from_env()?;
@@ -35,12 +35,12 @@ async fn main() -> anyhow::Result<()> {
         "status" => {}
         "deprecate" | "activate" => {
             let deprecated = args[0] == "deprecate";
-            sqlx::query("INSERT INTO hook_private.contract_versions (environment_id, major, status, deprecated_at) VALUES ($1, 'v1', CASE WHEN $2 THEN 'deprecated' ELSE 'active' END, CASE WHEN $2 THEN clock_timestamp() END) ON CONFLICT (environment_id,major) DO UPDATE SET status=EXCLUDED.status, deprecated_at=CASE WHEN $2 AND hook_private.contract_versions.status='deprecated' THEN hook_private.contract_versions.deprecated_at ELSE EXCLUDED.deprecated_at END, sunset_at=NULL")
-                .bind(environment).bind(deprecated).execute(&mut *tx).await?;
+            sqlx::query("INSERT INTO hook_private.contract_versions (environment_id, major, status, deprecated_at) VALUES ($1, $2, CASE WHEN $3 THEN 'deprecated' ELSE 'active' END, CASE WHEN $3 THEN clock_timestamp() END) ON CONFLICT (environment_id,major) DO UPDATE SET status=EXCLUDED.status, deprecated_at=CASE WHEN $3 AND hook_private.contract_versions.status='deprecated' THEN hook_private.contract_versions.deprecated_at ELSE EXCLUDED.deprecated_at END, sunset_at=NULL")
+                .bind(environment).bind(&args[1]).bind(deprecated).execute(&mut *tx).await?;
         }
         _ => anyhow::bail!("unknown lifecycle command; use hook-contract --help"),
     }
-    let rows: Vec<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(c) FROM hook_private.contract_versions c WHERE environment_id=$1 AND major='v1'").bind(environment).fetch_all(&mut *tx).await?;
+    let rows: Vec<serde_json::Value> = sqlx::query_scalar("SELECT to_jsonb(c) FROM hook_private.contract_versions c WHERE environment_id=$1 AND major=$2").bind(environment).bind(&args[1]).fetch_all(&mut *tx).await?;
     tx.commit().await?;
     println!("{}", serde_json::to_string_pretty(&rows)?);
     Ok(())

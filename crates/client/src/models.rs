@@ -199,6 +199,7 @@ pub struct Event {
     pub provider: String,
     pub delivery_sequence: i64,
     pub received_at: String,
+    pub summary: String,
     pub request: CapturedRequest,
 }
 
@@ -213,20 +214,6 @@ pub struct BlockedRequest {
     pub reason_detail: String,
     pub received_at: String,
     pub request: CapturedRequest,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct DeliveryCursor {
-    pub silicon_id: String,
-    pub acknowledged_through: i64,
-    pub acknowledged_at: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize, Serialize)]
-pub struct DeliveryBatch {
-    pub items: Vec<Event>,
-    pub cursor: DeliveryCursor,
-    pub latest_sequence: i64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]

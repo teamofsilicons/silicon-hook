@@ -71,6 +71,41 @@ GRANT SELECT, INSERT, UPDATE, DELETE
     TO :"api_role";
 GRANT INSERT ON TABLE hook_private.audit_log TO :"api_role";
 
+-- Ting publication runs in the API process. No worker or history role may
+-- read the dedicated publisher ciphertext. Event cleanup cascades to outbox
+-- rows, and the security-definer environment cleaner removes credentials.
+-- Table-level REVOKE above does not remove old column-level grants.
+REVOKE ALL PRIVILEGES (
+    id, environment_id, environment_generation, event_id, org_id, silicon_id,
+    recipient_id, idempotency_key, request_body, created_at, expires_at,
+    next_attempt_at, attempts, last_attempt_at, last_error_code, lease_id,
+    lease_until, accepted_at, ting_id, silent, recipient_binding_id
+) ON TABLE hook_private.ting_outbox FROM :"api_role", :"worker_role";
+REVOKE ALL PRIVILEGES (
+    environment_id, environment_generation, org_id, id, provision_request_hash,
+    provision_input_hash, encrypted_credentials, actor_id, expires_at, validated,
+    rejected, operation_key, operation_started_at, lease_id, lease_until,
+    created_at, updated_at
+) ON TABLE hook_private.ting_publisher_credentials FROM :"api_role", :"worker_role";
+REVOKE ALL PRIVILEGES (
+    id, environment_id, org_id, silicon_id, recipient_id, created_at,
+    encrypted_authority, authority_version
+) ON TABLE hook_private.ting_recipient_bindings FROM :"api_role", :"worker_role";
+GRANT SELECT, INSERT ON TABLE hook_private.ting_outbox,
+    hook_private.ting_publisher_credentials TO :"api_role";
+GRANT SELECT, INSERT, DELETE ON TABLE hook_private.ting_recipient_bindings TO :"api_role";
+GRANT UPDATE (encrypted_authority, authority_version)
+    ON TABLE hook_private.ting_recipient_bindings TO :"api_role";
+GRANT UPDATE (
+    environment_generation, next_attempt_at, attempts, last_attempt_at, last_error_code, lease_id,
+    lease_until, accepted_at, ting_id, silent
+) ON TABLE hook_private.ting_outbox TO :"api_role";
+GRANT UPDATE (
+    environment_generation, provision_request_hash, provision_input_hash,
+    encrypted_credentials, actor_id, expires_at, validated, rejected,
+    operation_key, operation_started_at, lease_id, lease_until, updated_at
+) ON TABLE hook_private.ting_publisher_credentials TO :"api_role";
+
 -- Worker: retention maintenance only.
 GRANT SELECT, DELETE ON TABLE hook.hooks, hook.events, hook.blocked_requests
     TO :"worker_role";

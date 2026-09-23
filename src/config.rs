@@ -42,6 +42,8 @@ pub struct ApiSettings {
     pub crypto: CryptoSettings,
     /// Silicon IAM integration settings.
     pub iam: IamSettings,
+    /// Internal Ting publication endpoint and scheduling bounds.
+    pub ting: TingSettings,
     /// Retention, replay, and idempotency policy.
     pub policy: PolicySettings,
     /// WebSocket delivery policy.
@@ -61,6 +63,55 @@ pub struct WorkerProcessSettings {
     pub test_database: Option<DatabaseSettings>,
     /// Retention maintenance policy.
     pub maintenance: MaintenanceSettings,
+}
+
+/// Non-secret configuration for internal Ting delivery.
+#[derive(Clone, Debug)]
+pub struct TingSettings {
+    /// Trusted Ting API origin; credentials may only be sent to this origin.
+    pub base_url: Url,
+    /// Deadline for one Ting or IAM publication operation.
+    pub request_timeout: Duration,
+    /// Idle interval between bounded publication cycles.
+    pub poll_interval: Duration,
+}
+
+impl TingSettings {
+    fn load(
+        source: &impl ConfigurationSource,
+        environment: RuntimeEnvironment,
+    ) -> Result<Self, SettingsError> {
+        let base_url = source.url_or(
+            "HOOK_TING_BASE_URL",
+            "https://backend.ting.teamofsilicons.com/",
+        )?;
+        validate_http_url(environment, &base_url, "HOOK_TING_BASE_URL")?;
+        if base_url.path() != "/" {
+            return Err(invalid(
+                "HOOK_TING_BASE_URL",
+                "must be an origin without a path",
+            ));
+        }
+        let request_seconds: u64 = source.parse_or("HOOK_TING_TIMEOUT_SECONDS", "10")?;
+        let poll_millis: u64 = source.parse_or("HOOK_TING_POLL_MILLISECONDS", "1000")?;
+        if !(1..=15).contains(&request_seconds) {
+            return Err(invalid(
+                "HOOK_TING_TIMEOUT_SECONDS",
+                "must be between 1 and 15",
+            ));
+        }
+        if !(100..=30_000).contains(&poll_millis) {
+            return Err(invalid(
+                "HOOK_TING_POLL_MILLISECONDS",
+                "must be between 100 and 30000",
+            ));
+        }
+        Ok(Self {
+            base_url,
+            request_timeout: Duration::from_secs(request_seconds),
+            poll_interval: Duration::from_millis(poll_millis),
+        })
+    }
 }
 
 /// Minimal settings accepted by the privileged migration command.
@@ -304,6 +355,7 @@ impl ApiSettings {
             test_database(source, environment, &database, "HOOK_TEST_DATABASE_URL")?;
         let crypto = CryptoSettings::load(source)?;
         let iam = IamSettings::load(source, environment)?;
+        let ting = TingSettings::load(source, environment)?;
         let policy = PolicySettings::load(source)?;
         let realtime = RealtimeSettings::load(source)?;
 
@@ -315,6 +367,7 @@ impl ApiSettings {
             test_database,
             crypto,
             iam,
+            ting,
             policy,
             realtime,
         })

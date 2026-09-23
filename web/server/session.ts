@@ -1,6 +1,7 @@
 import { createCipheriv, createDecipheriv, randomBytes } from "node:crypto";
 import { mkdir, readFile, open, rename, chmod, unlink } from "node:fs/promises";
 import { join } from "node:path";
+import type { ReceiverSlots } from "./receiver.ts";
 
 export interface Tokens {
   access_token: string;
@@ -18,11 +19,54 @@ export interface Plane {
   tokens?: Tokens;
   expiresAt?: number;
   refresh?: { key: string; started: number };
+  ting?: TingSession;
+  receivers?: ReceiverSlots;
+  logout?: { key: string };
+}
+export interface TingSession {
+  token: string;
+  id: string;
+  kind: "carbon" | "silicon";
+  environmentId: string;
+}
+export interface LoginAttempt {
+  state: string;
+  expires: number;
+  mutation: string;
+  hookApp: string;
+  hookKey: string;
+  tingKey: string;
+  tingStarted?: boolean;
+  hookOutcome?: ExchangeOutcome;
+  tingOutcome?: ExchangeOutcome;
+  started?: number;
+  inputHash?: string;
+  items?: { app_id: string; slt: string }[];
+  hook?: Plane;
+  ting?: TingSession;
+  complete?: boolean;
+}
+export interface ExchangeOutcome {
+  rejected?: boolean;
+  uncertain?: boolean;
+  inFlight?: boolean;
 }
 export interface Session {
   expires: number;
   planes: Record<string, Plane>;
-  login?: { state: string; expires: number; mutation: string };
+  login?: LoginAttempt;
+  manual?: Record<
+    string,
+    {
+      key: string;
+      hash: string;
+      slt?: string;
+      started: number;
+      result?: Plane;
+      outcome?: ExchangeOutcome;
+      complete?: boolean;
+    }
+  >;
 }
 const ttl = 7 * 24 * 60 * 60 * 1000;
 export class SessionStore {

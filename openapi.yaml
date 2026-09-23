@@ -3,19 +3,24 @@ openapi: 3.1.0
 info:
   title: Silicon Hook API
   version: 0.7.0
-  summary: Signed webhook endpoints with ordered, acknowledged delivery to Silicons.
+  summary: Signed webhook endpoints with durable Ting publication and authorized event history.
   description: |
     Silicon Hook gives each Silicon signed webhook endpoints at
     `https://hook.teamofsilicons.com/silicon/{silicon_id}/{endpoint_key}`.
     Every request to an active endpoint is answered with `webhook.ok`. Requests
     that verify against the hook's signature policy are retained for 14 days
-    and delivered in order over the WebSocket stream at `/api/v1/ws` or by
-    polling `/api/v1/silicons/{silicon_id}/deliveries`; requests that do not
-    verify are withheld and kept in a separate 14-day blocked log. Timestamps
+    and atomically queued for Ting publication. API v2 uses Ting to deliver a
+    compact event reference; the authorized recipient hydrates the original
+    request from Hook. Ting arrival order is not guaranteed. Deprecated API v1
+    retains its WebSocket, polling and acknowledged-cursor transport until sunset.
+    Requests that do not verify are withheld and kept in a separate 14-day blocked log. Timestamps
     are UTC RFC 3339 values. Endpoint keys route requests but never
     authenticate them. IAM test app_secret selectors choose isolated sandboxes via
-    X-Hook-Test-App-Secret; they never grant actor authority. Deprecated API v1
-    contracts sunset only after seven request-free days. Contract accounting is
+    X-Hook-Test-App-Secret; they never grant actor authority. The v2 migration
+    marks v1 deprecated; its contract sunsets only after seven request-free days.
+    All versioned requests may pin their route's major using
+    Silicon-Hook-API-Version. Ting acceptance, daemon receipt and recipient
+    acceptance are separate states; none proves completed recipient work. Contract accounting is
     independent of optional diagnostic telemetry.
   contact:
     email: engineering@teamofsilicons.com
@@ -37,13 +42,19 @@ tags:
 - name: History
   description: Retained verified and blocked request logs.
 - name: Deliveries
-  description: Ordered, acknowledged delivery streams.
+  description: Deprecated v1 ordered, acknowledged delivery streams.
+- name: Ting
+  description: Dedicated publication identity, recipient grants, receiving interests and delivery status.
 - name: Auth
   description: Carbon and Silicon short-lived-token login through IAM.
 - name: IAM
   description: Silicon IAM connection and event receipt.
 - name: Testing
   description: Organization-owned sandboxes bound exclusively to IAM testing environments.
+x-ting-notification:
+  description: "Hook publishes this schema in the data field of Ting type <Hook app_id>.webhook.received. The outer Ting transport envelope is owned by Ting."
+  dataSchema:
+    "$ref": "#/components/schemas/TingHookEvent"
 paths:
   "/healthz":
     get:
@@ -107,6 +118,7 @@ paths:
               schema:
                 type: string
                 enum:
+                - v2
                 - v1
             Vary:
               schema:
@@ -129,6 +141,7 @@ paths:
           "$ref": "#/components/responses/InternalError"
   "/api/v1/version":
     get:
+      deprecated: true
       tags:
       - System
       operationId: getVersion
@@ -150,6 +163,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks":
     get:
+      deprecated: true
       tags:
       - Hooks
       operationId: listHooks
@@ -188,6 +202,7 @@ paths:
         '503':
           "$ref": "#/components/responses/ServiceUnavailable"
     post:
+      deprecated: true
       tags:
       - Hooks
       operationId: createHook
@@ -234,6 +249,7 @@ paths:
         '503':
           "$ref": "#/components/responses/ServiceUnavailable"
     patch:
+      deprecated: true
       tags:
       - Hooks
       operationId: setHooksEnabled
@@ -290,6 +306,7 @@ paths:
     - "$ref": "#/components/parameters/TestKey"
     - "$ref": "#/components/parameters/TestAppSecret"
     get:
+      deprecated: true
       tags:
       - Hooks
       operationId: getHook
@@ -318,6 +335,7 @@ paths:
         '503':
           "$ref": "#/components/responses/ServiceUnavailable"
     patch:
+      deprecated: true
       tags:
       - Hooks
       operationId: updateHook
@@ -363,6 +381,7 @@ paths:
         '503':
           "$ref": "#/components/responses/ServiceUnavailable"
     delete:
+      deprecated: true
       tags:
       - Hooks
       operationId: deleteHook
@@ -390,6 +409,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/restore":
     post:
+      deprecated: true
       tags:
       - Hooks
       operationId: restoreHook
@@ -433,6 +453,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/secret/rotate":
     post:
+      deprecated: true
       tags:
       - Hooks
       operationId: rotateHookSecret
@@ -476,6 +497,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/endpoint/rotate":
     post:
+      deprecated: true
       tags:
       - Hooks
       operationId: rotateHookEndpoint
@@ -520,6 +542,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/events":
     get:
+      deprecated: true
       tags:
       - History
       operationId: listHookEvents
@@ -554,6 +577,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/events":
     get:
+      deprecated: true
       tags:
       - History
       operationId: listSiliconEvents
@@ -592,6 +616,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/blocked-requests":
     get:
+      deprecated: true
       tags:
       - History
       operationId: listHookBlockedRequests
@@ -626,6 +651,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/blocked-requests":
     get:
+      deprecated: true
       tags:
       - History
       operationId: listSiliconBlockedRequests
@@ -664,6 +690,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/deliveries":
     get:
+      deprecated: true
       tags:
       - Deliveries
       operationId: pullDeliveries
@@ -714,6 +741,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/deliveries/ack":
     post:
+      deprecated: true
       tags:
       - Deliveries
       operationId: acknowledgeDeliveries
@@ -762,6 +790,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/silicons/{silicon_id}/deliveries/cursor":
     get:
+      deprecated: true
       tags:
       - Deliveries
       operationId: getDeliveryCursor
@@ -797,6 +826,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/ws":
     get:
+      deprecated: true
       tags:
       - Deliveries
       operationId: openDeliveryStream
@@ -908,6 +938,7 @@ paths:
     - "$ref": "#/components/parameters/SiliconId"
     - "$ref": "#/components/parameters/EndpointKey"
     post:
+      deprecated: true
       tags:
       - Ingress
       operationId: receiveWebhookCompatibility
@@ -945,6 +976,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v1/auth/iam":
     get:
+      deprecated: true
       tags: [Auth]
       operationId: getIamInformation
       summary: Discover the public IAM application configuration
@@ -980,6 +1012,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v1/auth/status":
     get:
+      deprecated: true
       tags: [Auth]
       operationId: getLoginStatus
       summary: Verify the current identity online with IAM
@@ -1022,6 +1055,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v1/auth/login":
     post:
+      deprecated: true
       tags:
       - Auth
       operationId: loginWithSlt
@@ -1068,6 +1102,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/auth/refresh":
     post:
+      deprecated: true
       tags:
       - Auth
       operationId: refreshTokens
@@ -1113,6 +1148,7 @@ paths:
     - "$ref": "#/components/parameters/TestAppSecret"
   "/api/v1/auth/logout":
     post:
+      deprecated: true
       tags:
       - Auth
       operationId: logout
@@ -1144,6 +1180,7 @@ paths:
     - "$ref": "#/components/parameters/TestKey"
     - "$ref": "#/components/parameters/TestAppSecret"
     post:
+      deprecated: true
       tags:
       - IAM
       operationId: connectIamHook
@@ -1186,6 +1223,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v1/iam/events":
     post:
+      deprecated: true
       tags:
       - IAM
       operationId: receiveIamEvent
@@ -1292,6 +1330,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v1/testing-environments":
     post:
+      deprecated: true
       tags:
       - Testing
       operationId: createTestingEnvironment
@@ -1329,6 +1368,7 @@ paths:
             schema:
               "$ref": "#/components/schemas/CreateEnvironment"
     get:
+      deprecated: true
       tags:
       - Testing
       operationId: listTestingEnvironments
@@ -1384,6 +1424,7 @@ paths:
     - "$ref": "#/components/parameters/EnvironmentId"
     - "$ref": "#/components/parameters/OrgId"
     get:
+      deprecated: true
       tags:
       - Testing
       operationId: getTestingEnvironment
@@ -1413,6 +1454,7 @@ paths:
         '503':
           "$ref": "#/components/responses/ServiceUnavailable"
     delete:
+      deprecated: true
       tags:
       - Testing
       operationId: deleteTestingEnvironment
@@ -1447,6 +1489,7 @@ paths:
     - "$ref": "#/components/parameters/EnvironmentId"
     - "$ref": "#/components/parameters/OrgId"
     get:
+      deprecated: true
       tags:
       - Testing
       operationId: getTestingEnvironmentKey
@@ -1480,6 +1523,7 @@ paths:
     - "$ref": "#/components/parameters/EnvironmentId"
     - "$ref": "#/components/parameters/OrgId"
     post:
+      deprecated: true
       tags:
       - Testing
       operationId: rotateTestingEnvironmentKey
@@ -1514,6 +1558,7 @@ paths:
     - "$ref": "#/components/parameters/EnvironmentId"
     - "$ref": "#/components/parameters/OrgId"
     post:
+      deprecated: true
       tags:
       - Testing
       operationId: restoreTestingEnvironment
@@ -1545,6 +1590,7 @@ paths:
           "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v1/testing-environment":
     get:
+      deprecated: true
       tags:
       - Testing
       operationId: currentTestingEnvironment
@@ -1585,6 +1631,7 @@ paths:
       security: []
   "/api/v1/testing-environment/clean":
     post:
+      deprecated: true
       tags:
       - Testing
       operationId: cleanTestingEnvironment
@@ -1618,6 +1665,7 @@ paths:
       security: []
   "/api/v1/testing-environment/iam":
     put:
+      deprecated: true
       tags:
       - Testing
       operationId: configureTestingIam
@@ -1657,6 +1705,7 @@ paths:
               "$ref": "#/components/schemas/TestIamConfiguration"
   /api/v1/testing-session:
     get:
+      deprecated: true
       operationId: selectedTestingSession
       summary: Validate an IAM app_secret and inspect its selected sandbox
       tags: [Testing]
@@ -1682,18 +1731,18 @@ paths:
       security: []
       responses:
         '200':
-          description: Public lifecycle status, policy and compatibility matrix
+          description: Public lifecycle status, policy and compatibility matrix.
           content:
             application/json:
               schema:
-                type: object
-                additionalProperties: true
+                $ref: '#/components/schemas/ContractCatalog'
         '400':
           description: Invalid request
         '503':
           description: Contract state unavailable
   /api/v1/contracts:
     get:
+      deprecated: true
       operationId: versionedContractCatalog
       summary: Discover lifecycle compatibility in the selected environment
       tags: [System]
@@ -1702,11 +1751,16 @@ paths:
       - $ref: '#/components/parameters/TestAppSecret'
       responses:
         '200':
-          description: Public lifecycle status and compatibility matrix
+          description: Public lifecycle status, policy and compatibility matrix.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractCatalog'
         '410':
           description: API contract has sunset
   /api/v1/relay/ws:
     get:
+      deprecated: true
       operationId: multiplexedRelay
       summary: Prewarm one physical socket and independently authorize subscriptions
       description: >-
@@ -1726,6 +1780,7 @@ paths:
           description: Invalid upgrade
   /api/v1/telemetry:
     post:
+      deprecated: true
       operationId: recordTelemetryEvent
       summary: Append a bounded diagnostic event to Hook-owned storage
       description: >-
@@ -1755,6 +1810,2004 @@ paths:
           description: Invalid actor or environment credentials
         '422':
           description: Invalid event shape or value
+  "/api/v2/version":
+    get:
+      tags:
+      - System
+      operationId: getVersionV2
+      summary: Read the running service version
+      security: []
+      responses:
+        '200':
+          description: Running service and contract version.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/VersionInfo"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/silicons/{silicon_id}/hooks":
+    get:
+      tags:
+      - Hooks
+      operationId: listHooksV2
+      summary: List a Silicon's hooks with their URLs and last activity
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/SiliconId"
+      - name: include_deleted
+        in: query
+        schema:
+          type: boolean
+          default: false
+      responses:
+        '200':
+          description: Active and disabled hooks visible to the actor, plus recoverable
+            deleted hooks when include_deleted is true. Each item carries its name,
+            endpoint URL, and last_received_at.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HookPage"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+      - Hooks
+      operationId: createHookV2
+      summary: Create a signed webhook endpoint
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/SiliconId"
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/HookCreate"
+      responses:
+        '201':
+          description: Hook created; the signing secret is shown once.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HookWithSecret"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '410':
+          "$ref": "#/components/responses/Gone"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '415':
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    patch:
+      tags:
+      - Hooks
+      operationId: setHooksEnabledV2
+      summary: Enable or disable a set of hooks atomically
+      description: Applies the desired enabled state to 1–1000 unique retained hooks.
+        The operation is atomic and intrinsically idempotent; returned items follow
+        the request hook_ids order.
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/SiliconId"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/HooksEnabledUpdate"
+      responses:
+        '200':
+          description: All requested hooks now have the requested enabled state.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/HookPage"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '415':
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/silicons/{silicon_id}/hooks/{hook_id}":
+    parameters:
+    - "$ref": "#/components/parameters/OrgId"
+    - "$ref": "#/components/parameters/SiliconId"
+    - "$ref": "#/components/parameters/HookId"
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+    get:
+      tags:
+      - Hooks
+      operationId: getHookV2
+      summary: Read one hook
+      responses:
+        '200':
+          description: Hook metadata and signature policy without secret material.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Hook"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    patch:
+      tags:
+      - Hooks
+      operationId: updateHookV2
+      summary: Change name, description, time zone, activation, or signature policy
+      description: 'Every member is optional. `enabled` applies the dedicated activation
+        action; any other member is an update. Signature members merge onto the current
+        policy; `"public_key": null` clears the key. Supplying `secret` replaces the
+        stored secret. Requiring signatures on a symmetric algorithm needs a stored
+        or supplied secret.'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/HookUpdate"
+      responses:
+        '200':
+          description: Hook after the change.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Hook"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '415':
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+      - Hooks
+      operationId: deleteHookV2
+      summary: Soft-delete a hook
+      responses:
+        '204':
+          description: Hook soft-deleted and retained for 45 days.
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/silicons/{silicon_id}/hooks/{hook_id}/restore":
+    post:
+      tags:
+      - Hooks
+      operationId: restoreHookV2
+      summary: Restore a recoverable hook
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/SiliconId"
+      - "$ref": "#/components/parameters/HookId"
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Hook restored with its existing endpoint and secret.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Hook"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '410':
+          "$ref": "#/components/responses/Gone"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/silicons/{silicon_id}/hooks/{hook_id}/secret/rotate":
+    post:
+      tags:
+      - Hooks
+      operationId: rotateHookSecretV2
+      summary: Issue a new generated signing secret
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/SiliconId"
+      - "$ref": "#/components/parameters/HookId"
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: New secret shown once; the old secret is invalid immediately.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/SigningSecretResponse"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '410':
+          "$ref": "#/components/responses/Gone"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/silicons/{silicon_id}/hooks/{hook_id}/endpoint/rotate":
+    post:
+      tags:
+      - Hooks
+      operationId: rotateHookEndpointV2
+      summary: Replace the endpoint key and retire the old one forever
+      description: 'Allocates a new eight-character alphanumeric key that has never
+        been used for this Silicon. The previous key is retired permanently: it is
+        never reissued for the Silicon and requests to it receive 410 endpoint_retired.'
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/SiliconId"
+      - "$ref": "#/components/parameters/HookId"
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Hook with its new endpoint URL and key.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Hook"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/silicons/{silicon_id}/hooks/{hook_id}/events":
+    get:
+      tags:
+      - History
+      operationId: listHookEventsV2
+      summary: List the last n verified requests for one hook
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/SiliconId"
+      - "$ref": "#/components/parameters/HookId"
+      - "$ref": "#/components/parameters/HistoryLimit"
+      - "$ref": "#/components/parameters/HistoryCursor"
+      responses:
+        '200':
+          "$ref": "#/components/responses/EventPageOk"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/silicons/{silicon_id}/events":
+    get:
+      tags:
+      - History
+      operationId: listSiliconEventsV2
+      summary: List the last n verified requests across all of a Silicon's hooks
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/SiliconId"
+      - name: hook_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - "$ref": "#/components/parameters/HistoryLimit"
+      - "$ref": "#/components/parameters/HistoryCursor"
+      responses:
+        '200':
+          "$ref": "#/components/responses/EventPageOk"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/silicons/{silicon_id}/hooks/{hook_id}/blocked-requests":
+    get:
+      tags:
+      - History
+      operationId: listHookBlockedRequestsV2
+      summary: List withheld requests for one hook
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/SiliconId"
+      - "$ref": "#/components/parameters/HookId"
+      - "$ref": "#/components/parameters/HistoryLimit"
+      - "$ref": "#/components/parameters/HistoryCursor"
+      responses:
+        '200':
+          "$ref": "#/components/responses/BlockedPageOk"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/silicons/{silicon_id}/blocked-requests":
+    get:
+      tags:
+      - History
+      operationId: listSiliconBlockedRequestsV2
+      summary: List withheld requests across all of a Silicon's hooks
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/SiliconId"
+      - name: hook_id
+        in: query
+        schema:
+          type: string
+          format: uuid
+      - "$ref": "#/components/parameters/HistoryLimit"
+      - "$ref": "#/components/parameters/HistoryCursor"
+      responses:
+        '200':
+          "$ref": "#/components/responses/BlockedPageOk"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/silicon/{silicon_id}/{endpoint_key}":
+    parameters:
+    - "$ref": "#/components/parameters/SiliconId"
+    - "$ref": "#/components/parameters/EndpointKey"
+    post:
+      tags:
+      - Ingress
+      operationId: receiveWebhookCompatibilityV2
+      summary: Compatibility alias for provider ingress
+      security: []
+      requestBody:
+        required: false
+        content:
+          "*/*":
+            schema:
+              type: string
+              format: binary
+      responses:
+        '200':
+          description: The request was received and receipted.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Receipt"
+        '403':
+          "$ref": "#/components/responses/Blocked"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '410':
+          "$ref": "#/components/responses/Gone"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/auth/iam":
+    get:
+      tags: [Auth]
+      operationId: getIamInformationV2
+      summary: Discover the public IAM application configuration
+      description: Returns the configured app_id and IAM origin before login. A test
+        key selects the test application; production credentials are never a fallback.
+        No application secret, token, or environment key is returned.
+      security: []
+      parameters:
+      - "$ref": "#/components/parameters/TestKey"
+      - "$ref": "#/components/parameters/TestAppSecret"
+      responses:
+        '200':
+          description: Public application configuration (app_id is null in local auth mode).
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [app_id, iam_url, testing, login_method]
+                properties:
+                  app_id:
+                    type: [string, 'null']
+                  iam_url:
+                    type: string
+                    format: uri
+                  testing:
+                    type: boolean
+                  login_method:
+                    type: string
+                    const: short_lived_token
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/auth/status":
+    get:
+      tags: [Auth]
+      operationId: getLoginStatusV2
+      summary: Verify the current identity online with IAM
+      description: Verifies the bearer and current organization membership with IAM.
+        Invalid or revoked credentials return 401. Responses are never cached.
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/TestKey"
+      - "$ref": "#/components/parameters/TestAppSecret"
+      responses:
+        '200':
+          description: Authenticated Carbon or Silicon in the selected organization.
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [authenticated, actor, org_id]
+                properties:
+                  authenticated:
+                    type: boolean
+                    const: true
+                  actor:
+                    type: object
+                    required: [type, id]
+                    properties:
+                      type:
+                        type: string
+                        enum: [carbon, silicon]
+                      id:
+                        type: string
+                  org_id:
+                    type: string
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/auth/login":
+    post:
+      tags:
+      - Auth
+      operationId: loginWithSltV2
+      summary: Exchange a Carbon or Silicon short-lived token
+      description: IAM authenticates the actor. Hook exchanges the opaque SLT using
+        its application credential and returns an access/refresh pair. Local recipient
+        URLs can be configured after login in the client and CLI and are never sent to this endpoint.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/LoginRequest"
+      responses:
+        '200':
+          description: Application tokens for the authenticated actor.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Tokens"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '415':
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/auth/refresh":
+    post:
+      tags:
+      - Auth
+      operationId: refreshTokensV2
+      summary: Rotate a refresh token into a new token pair
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/RefreshRequest"
+      responses:
+        '200':
+          description: New token pair; the presented refresh token is consumed.
+          headers:
+            Cache-Control:
+              schema:
+                const: no-store
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/Tokens"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '415':
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/auth/logout":
+    post:
+      tags:
+      - Auth
+      operationId: logoutV2
+      summary: End the IAM session behind a Hook Application token
+      responses:
+        '204':
+          description: Session ended.
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      description: Supply a refresh token as bearer to revoke its whole family, or
+        an access token to revoke that token. The body is empty.
+    parameters:
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+  "/api/v2/silicons/{silicon_id}/hooks/iam":
+    parameters:
+    - "$ref": "#/components/parameters/OrgId"
+    - "$ref": "#/components/parameters/SiliconId"
+    - "$ref": "#/components/parameters/TestKey"
+    - "$ref": "#/components/parameters/TestAppSecret"
+    post:
+      tags:
+      - IAM
+      operationId: connectIamHookV2
+      summary: Connect Silicon IAM events to the Silicon
+      description: 'Finds or creates the Silicon''s `Silicon IAM` hook, registers
+        its endpoint as the Silicon''s IAM webhook with the caller''s own bearer,
+        and stores the `swhs_` secret IAM issues. The hook verifies IAM''s own convention:
+        HMAC-SHA-256 over `X-Silicon-IAM-Timestamp.body`, presented as `v1=<hex>`
+        in `X-Silicon-IAM-Signature`.'
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: The connected IAM hook.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/IamHook"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '410':
+          "$ref": "#/components/responses/Gone"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/iam/events":
+    post:
+      tags:
+      - IAM
+      operationId: receiveIamEventV2
+      summary: Receive Hook's own Application webhook from Silicon IAM
+      description: Authenticated by IAM's delivery signature over the exact body,
+        not by a bearer. Requires `X-Silicon-IAM-Event-ID`, `X-Silicon-IAM-Timestamp`,
+        `X-Silicon-IAM-Key-Version`, and `X-Silicon-IAM-Signature`.
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: true
+      responses:
+        '204':
+          description: Delivery authenticated and recorded.
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
+        '413':
+          "$ref": "#/components/responses/PayloadTooLarge"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/testing-environments":
+    post:
+      tags:
+      - Testing
+      operationId: createTestingEnvironmentV2
+      summary: Create an empty sandbox linked to a real IAM test environment
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/EnvironmentWithKey"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/CreateEnvironment"
+    get:
+      tags:
+      - Testing
+      operationId: listTestingEnvironmentsV2
+      summary: List this organization’s environments
+      parameters:
+      - "$ref": "#/components/parameters/OrgId"
+      - name: status
+        in: query
+        schema:
+          type: string
+          enum:
+          - active
+          - deleted
+          - all
+          default: active
+      - name: limit
+        in: query
+        schema:
+          type: integer
+          minimum: 1
+          maximum: 1000
+          default: 100
+      - name: after
+        in: query
+        schema:
+          type: string
+          format: uuid
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/EnvironmentList"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/testing-environments/{environment_id}":
+    parameters:
+    - "$ref": "#/components/parameters/EnvironmentId"
+    - "$ref": "#/components/parameters/OrgId"
+    get:
+      tags:
+      - Testing
+      operationId: getTestingEnvironmentV2
+      summary: Read environment metadata
+      parameters: []
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/TestEnvironment"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+      - Testing
+      operationId: deleteTestingEnvironmentV2
+      summary: Soft-delete an environment for 30 days
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/TestEnvironment"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/testing-environments/{environment_id}/key":
+    parameters:
+    - "$ref": "#/components/parameters/EnvironmentId"
+    - "$ref": "#/components/parameters/OrgId"
+    get:
+      tags:
+      - Testing
+      operationId: getTestingEnvironmentKeyV2
+      summary: Retrieve a root key as creator or org admin/owner
+      parameters: []
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/EnvironmentWithKey"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/testing-environments/{environment_id}/key/rotate":
+    parameters:
+    - "$ref": "#/components/parameters/EnvironmentId"
+    - "$ref": "#/components/parameters/OrgId"
+    post:
+      tags:
+      - Testing
+      operationId: rotateTestingEnvironmentKeyV2
+      summary: Rotate the root key and invalidate old scoped sessions
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/EnvironmentWithKey"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/testing-environments/{environment_id}/restore":
+    parameters:
+    - "$ref": "#/components/parameters/EnvironmentId"
+    - "$ref": "#/components/parameters/OrgId"
+    post:
+      tags:
+      - Testing
+      operationId: restoreTestingEnvironmentV2
+      summary: Recover a soft-deleted environment within 30 days
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/TestEnvironment"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/testing-environment":
+    get:
+      tags:
+      - Testing
+      operationId: currentTestingEnvironmentV2
+      summary: Read root metadata using the Hook test key
+      parameters:
+      - &1
+        name: X-Hook-Test-Key
+        in: header
+        required: true
+        description: Selects an isolated Hook environment. The bearer must be from
+          its linked IAM test world. Never attach to public ingress.
+        schema:
+          type: string
+          pattern: "^[A-Za-z0-9]{32}$"
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/TestEnvironment"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+      security: []
+  "/api/v2/testing-environment/clean":
+    post:
+      tags:
+      - Testing
+      operationId: cleanTestingEnvironmentV2
+      summary: Clear all Hook data; retain the environment, IAM binding and URL tombstones
+      parameters:
+      - *1
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/TestEnvironment"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+      security: []
+  "/api/v2/testing-environment/iam":
+    put:
+      tags:
+      - Testing
+      operationId: configureTestingIamV2
+      summary: Install test-only IAM application credentials
+      parameters:
+      - *1
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Operation completed.
+          content:
+            application/json:
+              schema:
+                "$ref": "#/components/schemas/TestEnvironment"
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '409':
+          "$ref": "#/components/responses/Conflict"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '500':
+          "$ref": "#/components/responses/InternalError"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              "$ref": "#/components/schemas/TestIamConfiguration"
+  /api/v2/testing-session:
+    get:
+      operationId: selectedTestingSessionV2
+      summary: Validate an IAM app_secret and inspect its selected sandbox
+      tags: [Testing]
+      security: []
+      parameters:
+      - $ref: '#/components/parameters/TestAppSecret'
+      responses:
+        '200':
+          description: Sandbox selected with no actor login or root authority
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/TestEnvironment'
+        '401':
+          description: Invalid or revoked selector
+        '422':
+          description: Test selector required
+  /api/v2/contracts:
+    get:
+      operationId: versionedContractCatalogV2
+      summary: Discover lifecycle compatibility in the selected environment
+      tags: [System]
+      security: []
+      parameters:
+      - $ref: '#/components/parameters/TestAppSecret'
+      responses:
+        '200':
+          description: Public lifecycle status, policy and compatibility matrix.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ContractCatalog'
+        '410':
+          description: API contract has sunset
+  /api/v2/telemetry:
+    post:
+      operationId: recordTelemetryEventV2
+      summary: Append a bounded diagnostic event to Hook-owned storage
+      description: >-
+        Requires a live IAM actor in the selected environment. Maximum 8 KiB.
+        Credentials, free-form text and payload fields are rejected. Event IDs
+        deduplicate within the environment. Accepted writes may be dropped under
+        load or during shutdown. Send X-Hook-Telemetry off to opt out.
+      tags: [System]
+      parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - $ref: '#/components/parameters/TestAppSecret'
+      - name: X-Hook-Telemetry
+        in: header
+        schema: {type: string, enum: [on, off]}
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/TelemetryEvent'
+      responses:
+        '202':
+          description: Accepted for best-effort persistence
+        '204':
+          description: Collection disabled
+        '401':
+          description: Invalid actor or environment credentials
+        '422':
+          description: Invalid event shape or value
+  "/api/v2/delivery/receiver":
+    parameters:
+      - $ref: '#/components/parameters/OrgId'
+      - $ref: '#/components/parameters/TestAppSecret'
+      - $ref: '#/components/parameters/TestKey'
+    get:
+      tags: [Ting]
+      operationId: receiverScopeV2
+      summary: Read the current internal testing receiver scope
+      description: Authenticates the current Hook actor and selected ready test environment. Returns the authoritative IAM organization UUID alongside the Hook organization handle and shared Honeycomb generation. Production is rejected. An active Ting recipient grant and approved receiver bootstrap operation are required for subsequent issuance.
+      responses:
+        '200':
+          description: Verified scope; no receiving capability has been issued.
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiverScope'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    post:
+      tags: [Ting]
+      operationId: bootstrapReceiverV2
+      summary: Acquire or explicitly renew a scoped internal testing receiver
+      description: Requires Ting 0.1.4. The environment and shared generation must match the previously selected scope. Hook obtains a fresh request-bound IAM proof for every attempt, using only its exact audience testing headers. Retry an uncertain request with the same Idempotency-Key and body. An exact replay returns the original capability and expiry, which can already be expired; it does not resume receiving or extend authority. Renew explicitly with a new key and the original receiver_id. This testing-only capability permits the current actor's Hook inbox and watch, not general sessions, grant changes, destinations or ACKs. It expires within 30 seconds and no later than its IAM proof. Production is rejected.
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ReceiverBootstrap'
+      responses:
+        '200':
+          description: Original or newly issued scoped receiver; inspect expires_at before use.
+          headers:
+            Cache-Control:
+              schema: {type: string, const: no-store}
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReceiverCapability'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '415':
+          $ref: '#/components/responses/UnsupportedMediaType'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/RateLimited'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+  "/api/v2/delivery/publisher":
+    parameters:
+      -
+        "$ref": "#/components/parameters/OrgId"
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+    post:
+      tags:
+        - "Ting"
+      operationId: "provisionPublisherV2"
+      summary: "Provision the dedicated internal publisher"
+      description: "A Carbon owner or administrator provisions a separate server-owned Silicon session using a fresh Hook SLT. Hook encrypts and exclusively refreshes this family. Retry an uncertain request with the same Idempotency-Key and SLT. replace_rejected explicitly replaces a rejected family; an ordinary request cannot overwrite an existing publisher. Missing publisher configuration leaves accepted webhooks pending."
+      parameters:
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: "Publisher initialized; no access or refresh credentials are returned."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/PublisherMetadata"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/UnprocessableEntity"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/PublisherProvision"
+  "/api/v2/delivery/recipient":
+    parameters:
+      -
+        "$ref": "#/components/parameters/OrgId"
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+    post:
+      tags:
+        - "Ting"
+      operationId: "registerDeliveryRecipientV2"
+      summary: "Register the current actor as a Ting recipient"
+      description: "Send an empty body, not {}. Hook obtains a fresh request-bound IAM proof representing the authenticated actor. The caller cannot select a different recipient or remote URL. This grant authorizes Hook publication; the enclosing app separately manages the actor's Ting receiving session and destination."
+      parameters: []
+      responses:
+        "200":
+          description: "Ting confirmed the current actor's active grant to Hook."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/TingRecipientGrant"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/silicons/{silicon_id}/events/{event_id}":
+    parameters:
+      -
+        "$ref": "#/components/parameters/OrgId"
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+      -
+        "$ref": "#/components/parameters/SiliconId"
+      -
+        "$ref": "#/components/parameters/EventId"
+    get:
+      tags:
+        - "Ting"
+      operationId: "getEventV2"
+      summary: "Hydrate one retained original webhook"
+      description: "Requires current IAM permission to read this Silicon. The optional environment_id and environment_generation query parameters must be provided together and must match the original event reference. The reference generation remains unchanged across key rotation and restore; use current runtime credentials to authorize the lookup. Expired, cleaned, invisible, or mismatched events return 404. A reference alone grants no access."
+      parameters:
+        -
+          "$ref": "#/components/parameters/SourceEnvironmentId"
+        -
+          "$ref": "#/components/parameters/SourceEnvironmentGeneration"
+      responses:
+        "200":
+          description: "The original retained webhook, including its summary and captured request."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Event"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "422":
+          "$ref": "#/components/responses/UnprocessableEntity"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/silicons/{silicon_id}/events/{event_id}/publication":
+    parameters:
+      -
+        "$ref": "#/components/parameters/OrgId"
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+      -
+        "$ref": "#/components/parameters/SiliconId"
+      -
+        "$ref": "#/components/parameters/EventId"
+    get:
+      tags:
+        - "Ting"
+      operationId: "getEventPublicationV2"
+      summary: "Inspect publication and recipient receipt"
+      description: "Reports publication for the primary Silicon recipient after current read authorization. There is no recipient selector. Ting acceptance, durable daemon receipt and local destination acceptance are distinct; none proves completed recipient work. Receipt lookup is best effort, so 200 can include recipient_status_error while preserving the durable publication state."
+      parameters: []
+      responses:
+        "200":
+          description: "Durable publication status and, when available, a live Ting receipt."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/PublicationStatus"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v1/delivery/publisher":
+    parameters:
+      -
+        "$ref": "#/components/parameters/OrgId"
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+    post:
+      tags:
+        - "Ting"
+      operationId: "provisionPublisherV1"
+      summary: "Provision the dedicated internal publisher"
+      description: "A Carbon owner or administrator provisions a separate server-owned Silicon session using a fresh Hook SLT. Hook encrypts and exclusively refreshes this family. Retry an uncertain request with the same Idempotency-Key and SLT. replace_rejected explicitly replaces a rejected family; an ordinary request cannot overwrite an existing publisher. Missing publisher configuration leaves accepted webhooks pending."
+      parameters:
+        -
+          "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        "200":
+          description: "Publisher initialized; no access or refresh credentials are returned."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/PublisherMetadata"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "415":
+          "$ref": "#/components/responses/UnsupportedMediaType"
+        "422":
+          "$ref": "#/components/responses/UnprocessableEntity"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+      requestBody:
+        required: true
+        content:
+          "application/json":
+            schema:
+              "$ref": "#/components/schemas/PublisherProvision"
+      deprecated: true
+  "/api/v1/delivery/recipient":
+    parameters:
+      -
+        "$ref": "#/components/parameters/OrgId"
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+    post:
+      tags:
+        - "Ting"
+      operationId: "registerDeliveryRecipientV1"
+      summary: "Register the current actor as a Ting recipient"
+      description: "Send an empty body, not {}. Hook obtains a fresh request-bound IAM proof representing the authenticated actor. The caller cannot select a different recipient or remote URL. This grant authorizes Hook publication; the enclosing app separately manages the actor's Ting receiving session and destination."
+      parameters: []
+      responses:
+        "200":
+          description: "Ting confirmed the current actor's active grant to Hook."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/TingRecipientGrant"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+      deprecated: true
+  "/api/v1/silicons/{silicon_id}/events/{event_id}":
+    parameters:
+      -
+        "$ref": "#/components/parameters/OrgId"
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+      -
+        "$ref": "#/components/parameters/SiliconId"
+      -
+        "$ref": "#/components/parameters/EventId"
+    get:
+      tags:
+        - "Ting"
+      operationId: "getEventV1"
+      summary: "Hydrate one retained original webhook"
+      description: "Requires current IAM permission to read this Silicon. The optional environment_id and environment_generation query parameters must be provided together and must match the original event reference. The reference generation remains unchanged across key rotation and restore; use current runtime credentials to authorize the lookup. Expired, cleaned, invisible, or mismatched events return 404. A reference alone grants no access."
+      parameters:
+        -
+          "$ref": "#/components/parameters/SourceEnvironmentId"
+        -
+          "$ref": "#/components/parameters/SourceEnvironmentGeneration"
+      responses:
+        "200":
+          description: "The original retained webhook, including its summary and captured request."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/Event"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "422":
+          "$ref": "#/components/responses/UnprocessableEntity"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+      deprecated: true
+  "/api/v1/silicons/{silicon_id}/events/{event_id}/publication":
+    parameters:
+      -
+        "$ref": "#/components/parameters/OrgId"
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+      -
+        "$ref": "#/components/parameters/SiliconId"
+      -
+        "$ref": "#/components/parameters/EventId"
+    get:
+      tags:
+        - "Ting"
+      operationId: "getEventPublicationV1"
+      summary: "Inspect publication and recipient receipt"
+      description: "Reports publication for the primary Silicon recipient after current read authorization. There is no recipient selector. Ting acceptance, durable daemon receipt and local destination acceptance are distinct; none proves completed recipient work. Receipt lookup is best effort, so 200 can include recipient_status_error while preserving the durable publication state."
+      parameters: []
+      responses:
+        "200":
+          description: "Durable publication status and, when available, a live Ting receipt."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/PublicationStatus"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+      deprecated: true
+  "/api/v2/silicons/{silicon_id}/delivery/subscription":
+    parameters:
+      -
+        "$ref": "#/components/parameters/OrgId"
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+      -
+        "$ref": "#/components/parameters/SiliconId"
+    get:
+      tags:
+        - "Ting"
+      operationId: "getReceivingSubscriptionV2"
+      summary: "Read the current Carbon's receiving interest"
+      description: "Carbon only; requires current permission to read the selected Silicon. An absent interest returns receiving:false with subscription:null. This operation does not create an interest or register a grant."
+      parameters: []
+      responses:
+        "200":
+          description: "The current Carbon's receiving interest, or null if absent."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/ReceivingSubscriptionStatus"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+    post:
+      tags:
+        - "Ting"
+      operationId: "createReceivingSubscriptionV2"
+      summary: "Receive future events from a visible Silicon"
+      description: "Carbon only; send an empty body. Current read permission is required. Hook registers the Carbon's Ting grant before saving the receiving interest and encrypting the current access token. Repeated requests preserve the interest ID and renew its authority. The runtime must repeat POST after refreshing its Hook token or resuming receiving. Publication checks that exact Carbon's current IAM target visibility before sending metadata. Expired caller tokens return 401 unauthenticated; temporary dependencies return 503 provider_unavailable. Does not backfill history or store Carbon refresh credentials. At most 100 Carbon observers per Silicon; overflow returns 409 receiving_subscription_limit. Event hydration always rechecks current IAM authority."
+      parameters: []
+      responses:
+        "200":
+          description: "Future-event receiving interest is enabled."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+          content:
+            "application/json":
+              schema:
+                "$ref": "#/components/schemas/ReceivingSubscriptionStatus"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "409":
+          "$ref": "#/components/responses/Conflict"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "429":
+          "$ref": "#/components/responses/RateLimited"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+    delete:
+      tags:
+        - "Ting"
+      operationId: "deleteReceivingSubscriptionV2"
+      summary: "Stop the caller's receiving interest"
+      description: "Carbon only; send an empty body. A current authenticated Carbon identity in the selected organization is required; continued target visibility is not. Removes only the caller's interest and cancels its queued observer sends, including after target access is revoked. Cannot retract notifications already accepted by Ting. Already absent is a successful 204."
+      parameters: []
+      responses:
+        "204":
+          description: "Interest removed or already absent; no response body."
+          headers:
+            Cache-Control:
+              description: "Sensitive response is not cacheable."
+              schema:
+                type: "string"
+                const: "no-store"
+        "400":
+          "$ref": "#/components/responses/BadRequest"
+        "401":
+          "$ref": "#/components/responses/Unauthorized"
+        "403":
+          "$ref": "#/components/responses/Forbidden"
+        "404":
+          "$ref": "#/components/responses/NotFound"
+        "408":
+          "$ref": "#/components/responses/RequestTimeout"
+        "410":
+          "$ref": "#/components/responses/ContractSunset"
+        "413":
+          "$ref": "#/components/responses/PayloadTooLarge"
+        "500":
+          "$ref": "#/components/responses/InternalError"
+        "503":
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/ws":
+    description: "Every HTTP method on this former Hook delivery route returns 410 delivery_transport_replaced after request admission. Use Ting delivery and authorized event hydration. No WebSocket upgrade, polling queue or cumulative ACK is available in v2."
+    parameters:
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+    get:
+      tags:
+        - "Ting"
+      operationId: "openRetiredWebsocketV2"
+      summary: "Reject the replaced Hook delivery transport"
+      description: "This compatibility tombstone never returns a successful transport response. The documented method and every other method return 410; ordinary request and API contract admission checks still apply."
+      security: []
+      responses:
+        "410":
+          "$ref": "#/components/responses/DeliveryTransportReplaced"
+  "/api/v2/relay/ws":
+    description: "Every HTTP method on this former Hook delivery route returns 410 delivery_transport_replaced after request admission. Use Ting delivery and authorized event hydration. No WebSocket upgrade, polling queue or cumulative ACK is available in v2."
+    parameters:
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+    get:
+      tags:
+        - "Ting"
+      operationId: "openRetiredRelayV2"
+      summary: "Reject the replaced Hook delivery transport"
+      description: "This compatibility tombstone never returns a successful transport response. The documented method and every other method return 410; ordinary request and API contract admission checks still apply."
+      security: []
+      responses:
+        "410":
+          "$ref": "#/components/responses/DeliveryTransportReplaced"
+  "/api/v2/silicons/{silicon_id}/deliveries":
+    description: "Every HTTP method on this former Hook delivery route returns 410 delivery_transport_replaced after request admission. Use Ting delivery and authorized event hydration. No WebSocket upgrade, polling queue or cumulative ACK is available in v2."
+    parameters:
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+      -
+        "$ref": "#/components/parameters/SiliconId"
+    get:
+      tags:
+        - "Ting"
+      operationId: "pullRetiredDeliveriesV2"
+      summary: "Reject the replaced Hook delivery transport"
+      description: "This compatibility tombstone never returns a successful transport response. The documented method and every other method return 410; ordinary request and API contract admission checks still apply."
+      security: []
+      responses:
+        "410":
+          "$ref": "#/components/responses/DeliveryTransportReplaced"
+  "/api/v2/silicons/{silicon_id}/deliveries/pull":
+    description: "Every HTTP method on this former Hook delivery route returns 410 delivery_transport_replaced after request admission. Use Ting delivery and authorized event hydration. No WebSocket upgrade, polling queue or cumulative ACK is available in v2."
+    parameters:
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+      -
+        "$ref": "#/components/parameters/SiliconId"
+    get:
+      tags:
+        - "Ting"
+      operationId: "pullRetiredDeliveryAliasV2"
+      summary: "Reject the replaced Hook delivery transport"
+      description: "This compatibility tombstone never returns a successful transport response. The documented method and every other method return 410; ordinary request and API contract admission checks still apply."
+      security: []
+      responses:
+        "410":
+          "$ref": "#/components/responses/DeliveryTransportReplaced"
+  "/api/v2/silicons/{silicon_id}/deliveries/ack":
+    description: "Every HTTP method on this former Hook delivery route returns 410 delivery_transport_replaced after request admission. Use Ting delivery and authorized event hydration. No WebSocket upgrade, polling queue or cumulative ACK is available in v2."
+    parameters:
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+      -
+        "$ref": "#/components/parameters/SiliconId"
+    post:
+      tags:
+        - "Ting"
+      operationId: "acknowledgeRetiredDeliveriesV2"
+      summary: "Reject the replaced Hook delivery transport"
+      description: "This compatibility tombstone never returns a successful transport response. The documented method and every other method return 410; ordinary request and API contract admission checks still apply."
+      security: []
+      responses:
+        "410":
+          "$ref": "#/components/responses/DeliveryTransportReplaced"
+  "/api/v2/silicons/{silicon_id}/deliveries/cursor":
+    description: "Every HTTP method on this former Hook delivery route returns 410 delivery_transport_replaced after request admission. Use Ting delivery and authorized event hydration. No WebSocket upgrade, polling queue or cumulative ACK is available in v2."
+    parameters:
+      -
+        "$ref": "#/components/parameters/TestAppSecret"
+      -
+        "$ref": "#/components/parameters/TestKey"
+      -
+        "$ref": "#/components/parameters/SiliconId"
+    get:
+      tags:
+        - "Ting"
+      operationId: "getRetiredDeliveryCursorV2"
+      summary: "Reject the replaced Hook delivery transport"
+      description: "This compatibility tombstone never returns a successful transport response. The documented method and every other method return 410; ordinary request and API contract admission checks still apply."
+      security: []
+      responses:
+        "410":
+          "$ref": "#/components/responses/DeliveryTransportReplaced"
+
 components:
   securitySchemes:
     bearerAuth:
@@ -1839,6 +3892,28 @@ components:
       schema:
         type: string
         format: uuid
+    EventId:
+      name: "event_id"
+      in: "path"
+      required: true
+      schema:
+        type: "string"
+        format: "uuid"
+    SourceEnvironmentId:
+      name: "environment_id"
+      in: "query"
+      description: "Original event environment UUID; production uses the nil UUID. Supply together with environment_generation. This is a reference check, not a credential or environment selector."
+      schema:
+        type: "string"
+        format: "uuid"
+    SourceEnvironmentGeneration:
+      name: "environment_generation"
+      in: "query"
+      description: "Original event generation; production uses zero. Supply together with environment_id. Preserved across key rotation and restore; a clean deletes the canonical event."
+      schema:
+        type: "integer"
+        format: "int64"
+        minimum: 0
   responses:
     BadRequest:
       description: Required HTTP syntax, headers, or JSON are malformed.
@@ -1936,6 +4011,29 @@ components:
       description: A required dependency cannot make a safe decision.
       content:
         application/json:
+          schema:
+            "$ref": "#/components/schemas/Error"
+    ContractSunset:
+      description: "The selected API contract has sunset (api_version_sunset)."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/Error"
+    DeliveryTransportReplaced:
+      description: "Hook delivery was replaced by Ting (delivery_transport_replaced). A sunset API contract can instead return api_version_sunset. No transport connection or delivery operation occurred."
+      content:
+        "application/json":
+          schema:
+            "$ref": "#/components/schemas/Error"
+    RateLimited:
+      description: "The required upstream operation was rate limited. Retry after the supplied number of seconds."
+      headers:
+        Retry-After:
+          schema:
+            type: "integer"
+            minimum: 1
+      content:
+        "application/json":
           schema:
             "$ref": "#/components/schemas/Error"
   schemas:
@@ -2367,6 +4465,7 @@ components:
       - provider
       - delivery_sequence
       - received_at
+      - summary
       - request
       properties:
         id:
@@ -2389,6 +4488,10 @@ components:
         received_at:
           type: string
           format: date-time
+        summary:
+          type: string
+          description: Provider and receipt time in the hook's IANA timezone, formatted as `{provider} triggered at HH:MM:SS DD-MM-YYYY IANA_ZONE_ID`.
+          example: stripe triggered at 10:00:00 22-09-2026 UTC
         request:
           "$ref": "#/components/schemas/CapturedRequest"
     EventPage:
@@ -2760,3 +4863,477 @@ components:
           type: array
           items:
             "$ref": "#/components/schemas/TestEnvironment"
+
+    ReceiverEnvironment:
+      type: object
+      additionalProperties: false
+      required: [kind, id, generation]
+      properties:
+        kind:
+          type: string
+          const: testing
+        id:
+          type: string
+          format: uuid
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+          description: Shared Honeycomb lifecycle generation; not Hook's internal credential generation.
+    ReceiverScope:
+      type: object
+      additionalProperties: false
+      required: [app_id, for, kind, org_id, hook_org_id, environment]
+      properties:
+        app_id:
+          type: string
+        for:
+          $ref: '#/components/schemas/ExternalId'
+        kind:
+          type: string
+          enum: [carbon, silicon]
+        org_id:
+          type: string
+          format: uuid
+          description: Authoritative IAM organization UUID used by the scoped Ting receiver.
+        hook_org_id:
+          $ref: '#/components/schemas/OrganizationId'
+        environment:
+          $ref: '#/components/schemas/ReceiverEnvironment'
+    ReceiverBootstrap:
+      type: object
+      additionalProperties: false
+      required: [environment_id, generation]
+      properties:
+        environment_id:
+          type: string
+          format: uuid
+        generation:
+          type: integer
+          format: int64
+          minimum: 1
+        receiver_id:
+          type: string
+          minLength: 1
+          maxLength: 255
+          description: The existing scoped receiver to renew explicitly under a new operation key.
+    ReceiverCapability:
+      type: object
+      additionalProperties: false
+      required: [app_id, for, kind, org_id, hook_org_id, environment, receiver_id, receiver_token, expires_at]
+      properties:
+        app_id:
+          type: string
+        for:
+          $ref: '#/components/schemas/ExternalId'
+        kind:
+          type: string
+          enum: [carbon, silicon]
+        org_id:
+          type: string
+          format: uuid
+          description: Authoritative IAM organization UUID used by the scoped Ting receiver.
+        hook_org_id:
+          $ref: '#/components/schemas/OrganizationId'
+        environment:
+          $ref: '#/components/schemas/ReceiverEnvironment'
+        receiver_id:
+          type: string
+        receiver_token:
+          type: string
+          pattern: '^ting_recv_[a-fA-F0-9]{64}$'
+          description: Short-lived scoped secret for the enclosing app adapter; never log or place in URLs.
+        expires_at:
+          type: string
+          format: date-time
+          description: Original expiry is retained on exact replay, even after expiry.
+    PublisherProvision:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "slt"
+      properties:
+        slt:
+          type: "string"
+          minLength: 1
+          maxLength: 4096
+          writeOnly: true
+          description: "Fresh Hook application SLT for the dedicated publisher Silicon, authorized in the selected organization. Never an interactive access/refresh token."
+        replace_rejected:
+          type: "boolean"
+          default: false
+          description: "Explicit recovery of a rejected publisher; cannot replace a usable session."
+    PublisherMetadata:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "org_id"
+        - "actor_id"
+        - "expires_at"
+      properties:
+        org_id:
+          "$ref": "#/components/schemas/OrganizationId"
+        actor_id:
+          "$ref": "#/components/schemas/ExternalId"
+        expires_at:
+          type: "string"
+          format: "date-time"
+      description: "Non-secret dedicated publisher identity and conservative access-token expiry."
+    TingRecipientGrant:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "app_id"
+        - "for"
+        - "active"
+        - "required_delivery"
+      properties:
+        id:
+          type: "string"
+        app_id:
+          type: "string"
+        for:
+          "$ref": "#/components/schemas/ExternalId"
+        active:
+          type: "boolean"
+          const: true
+        required_delivery:
+          type: boolean
+          description: Whether the recipient explicitly enabled required delivery for this app.
+      description: "Verified active Ting grant for the authenticated actor and configured Hook app."
+    ReceivingSubscription:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "org_id"
+        - "silicon_id"
+        - "recipient_id"
+        - "created_at"
+      properties:
+        id:
+          type: "string"
+          format: "uuid"
+        org_id:
+          "$ref": "#/components/schemas/OrganizationId"
+        silicon_id:
+          "$ref": "#/components/schemas/SiliconId"
+        recipient_id:
+          "$ref": "#/components/schemas/ExternalId"
+        created_at:
+          type: "string"
+          format: "date-time"
+    ReceivingSubscriptionStatus:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "receiving"
+        - "subscription"
+      properties:
+        receiving:
+          type: "boolean"
+        subscription:
+          oneOf:
+            -
+              "$ref": "#/components/schemas/ReceivingSubscription"
+            -
+              type: "null"
+    TingDestinationReceipt:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "webhook_id"
+        - "delivery_acked"
+        - "read_acked"
+      properties:
+        webhook_id:
+          type: "string"
+        delivery_acked:
+          type: "boolean"
+          description: "Ting daemon durably received the notification."
+        read_acked:
+          type: "boolean"
+          description: "The local destination accepted the notification; does not mean completed recipient work."
+    TingReceipt:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "read"
+        - "silent"
+        - "delivery"
+        - "deliveries"
+        - "more_destinations"
+      properties:
+        id:
+          type: "string"
+        read:
+          type: "boolean"
+          description: "At least one destination accepted the event, or a Carbon viewed it. This is not a completion receipt."
+        silent:
+          type: "boolean"
+          description: "Recipient notification preference; required delivery still routes silently."
+        delivery:
+          type: string
+          enum: [ordinary, required]
+        deliveries:
+          type: "array"
+          items:
+            "$ref": "#/components/schemas/TingDestinationReceipt"
+        more_destinations:
+          type: "boolean"
+          description: "Only the first destination page is returned; true means this list is incomplete."
+    PublicationStatus:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "event_id"
+        - "recipient_id"
+        - "state"
+        - "delivery"
+        - "silent"
+        - "attempts"
+        - "ting_id"
+        - "last_error_code"
+        - "accepted_at"
+        - "next_attempt_at"
+        - "expires_at"
+        - "recipient_receipt"
+        - "recipient_status_error"
+      properties:
+        event_id:
+          type: "string"
+          format: "uuid"
+        recipient_id:
+          "$ref": "#/components/schemas/ExternalId"
+        state:
+          type: "string"
+          enum:
+            - "pending"
+            - "accepted_by_ting"
+            - "accepted_silently"
+          description: "A verified Ting acceptance is separate from any destination receipt."
+        delivery:
+          type: string
+          enum: [ordinary, required]
+        silent:
+          type: [boolean, "null"]
+          description: Ting notification preference at acceptance; null until accepted. Required delivery remains accepted_by_ting even if silent.
+        attempts:
+          type: "integer"
+          format: "int64"
+          minimum: 0
+        ting_id:
+          type:
+            - "string"
+            - "null"
+        last_error_code:
+          type:
+            - "string"
+            - "null"
+          description: "Safe bounded publication diagnostic; never upstream response bodies or credentials."
+          enum:
+            - null
+            - "authorization_unavailable"
+            - "consent_required"
+            - "recipient_not_registered"
+            - "required_delivery_not_enabled"
+            - "transport_unavailable"
+            - "rate_limited"
+            - "ting_unavailable"
+            - "request_rejected"
+            - "invalid_response"
+            - "publisher_not_configured"
+            - "publisher_unavailable"
+            - "publisher_unauthorized"
+            - "ting_unauthorized"
+            - "type_not_registered"
+            - "idempotency_conflict"
+            - "environment_changed"
+        accepted_at:
+          type:
+            - "string"
+            - "null"
+          format: "date-time"
+        next_attempt_at:
+          type: "string"
+          format: "date-time"
+        expires_at:
+          type: "string"
+          format: "date-time"
+        recipient_receipt:
+          oneOf:
+            -
+              "$ref": "#/components/schemas/TingReceipt"
+            -
+              type: "null"
+        recipient_status_error:
+          type:
+            - "string"
+            - "null"
+          enum:
+            - null
+            - "publisher_unavailable"
+            - "recipient_status_unavailable"
+          description: "Live receipt lookup failure; does not invalidate known publication status."
+
+    EventReference:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "id"
+        - "org_id"
+        - "silicon_id"
+        - "hook_id"
+        - "delivery_sequence"
+        - "received_at"
+        - "summary"
+        - "environment_id"
+        - "environment_generation"
+      properties:
+        id:
+          type: "string"
+          format: "uuid"
+        org_id:
+          "$ref": "#/components/schemas/OrganizationId"
+        silicon_id:
+          "$ref": "#/components/schemas/SiliconId"
+        hook_id:
+          type: "string"
+          format: "uuid"
+        delivery_sequence:
+          type: "integer"
+          format: "int64"
+          minimum: 1
+        received_at:
+          type: "string"
+          format: "date-time"
+        summary:
+          type: "string"
+          description: "Provider and receipt time in the hook's IANA timezone: {provider} triggered at HH:MM:SS DD-MM-YYYY IANA_ZONE_ID."
+          example: "stripe triggered at 10:00:00 22-09-2026 UTC"
+        environment_id:
+          type: "string"
+          format: "uuid"
+          description: "Original event environment; nil UUID in production."
+        environment_generation:
+          type: "integer"
+          format: "int64"
+          minimum: 0
+          description: "Original event generation; zero in production. Preserved across rotation and restore. Hydration rejects a reference after its canonical event is cleaned or expires."
+      description: "Immutable reference delivered inside Ting. Contains no captured provider body, headers or signing secret. Hydration requires current Hook authorization."
+    TingHookEvent:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "type"
+        - "data"
+      properties:
+        type:
+          type: "string"
+          const: "new_event"
+        data:
+          type: "object"
+          additionalProperties: false
+          required:
+            - "sender"
+            - "metadata"
+          properties:
+            sender:
+              type: "string"
+              description: "Provider hook name at receipt."
+            metadata:
+              "$ref": "#/components/schemas/EventReference"
+    ContractStatus:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "api_version"
+        - "status"
+        - "deprecated_at"
+        - "sunset_at"
+        - "websocket_protocols"
+        - "relay_protocols"
+        - "delivery_transport"
+      properties:
+        api_version:
+          type: "string"
+          enum:
+            - "v2"
+            - "v1"
+        status:
+          type: "string"
+          enum:
+            - "active"
+            - "deprecated"
+            - "sunset"
+        deprecated_at:
+          type:
+            - "integer"
+            - "null"
+          format: "int64"
+          description: "Unix timestamp in seconds."
+        sunset_at:
+          type:
+            - "integer"
+            - "null"
+          format: "int64"
+          description: "Unix timestamp in seconds."
+        websocket_protocols:
+          type: "array"
+          maxItems: 1
+          items:
+            type: "integer"
+            const: 1
+          description: "Empty for v2; [1] for legacy v1."
+        relay_protocols:
+          type: "array"
+          maxItems: 1
+          items:
+            type: "integer"
+            const: 1
+          description: "Empty for v2; [1] for legacy v1."
+        delivery_transport:
+          type: "string"
+          enum:
+            - "ting"
+            - "hook"
+          description: "ting for v2; hook for legacy v1."
+    ContractCatalog:
+      type: "object"
+      additionalProperties: false
+      required:
+        - "service"
+        - "contracts"
+        - "policy"
+        - "compatibility_matrix"
+      properties:
+        service:
+          type: "string"
+          const: "silicon-hook"
+        contracts:
+          type: "array"
+          maxItems: 2
+          items:
+            "$ref": "#/components/schemas/ContractStatus"
+        policy:
+          type: "object"
+          additionalProperties: false
+          required:
+            - "breaking_changes"
+            - "sunset_after_idle_days"
+            - "sunset_requires_deprecation"
+          properties:
+            breaking_changes:
+              type: "string"
+              const: "new_major"
+            sunset_after_idle_days:
+              type: "integer"
+              const: 7
+            sunset_requires_deprecation:
+              type: "boolean"
+              const: true
+        compatibility_matrix:
+          type: "string"
+          format: "uri"

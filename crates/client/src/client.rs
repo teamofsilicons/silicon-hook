@@ -31,12 +31,6 @@ pub enum Error {
     /// JSON serialization or decoding failure.
     #[error("invalid JSON: {0}")]
     Json(#[from] serde_json::Error),
-    /// The server closed a stream with a non-normal application reason.
-    #[error("Hook stream closed ({code}): {reason}")]
-    StreamClosed { code: u16, reason: String },
-    /// WebSocket transport/protocol failure.
-    #[error("Hook WebSocket failed: {0}")]
-    WebSocket(#[from] tokio_tungstenite::tungstenite::Error),
 }
 
 /// Result returned by all client operations.
@@ -215,14 +209,14 @@ impl Client {
         self.test_key.is_some() || self.test_app_secret.is_some()
     }
 
-    /// Verifies that the server is Silicon Hook and agrees on API v1.
+    /// Verifies that the server is Silicon Hook and agrees on API v2.
     pub async fn negotiate(&self) -> Result<()> {
         self.negotiated
             .get_or_try_init(|| async {
                 let response = self
                     .http
                     .get(self.url(&["api", "version"])?)
-                    .header("silicon-hook-supported-api-versions", "v1")
+                    .header("silicon-hook-supported-api-versions", "v2")
                     .header(
                         "x-hook-telemetry",
                         if self.telemetry_enabled() {
@@ -235,10 +229,10 @@ impl Client {
                     .await?;
                 let data: serde_json::Value = self.decode(response).await?;
                 if data.get("service").and_then(|v| v.as_str()) != Some("silicon-hook")
-                    || data.get("selected_api_version").and_then(|v| v.as_str()) != Some("v1")
+                    || data.get("selected_api_version").and_then(|v| v.as_str()) != Some("v2")
                 {
                     return Err(Error::Protocol(
-                        "server must identify silicon-hook API v1".into(),
+                        "server must identify silicon-hook API v2".into(),
                     ));
                 }
                 Ok(())
@@ -247,19 +241,13 @@ impl Client {
             .map(|_| ())
     }
 
-    /// Low-level token exchange for hosts, such as the CLI, that already own
-    /// their relay lifecycle. Most applications should use `login`, which
-    /// starts an in-memory relay session. The recipient stays local.
-    pub async fn exchange_slt(
-        &self,
-        slt: &str,
-        _recipient: &crate::Recipient,
-        mutation: &Mutation,
-    ) -> Result<Tokens> {
+    /// Exchanges an IAM short-lived token. The host owns the returned tokens
+    /// and explicitly refreshes them; login starts no listener or delivery work.
+    pub async fn login(&self, slt: &str, mutation: &Mutation) -> Result<Tokens> {
         self.authenticate(slt, mutation).await
     }
 
-    /// Exchange an SLT before configuring local delivery. No recipient goes on the wire.
+    /// Exchanges an SLT without persisting credentials or configuring delivery.
     pub async fn authenticate(&self, slt: &str, mutation: &Mutation) -> Result<Tokens> {
         self.call(
             Method::POST,
@@ -299,6 +287,8 @@ impl Client {
         }
     }
 
+    /// Rotates a token pair when explicitly requested by the host. Reuse the
+    /// mutation on uncertain retries and replace both stored tokens atomically.
     pub async fn refresh(&self, refresh_token: &str, mutation: &Mutation) -> Result<Tokens> {
         self.call(
             Method::POST,
@@ -362,13 +352,13 @@ impl Client {
         body: Option<&B>,
         mutation: Option<&Mutation>,
     ) -> Result<reqwest::RequestBuilder> {
-        let mut segments = vec!["api", "v1"];
+        let mut segments = vec!["api", "v2"];
         segments.extend_from_slice(path);
         let mut request = self
             .http
             .request(method, self.url(&segments)?)
             .query(query)
-            .header("silicon-hook-api-version", "v1")
+            .header("silicon-hook-api-version", "v2")
             .header("x-request-id", self.trace_id.to_string())
             .header(
                 "x-hook-telemetry",

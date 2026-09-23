@@ -1,184 +1,275 @@
+//! Stateless authentication and v2 management must not start receiving work.
+
+use std::sync::{
+    Arc,
+    atomic::{AtomicU8, Ordering},
+};
+
 use axum::{
     Json, Router,
-    extract::{State, WebSocketUpgrade, ws::Message},
+    body::{Body, to_bytes},
+    extract::{Request, State},
     http::{HeaderMap, StatusCode},
-    response::IntoResponse,
-    routing::{get, post},
+    response::{IntoResponse, Response},
+    routing::any,
 };
 use serde_json::{Value, json};
-use silicon_hook_client::{Client, LoginOptions, Mutation};
-use std::{sync::Arc, time::Duration};
-use tokio::sync::{Mutex, mpsc};
+use silicon_hook_client::{Client, Error, Mutation};
+use tokio::sync::Mutex;
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
 
-#[derive(Clone)]
+#[derive(Clone, Default)]
 struct Fixture {
-    notices: mpsc::UnboundedSender<String>,
-    login_bodies: Arc<Mutex<Vec<Value>>>,
+    calls: Arc<Mutex<Vec<Call>>>,
+    version: Arc<AtomicU8>,
 }
 
-async fn server(app: Router) -> (String, tokio::task::JoinHandle<()>) {
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-    let url = format!("http://{}", listener.local_addr().unwrap());
-    let task = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
-    (url, task)
+struct Call {
+    path: String,
+    headers: HeaderMap,
+    body: Value,
 }
 
-async fn notice(rx: &mut mpsc::UnboundedReceiver<String>, expected: &str) {
-    tokio::time::timeout(Duration::from_secs(5), async {
-        loop {
-            let message = rx.recv().await.expect("fixture closed");
-            if message == expected {
-                break;
-            }
-        }
-    })
-    .await
-    .unwrap_or_else(|_| panic!("missing {expected}"));
+struct Server {
+    url: String,
+    fixture: Fixture,
+    task: tokio::task::JoinHandle<std::io::Result<()>>,
 }
 
-async fn stream(ws: WebSocketUpgrade, State(f): State<Fixture>) -> impl IntoResponse {
-    ws.on_upgrade(move |mut socket| async move {
-        let _ = f.notices.send("prewarmed".into());
-        let id = loop {
-            let Some(Ok(Message::Text(text))) = socket.recv().await else { return; };
-            let value: Value = serde_json::from_str(&text).unwrap();
-            if value["type"] == "subscribe" {
-                assert_eq!(value["token"], "oat_test");
-                assert_eq!(value["org_id"], "tos");
-                break value["subscription_id"].as_str().unwrap().to_owned();
-            }
-        };
-        let _ = f.notices.send("connected".into());
-        let ping = json!({"type":"ping","ping_id":"heartbeat-1"});
-        let event = json!({"type":"new_event", "data":{"sender":"demo",
-            "metadata":{"id":"00000000-0000-4000-8000-000000000001", "org_id":"tos",
-                "silicon_id":"cos:tos","hook_id":"00000000-0000-4000-8000-000000000002",
-                "provider":"demo", "delivery_sequence":1,
-                "received_at":"2026-09-09T00:00:00Z", "request":{"method":"POST",
-                    "url":"https://hook.example.test/silicon/cos:tos/ABCDEFGH", "path":"/silicon/cos:tos/ABCDEFGH",
-                    "query_string":"","headers":[],"content_type":"application/json",
-                    "body":"{\"example\":true}","body_base64":null,"remote_ip":"127.0.0.1"}}}});
-        for frame in [ping, event] {
-            if socket.send(Message::Text(json!({"type":"frame","subscription_id":id,"frame":frame}).to_string().into())).await.is_err() { return; }
+impl Server {
+    async fn start() -> Result<Self, Box<dyn std::error::Error>> {
+        let fixture = Fixture::default();
+        fixture.version.store(2, Ordering::SeqCst);
+        let app = Router::new()
+            .route("/{*path}", any(handle))
+            .with_state(fixture.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}", listener.local_addr()?);
+        let task = tokio::spawn(async move { axum::serve(listener, app).await });
+        Ok(Self { url, fixture, task })
+    }
+}
+
+impl Drop for Server {
+    fn drop(&mut self) {
+        self.task.abort();
+    }
+}
+
+fn tokens(refreshed: bool) -> Value {
+    json!({"access_token":if refreshed {"oat_rotated"} else {"oat_test"},
+        "refresh_token":if refreshed {"ort_rotated"} else {"ort_test"},
+        "token_type":"Bearer","expires_in":1,"scopes":[],
+        "actor":{"type":"silicon","id":"cos:tos"},"org_id":"tos"})
+}
+
+async fn handle(State(fixture): State<Fixture>, request: Request<Body>) -> Response {
+    let path = request.uri().path().to_owned();
+    let headers = request.headers().clone();
+    let bytes = to_bytes(request.into_body(), 65_536)
+        .await
+        .expect("fixture body bound");
+    let body = if bytes.is_empty() {
+        Value::Null
+    } else {
+        serde_json::from_slice(&bytes).expect("fixture JSON")
+    };
+    fixture.calls.lock().await.push(Call {
+        path: path.clone(),
+        headers: headers.clone(),
+        body,
+    });
+    match path.as_str() {
+        "/api/version" => {
+            assert_eq!(headers["silicon-hook-supported-api-versions"], "v2");
+            assert!(!headers.contains_key("authorization"));
+            let version = fixture.version.load(Ordering::SeqCst);
+            Json(json!({"service":if version == 3 {"another-service"} else {"silicon-hook"},
+                "selected_api_version":if version == 1 {"v1"} else {"v2"}})).into_response()
         }
-        while let Some(Ok(message)) = socket.recv().await {
-            if let Message::Text(text) = message {
-                let value: Value = serde_json::from_str(&text).unwrap();
-                assert_eq!(value["subscription_id"], id);
-                let value = &value["frame"];
-                let kind = value["type"].as_str().unwrap();
-                if kind == "pong" { assert_eq!(value["ping_id"], "heartbeat-1"); }
-                if kind == "ack" {
-                    assert_eq!(value["silicon_id"], "cos:tos");
-                    assert_eq!(value["through_sequence"], 1);
-                }
-                let _ = f.notices.send(kind.into());
-            }
+        "/api/v2/auth/login" => Json(tokens(false)).into_response(),
+        "/api/v2/auth/refresh" => Json(tokens(true)).into_response(),
+        "/api/v2/auth/logout" => StatusCode::NO_CONTENT.into_response(),
+        "/api/v2/auth/status" if headers.get("authorization").is_some_and(|value| value == "Bearer revoked") => {
+            (StatusCode::UNAUTHORIZED, Json(json!({"error":{"code":"unauthenticated","message":"revoked"}}))).into_response()
         }
-        let _ = f.notices.send("disconnected".into());
-    })
+        "/api/v2/auth/status" => Json(json!({"authenticated":true,"actor":{"type":"silicon","id":"cos:tos"},"org_id":"tos"})).into_response(),
+        "/api/v2/auth/iam" => Json(json!({"app_id":"tos>hook","iam_url":"https://iam.example.test",
+            "testing":headers.contains_key("x-hook-test-key") || headers.contains_key("x-hook-test-app-secret"),
+            "login_method":"short_lived_token"})).into_response(),
+        "/api/v2/silicons/cos:tos/hooks" => Json(json!({"items":[]})).into_response(),
+        _ => (StatusCode::NOT_FOUND, Json(json!({"error":{"code":"unexpected_request","message":"fixture rejected path"}}))).into_response(),
+    }
 }
 
 #[tokio::test]
-async fn authenticate_then_attach_detach_and_replay_without_leaking_destination() -> TestResult {
-    let (tx, mut notices) = mpsc::unbounded_channel();
-    let fixture = Fixture {
-        notices: tx,
-        login_bodies: Arc::default(),
-    };
-    let app = Router::new()
-        .route("/api/version", get(|| async { Json(json!({"service":"silicon-hook", "selected_api_version":"v1"})) }))
-        .route("/api/v1/auth/login", post(|State(f): State<Fixture>, Json(body): Json<Value>| async move {
-            f.login_bodies.lock().await.push(body);
-            Json(json!({"access_token":"oat_test", "refresh_token":"ort_test", "token_type":"Bearer",
-                "expires_in":3600, "scopes":[], "actor":{"type":"silicon","id":"cos:tos"}, "org_id":"tos"}))
-        }))
-        .route("/api/v1/auth/iam", get(|headers: HeaderMap| async move {
-            assert_eq!(headers["x-hook-test-key"], "ABCDEFGHIJKLMNOPQRSTUVWXYZ123456");
-            Json(json!({"app_id":"test>hook", "iam_url":"https://iam.example.test", "testing":true, "login_method":"short_lived_token"}))
-        }))
-        .route("/api/v1/auth/status", get(|headers: HeaderMap| async move {
-            assert_eq!(headers["x-org-id"], "tos");
-            if headers["authorization"] == "Bearer revoked" {
-                return (StatusCode::UNAUTHORIZED, Json(json!({"error":{"code":"unauthenticated","message":"revoked"}}))).into_response();
-            }
-            Json(json!({"authenticated":true,"actor":{"type":"silicon","id":"cos:tos"},"org_id":"tos"})).into_response()
-        }))
-        .route("/api/v1/relay/ws", get(stream))
-        .route("/failing", post(|State(f): State<Fixture>| async move {
-            let _ = f.notices.send("failed_delivery".into());
-            StatusCode::SERVICE_UNAVAILABLE
-        }))
-        .route("/recipient", post(|State(f): State<Fixture>, headers: HeaderMap, Json(body): Json<Value>| async move {
-            assert_eq!(body.as_object().map(serde_json::Map::len), Some(3));
-            assert_eq!(body["metadata"]["delivery_sequence"], 1);
-            assert_eq!(body["type"], "new_event");
-            assert_eq!(body["data"].as_object().map(serde_json::Map::len), Some(2));
-            assert_eq!(body["data"]["sender"], "demo");
-            let event = &body["data"]["metadata"];
-            assert_eq!(event["silicon_id"], "cos:tos");
-            assert_eq!(event["delivery_sequence"], 1);
-            assert!(event.get("summary").is_none());
-            assert_eq!(event["request"]["body"], "{\"example\":true}");
-            assert_eq!(headers["silicon-hook-event-id"], event["id"].as_str().unwrap());
-            assert_eq!(headers["silicon-hook-delivery-sequence"], "1");
-            let _ = f.notices.send("delivered".into());
-            StatusCode::NO_CONTENT
-        }))
-        .with_state(fixture.clone());
-    let (url, server_task) = server(app).await;
-    let base = Client::new(&url)?.with_auto_update(false);
-    let test = base.with_test_key("ABCDEFGHIJKLMNOPQRSTUVWXYZ123456")?;
-    assert_eq!(test.iam().await?.app_id.as_deref(), Some("test>hook"));
+async fn login_and_refresh_return_tokens_without_delivery_or_background_requests() -> TestResult {
+    let server = Server::start().await?;
+    let base = Client::new(&server.url)?.with_telemetry(false);
     assert!(!base.login_status().await?.authenticated);
+    assert!(server.fixture.calls.lock().await.is_empty());
+    let login = Mutation::with_key("login-fixture-operation")?;
+    let tokens = base.login("opaque-slt", &login).await?;
+    assert_eq!(tokens.access_token.expose(), "oat_test");
+    assert!(!format!("{tokens:?}").contains("oat_test"));
+    assert!(
+        !base.login_status().await?.authenticated,
+        "login does not mutate its client"
+    );
+    let client = base
+        .with_token(tokens.access_token.expose())
+        .with_organization("tos");
+    assert!(client.login_status().await?.authenticated);
+    assert!(client.list_hooks("cos:tos", false).await?.items.is_empty());
+    // A near-expiry token starts no automatic refresh, relay, subscription,
+    // listener registration, downstream callback, or telemetry request.
+    tokio::task::yield_now().await;
+    let recorded = server.fixture.calls.lock().await;
+    assert_eq!(
+        recorded
+            .iter()
+            .map(|call| call.path.as_str())
+            .collect::<Vec<_>>(),
+        [
+            "/api/version",
+            "/api/v2/auth/login",
+            "/api/v2/auth/status",
+            "/api/v2/silicons/cos:tos/hooks"
+        ]
+    );
+    assert_eq!(recorded[1].body, json!({"slt":"opaque-slt"}));
+    assert_eq!(recorded[1].headers["idempotency-key"], login.key());
+    assert!(!recorded[1].headers.contains_key("authorization"));
+    for call in &recorded[1..] {
+        assert_eq!(call.headers["silicon-hook-api-version"], "v2");
+        assert_eq!(call.headers["x-hook-telemetry"], "off");
+    }
+    assert_eq!(recorded[3].headers["authorization"], "Bearer oat_test");
+    drop(recorded);
+    let refresh = Mutation::with_key("refresh-fixture-operation")?;
+    let rotated = client
+        .refresh(tokens.refresh_token.expose(), &refresh)
+        .await?;
+    assert_eq!(rotated.access_token.expose(), "oat_rotated");
+    assert_eq!(rotated.refresh_token.expose(), "ort_rotated");
+    let latest = base
+        .with_token(rotated.access_token.expose())
+        .with_organization("tos");
+    assert!(latest.login_status().await?.authenticated);
+    latest
+        .with_token(rotated.refresh_token.expose())
+        .logout(&Mutation::new())
+        .await?;
+    let recorded = server.fixture.calls.lock().await;
+    assert_eq!(recorded[4].body, json!({"refresh_token":"ort_test"}));
+    assert_eq!(recorded[4].headers["idempotency-key"], refresh.key());
+    assert_eq!(recorded[5].headers["authorization"], "Bearer oat_rotated");
+    assert_eq!(recorded[6].headers["authorization"], "Bearer ort_rotated");
+    assert_eq!(recorded.len(), 7);
+    Ok(())
+}
+
+#[tokio::test]
+async fn negotiation_rejects_old_or_wrong_service_before_consuming_slt_and_can_retry() -> TestResult
+{
+    let server = Server::start().await?;
+    let client = Client::new(&server.url)?;
+    let mutation = Mutation::new();
+    for version in [1, 3] {
+        server.fixture.version.store(version, Ordering::SeqCst);
+        assert!(matches!(
+            client.login("not-yet-consumed", &mutation).await,
+            Err(Error::Protocol(_))
+        ));
+    }
+    assert!(
+        server
+            .fixture
+            .calls
+            .lock()
+            .await
+            .iter()
+            .all(|call| call.path == "/api/version")
+    );
+    server.fixture.version.store(2, Ordering::SeqCst);
+    let token = client.authenticate("not-yet-consumed", &mutation).await?;
+    assert_eq!(token.access_token.expose(), "oat_test");
+    let calls = server.fixture.calls.lock().await;
+    assert_eq!(calls.len(), 4);
+    assert_eq!(calls[3].body, json!({"slt":"not-yet-consumed"}));
+    assert_eq!(calls[3].headers["idempotency-key"], mutation.key());
+    Ok(())
+}
+
+#[tokio::test]
+async fn immutable_identity_and_test_selection_share_only_version_negotiation() -> TestResult {
+    let server = Server::start().await?;
+    let base = Client::new(&server.url)?
+        .with_token("original-token")
+        .with_organization("tos");
+    let root = base.with_test_key("ABCDEFGHIJKLMNOPQRSTUVWXYZ123456")?;
+    let secret = format!("ask_{}", "A".repeat(43));
+    let selected = root.with_test_app_secret(&secret)?;
+    assert!(!selected.login_status().await?.authenticated);
+    let (production_iam, root_iam, selected_iam) =
+        tokio::join!(base.iam(), root.iam(), selected.iam());
+    assert!(!production_iam?.testing);
+    assert!(root_iam?.testing);
+    assert!(selected_iam?.testing);
     assert!(
         !base
-            .with_token("revoked")
-            .with_organization("tos")
+            .without_test_environment()
             .login_status()
             .await?
             .authenticated
     );
-    let port = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await?
-        .local_addr()?
-        .port();
-    let options = LoginOptions {
-        port,
-        ..LoginOptions::default()
-    };
-    let session = base
-        .login_with_options("opaque-slt", &options, &Mutation::new())
-        .await?;
-    assert!(session.recipient().is_none());
-    assert!(session.health().await.is_ok());
-    assert!(session.client().login_status().await?.authenticated);
-    notice(&mut notices, "prewarmed").await;
-    assert!(
-        notices.try_recv().is_err(),
-        "prewarming does not subscribe or acknowledge without a recipient"
-    );
+    let calls = server.fixture.calls.lock().await;
     assert_eq!(
-        *fixture.login_bodies.lock().await,
-        vec![json!({"slt":"opaque-slt"})]
+        calls
+            .iter()
+            .filter(|call| call.path == "/api/version")
+            .count(),
+        1
     );
-    session.webhook(&format!("{url}/failing"))?;
-    notice(&mut notices, "failed_delivery").await;
-    session.unhook();
-    assert!(session.recipient().is_none());
-    notice(&mut notices, "disconnected").await;
-    assert!(session.health().await.is_ok());
-    assert!(
-        session
-            .webhook("https://user:password@example.com/events")
-            .is_err()
+    let app_secret = calls
+        .iter()
+        .find(|call| call.headers.contains_key("x-hook-test-app-secret"))
+        .ok_or("selected request")?;
+    assert_eq!(app_secret.headers["x-hook-test-app-secret"], secret);
+    assert!(!app_secret.headers.contains_key("x-hook-test-key"));
+    assert!(!app_secret.headers.contains_key("authorization"));
+    assert!(!app_secret.headers.contains_key("x-org-id"));
+    let root = calls
+        .iter()
+        .find(|call| call.headers.contains_key("x-hook-test-key"))
+        .ok_or("root request")?;
+    assert_eq!(root.headers["authorization"], "Bearer original-token");
+    assert_eq!(root.headers["x-org-id"], "tos");
+    Ok(())
+}
+
+#[tokio::test]
+async fn revoked_status_and_invalid_identifiers_do_not_start_receiving_or_retry() -> TestResult {
+    let server = Server::start().await?;
+    let client = Client::new(&server.url)?
+        .with_token("revoked")
+        .with_organization("tos");
+    assert!(!client.login_status().await?.authenticated);
+    assert!(matches!(
+        client.list_hooks("../cos:tos", false).await,
+        Err(Error::Invalid(_))
+    ));
+    assert_eq!(
+        server
+            .fixture
+            .calls
+            .lock()
+            .await
+            .iter()
+            .map(|call| call.path.as_str())
+            .collect::<Vec<_>>(),
+        ["/api/version", "/api/v2/auth/status"]
     );
-    session.webhook(&format!("{url}/recipient"))?;
-    notice(&mut notices, "delivered").await;
-    notice(&mut notices, "ack").await;
-    session.shutdown().await?;
-    server_task.abort();
     Ok(())
 }

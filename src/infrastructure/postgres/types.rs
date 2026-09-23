@@ -292,6 +292,8 @@ pub enum RestoreHookOutcome {
 /// A verified request to append to a hook's log and its Silicon's stream.
 #[derive(Clone, Debug)]
 pub struct AcceptEvent {
+    /// IAM application owning the outgoing Ting type.
+    pub delivery_app_id: String,
     /// Preallocated stable event identifier.
     pub event_id: EventId,
     /// Receiving hook as resolved for this request.

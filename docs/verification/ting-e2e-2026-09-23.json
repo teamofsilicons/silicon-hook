@@ -1,0 +1,1636 @@
+{
+  "scope": "Isolated local services; not production deployment or full sandbox acceptance",
+  "reports": {
+    "hook": {
+      "complete": true,
+      "hook_api": "v2",
+      "ting_commit": "a86971a08089bd212810b2df49f3f13bd41e83ac",
+      "event_id": "01a0ca84-ab45-7a31-bc04-6523b9589d87",
+      "ting_id": "msg_5958a484e55a4b2cb92d4c39548fcaf4",
+      "payload_sha256": "e0980ee910c565417ac3f4d51a666442951f8dc60aed522f9f75f4f4fcabbc15",
+      "retained_fixture_events_consumed": 0,
+      "checks": [
+        "real signed provider HTTP ingress",
+        "Hook event and outgoing record committed",
+        "dedicated IAM publisher SLT",
+        "fresh request-bound Ting send",
+        "real websocket receipt",
+        "current-authority Hook hydration preserves exact raw bytes",
+        "delivery ACK distinct from read ACK",
+        "Hook live publication status confirms recipient acceptance"
+      ],
+      "limitations": [
+        "Ting type seeded as fixture",
+        "native daemon/local webhook not exercised",
+        "isolated normal plane; sandbox lifecycle tested separately"
+      ]
+    },
+    "native": {
+      "complete": true,
+      "ting_version": "0.1.2",
+      "native_archive_sha256": "db11696107ffb76a3d729c975e77bc925969458a104717c9593de6baedc64c4b",
+      "event_id": "01a0ca58-e5d8-7382-8d34-90d033fc920f",
+      "ting_id": "msg_2bf4a665924f46c49edebe6059f9156b",
+      "payload_sha256": "1b6f8568825a73fe245323e48433a567b2d6febe89c140d31f0067badd20237a",
+      "callback_batches": 2,
+      "checks": [
+        "official CLI Ting SLT login",
+        "native daemon in isolated OS namespace",
+        "signed Hook HTTP ingestion",
+        "native persistent queue and delivery ACK",
+        "secret-authenticated native HTTP batch callback",
+        "authenticated Hook hydration preserves exact bytes",
+        "publication unread before local HTTP204",
+        "native HTTP204 triggers read ACK visible in Hook"
+      ],
+      "limitations": [
+        "synthetic application callback; Hook SDK consumer not exercised",
+        "normal fixture plane; sandbox delivery not exercised",
+        "daemon restart/retry not exercised"
+      ]
+    },
+    "sdk": {
+      "complete": true,
+      "ting_version": "0.1.2",
+      "native_archive_sha256": "db11696107ffb76a3d729c975e77bc925969458a104717c9593de6baedc64c4b",
+      "receiver_binary_sha256": "d8f9d3602a489d149bbdc03ffacc762519f10b281678346ba43fa0034e15928b",
+      "event_id": "01a0ca59-7010-7b71-8bd5-b382f6391065",
+      "ting_id": "msg_36b47c06e79648289efe64d868022d8e",
+      "payload_bytes": 300098,
+      "payload_sha256": "c31c44de2c20680fc4019436ea9baf99cb706a1dc7056b5ef3b2c9c78729e9fd",
+      "callback_bytes": 696,
+      "requests": 2,
+      "new_events": 1,
+      "duplicates": 1,
+      "checks": [
+        "real signed Hook ingress",
+        "compact native Ting callback below 256KiB for provider payload above 256KiB",
+        "actual Rust Hook Receiver authenticates and decodes native callback",
+        "actual SDK hydrates exact original payload",
+        "host writes and fsyncs event-ID acceptance before response",
+        "invalid local bearer rejected",
+        "non-204 leaves Ting unread with delivery ACK present",
+        "native daemon and SDK process restarted",
+        "automatic native retry preserves notification identity",
+        "durable event deduplication survives SDK restart",
+        "HTTP204 becomes native read ACK visible in Hook"
+      ],
+      "limitations": [
+        "normal fixture plane; sandbox delivery not exercised",
+        "type is fixture seeded; Honeycomb bootstrap untested",
+        "host acceptance uses the test example, not an external user application"
+      ]
+    },
+    "cli": {
+      "complete": true,
+      "hook_api": "v2",
+      "cli_binary_sha256": "fcdd53f255152f77499ec24e6efe0a68c09c20bc8790aca2d3972d0f063c6a0d",
+      "receiver_binary_sha256": "99e2799ea2fa1b222df00b9d3d6dbc9bbd054939c8855c9dcacd1c40bf80e455",
+      "event_id": "01a0ca79-c712-7ec3-9d2e-f4aacb16650d",
+      "ting_id": "msg_7bc6729fcc744647b773a759705e9258",
+      "payload_sha256": "e0ed15b2b38a45a27158dace5544996da168a5fcab8a1ab5e91d60b315d336fe",
+      "removed_commands": [
+        "webhook",
+        "unhook",
+        "daemon",
+        "listen",
+        "deliveries"
+      ],
+      "checks": [
+        "isolated private CLI home and dedicated IAM token family",
+        "real SLT-file login and online status",
+        "v2 recipient registration and signed-default provider creation",
+        "signed provider HTTP request",
+        "native Ting daemon -> actual Rust SDK -> durable HTTP204 acceptance",
+        "CLI event and events preserve exact payload",
+        "CLI publication reports delivery and read ACK for the current destination",
+        "no Hook relay state or background process",
+        "removed delivery commands fail as unrecognized",
+        "logout removes local session and revokes access plus refresh family"
+      ],
+      "limitations": [
+        "normal fixture plane; sandbox CLI behavior tested separately",
+        "Ting type is fixture seeded"
+      ]
+    },
+    "unavailable": {
+      "complete": true,
+      "receiver_binary_sha256": "1557c953e8c7100dbf83bd766ff424ac4a260e1552ff0d05bd48b426bad66fab",
+      "unavailable_event_id": "01a0ca7d-7155-7212-a3c3-219dbe1ea11c",
+      "unavailable_ting_id": "msg_f793e9fe723d41ee9198922684d30298",
+      "next_event_id": "01a0ca7d-7275-7541-b7d8-7be3d69ce39f",
+      "next_ting_id": "msg_ec9ed93109db4fb4acff7c72c302c8d8",
+      "new_events": 1,
+      "unavailable": 1,
+      "duplicates": 2,
+      "next_payload_sha256": "ccb0a5895d27d98f18f55f0240fe15b611d39fe1c7eb76736d026e87fef75a88",
+      "checks": [
+        "real signed event published and durably queued by the native Ting daemon",
+        "exactly one owned fixture payload removed after Ting acceptance",
+        "authenticated structured Hook 404 becomes a durable unavailable delivery result",
+        "unavailable result is recorded separately and not counted as application work",
+        "HTTP204 releases the native unread queue",
+        "later valid event hydrates exact payload and receives read ACK",
+        "authenticated repeated terminal callback is durably deduplicated after host restart",
+        "expiry after durable acceptance retains the original accepted work on retry"
+      ],
+      "limitations": [
+        "retention is modeled by deleting selected isolated fixture rows; no 14-day clock wait",
+        "terminal replay is a controlled local callback; initial retry and later delivery use the real native daemon",
+        "normal fixture plane; sandbox clean not exercised"
+      ]
+    },
+    "web": {
+      "complete": true,
+      "web_server_sha256": "61ff616ea0a902d8b4e2d383ef83595ad9b38ef21c3a704c9a3542028ff63173",
+      "event_id": "01a0ca9a-9fd2-7b22-aa8a-c0fb1a6b092c",
+      "ting_id": "msg_737b07f92d134a3584ea34d9fa27664b",
+      "payload_bytes": 300121,
+      "payload_sha256": "4aaad687eee8df6bf14d41d82cd60fa061b3ef98c42caff1758c3c1a41c9be1c",
+      "checks": [
+        "isolated real website server and private encrypted browser session",
+        "one official atomic IAM batch issues independent Hook and Ting SLTs",
+        "state-bound website callback exchanges both SLTs and supports completed retry",
+        "second paired sign-in revokes old Hook access/refresh and Ting session while its replacement stays usable",
+        "browser responses expose no Hook or Ting credentials",
+        "organization available to both application sessions",
+        "real Carbon recipient subscription and Ting watch_inbox notification",
+        "signed provider payload above 256KiB hydrates exactly through the BFF",
+        "live event matches authenticated event retrieval and history",
+        "browser observation leaves Ting unread",
+        "logout clears the browser identity and closes its receiving stream",
+        "authenticated operations fail after logout",
+        "logout revokes both real application sessions and the Hook refresh family"
+      ],
+      "limitations": [
+        "callback bridge HTTP protocol exercised; browser JavaScript rendering checked separately",
+        "normal fixture plane; documented sandbox receiver bootstrap gap remains",
+        "Ting type is fixture seeded"
+      ]
+    },
+    "web_browser": {
+      "complete": true,
+      "event_id": "01a0caa0-742b-7c83-9534-95ab605ee472",
+      "ting_id": "msg_5fe31697fe1d48e9ad7d7fec2f57c3de",
+      "payload_bytes": 300124,
+      "payload_sha256": "888fd2d9750ffb0e29e1ec813d7f76974381346906426e2cbdbd84eaafbaad55",
+      "viewport_desktop": "1440x1000",
+      "viewport_mobile": "390x844",
+      "mobile_document_width": 390,
+      "mobile_table_scroll": {
+        "clientWidth": 352,
+        "scrollWidth": 612,
+        "scrollLeft": 260,
+        "position": "relative"
+      },
+      "screenshots": [
+        "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/web-zay0tt_i/browser/overview-desktop.png",
+        "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/web-zay0tt_i/browser/live-desktop.png",
+        "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/web-zay0tt_i/browser/payload-desktop.png",
+        "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/web-zay0tt_i/browser/deliveries-desktop.png",
+        "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/web-zay0tt_i/browser/deliveries-mobile.png",
+        "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/web-zay0tt_i/browser/live-mobile.png"
+      ],
+      "checks": [
+        "real callback JavaScript consumes IAM batch fragment and clears credentials from the URL",
+        "authenticated overview and organization/Silicon controls",
+        "actual Live connect uses BFF Ting receiving",
+        "large signed provider payload matches browser WebSocket and payload inspector exactly",
+        "Deliveries displays primary Silicon publication without acknowledgment controls",
+        "desktop and mobile pages render without horizontal page overflow; mobile table scroll remains available",
+        "UI sign-out clears the browser session",
+        "no browser JavaScript exceptions"
+      ],
+      "limitations": [
+        "official IAM CLI performs real batch consent/issuance; IAM consent webpage is not exercised",
+        "fixture uses production protocol on isolated loopback services; sandbox bootstrap is not covered"
+      ]
+    },
+    "publisher": {
+      "complete": true,
+      "cli_binary_sha256": "8910a5730256d9706b047b9def6e38b300749c8289587aa251dd33a2769aa394",
+      "event_id": "01a0caa4-71ad-7133-91d0-736314308369",
+      "ting_id": "msg_2c29f5664e4644e7b4640c8a8933a19c",
+      "payload_sha256": "b064728b443da2f7eac3d0f4230eea605ca50ed5d99d99011ef3e3a3d27d636b",
+      "checks": [
+        "separate owned Hook process/database and fresh synthetic publisher/recipient identities",
+        "real CLI publisher provision works without a Silicon target",
+        "only non-secret publisher metadata is returned",
+        "same mutation key and SLT replay returns identical metadata via stdin",
+        "replace-rejected refuses to replace a healthy publisher",
+        "CLI recipient registration and signed provider ingress",
+        "original publisher remains usable after refused replacement",
+        "real Ting inbox contains the exact recipient/event reference",
+        "CLI event hydration preserves exact provider body",
+        "owned secondary backend/database removed; Hook management and Ting sessions revoked; local IAM profiles cleared"
+      ],
+      "limitations": [
+        "isolated normal IAM data plane; Ting type definition is inherited from the seeded fixture",
+        "does not repeat native receiver durability checks; separate SDK and CLI fixtures cover those",
+        "IAM Silicon direct sessions and the backend-owned publisher family remain only in the disposable IAM fixture until its cleanup; IAM does not support Silicon logout-all"
+      ]
+    }
+  },
+  "ting_0_1_3": {
+    "version": "0.1.3",
+    "source_commit": "115954f074a9dfd48e3f14b39a70ecaf8cc7a6c5",
+    "reports": {
+      "upgrade": {
+        "complete": true,
+        "version": "0.1.3",
+        "source_commit": "115954f074a9dfd48e3f14b39a70ecaf8cc7a6c5",
+        "server_archive_sha256": "2153cfc50dc8f250215163bb35550950cce6f532112939687457f1e423c85de0",
+        "native_archive_sha256": "dc3496103d01607885cf3e69f76e83f90b7235d8f6fa9c7fc8eeba360284bee0",
+        "server_binary_sha256": "5220a772b252f868c80f432678cf49413a9c4c6f4f6c7d39da5d6df6b2170488",
+        "native_cli_binary_sha256": "44ca910bedb82e50efb92265f637d90d8d1a6ade1ec08db7d00afbf90ec280b2",
+        "native_daemon_binary_sha256": "ec1bbf43a73a6a1cff4e90b3d313a78dd593cac8c60b3b9dce7edc61a9be5580",
+        "health_response": {
+          "service": "ting",
+          "status": "ok",
+          "version": "0.1.3"
+        },
+        "session_environment_attestation": {
+          "kind": "production"
+        },
+        "checks": [
+          "published release archives verified against their SHA256SUMS",
+          "owned server SQLite and native profile/queue copied while both containers were stopped",
+          "old containers/data and historical0.1.2 reports retained unchanged",
+          "only fixture Ting server and daemon replaced; host services and production untouched",
+          "existing recipient Ting session survives migration and reports production environment",
+          "actual0.1.3 native CLI fresh isolated profile exchanges Ting-bound IAM SLT, checks status, and logs out"
+        ]
+      },
+      "hook": {
+        "complete": true,
+        "hook_api": "v2",
+        "ting_commit": "115954f074a9dfd48e3f14b39a70ecaf8cc7a6c5",
+        "event_id": "01a0caaf-83d8-7301-8446-555c1e8f2970",
+        "ting_id": "msg_f5707f3a78ab47be8e94b3288e4fa295",
+        "payload_sha256": "2d3b5b96758b4411156debd19cb8735da78d041b35341bed8a04e192d360dc82",
+        "retained_fixture_events_consumed": 7,
+        "checks": [
+          "real signed provider HTTP ingress",
+          "Hook event and outgoing record committed",
+          "dedicated IAM publisher SLT",
+          "fresh request-bound Ting send",
+          "real websocket receipt",
+          "current-authority Hook hydration preserves exact raw bytes",
+          "delivery ACK distinct from read ACK",
+          "Hook live publication status confirms recipient acceptance"
+        ],
+        "limitations": [
+          "Ting type seeded as fixture",
+          "native daemon/local webhook not exercised",
+          "isolated normal plane; sandbox lifecycle tested separately"
+        ]
+      },
+      "native": {
+        "complete": true,
+        "ting_version": "0.1.3",
+        "native_archive_sha256": "dc3496103d01607885cf3e69f76e83f90b7235d8f6fa9c7fc8eeba360284bee0",
+        "event_id": "01a0caaf-a9bb-75e2-9fba-930a4d7665ee",
+        "ting_id": "msg_62941b4dd0ed4bed9f91704caa50eb67",
+        "payload_sha256": "171c3c8f40294465838b82dc8e677b47097eb6b00f80f40258e5c602cda8c54a",
+        "callback_batches": 1,
+        "checks": [
+          "official CLI Ting SLT login",
+          "native daemon in isolated OS namespace",
+          "signed Hook HTTP ingestion",
+          "native persistent queue and delivery ACK",
+          "secret-authenticated native HTTP batch callback",
+          "authenticated Hook hydration preserves exact bytes",
+          "publication unread before local HTTP204",
+          "native HTTP204 triggers read ACK visible in Hook"
+        ],
+        "limitations": [
+          "synthetic application callback; Hook SDK consumer not exercised",
+          "normal fixture plane; sandbox delivery not exercised",
+          "daemon restart/retry not exercised"
+        ]
+      },
+      "sdk": {
+        "complete": true,
+        "ting_version": "0.1.3",
+        "native_archive_sha256": "dc3496103d01607885cf3e69f76e83f90b7235d8f6fa9c7fc8eeba360284bee0",
+        "receiver_binary_sha256": "2e366e8a92d59aa71f87947bd764f8b7c4e2d398a208b81e2a480fa8859ad8c6",
+        "event_id": "01a0caaf-b02c-7731-837d-047a836e4da5",
+        "ting_id": "msg_3f4d9b195f1f48d1864b52f7de48bb73",
+        "payload_bytes": 300098,
+        "payload_sha256": "db003a9210a9b960629605e2008be4e88a5d75f4d5fb8701fb59a6a007cc8fa2",
+        "callback_bytes": 696,
+        "requests": 2,
+        "new_events": 1,
+        "duplicates": 1,
+        "checks": [
+          "real signed Hook ingress",
+          "compact native Ting callback below 256KiB for provider payload above 256KiB",
+          "actual Rust Hook Receiver authenticates and decodes native callback",
+          "actual SDK hydrates exact original payload",
+          "host writes and fsyncs event-ID acceptance before response",
+          "invalid local bearer rejected",
+          "non-204 leaves Ting unread with delivery ACK present",
+          "native daemon and SDK process restarted",
+          "automatic native retry preserves notification identity",
+          "durable event deduplication survives SDK restart",
+          "HTTP204 becomes native read ACK visible in Hook"
+        ],
+        "limitations": [
+          "normal fixture plane; sandbox delivery not exercised",
+          "type is fixture seeded; Honeycomb bootstrap untested",
+          "host acceptance uses the test example, not an external user application"
+        ]
+      },
+      "cli": {
+        "complete": true,
+        "hook_api": "v2",
+        "cli_binary_sha256": "41e5171176134089a3c6b8f6a8c57db1236181b38fc0de15a5ae0d2d3fafde14",
+        "receiver_binary_sha256": "2e366e8a92d59aa71f87947bd764f8b7c4e2d398a208b81e2a480fa8859ad8c6",
+        "event_id": "01a0cab0-ef48-7763-a38c-dd002bfbc921",
+        "ting_id": "msg_e6b06bec05d24af184cf19409a26a697",
+        "payload_sha256": "6ca44023818781b6025d98faa762d34fe513be057a39afbee49395e21946412b",
+        "removed_commands": [
+          "webhook",
+          "unhook",
+          "daemon",
+          "listen",
+          "deliveries"
+        ],
+        "checks": [
+          "isolated private CLI home and dedicated IAM token family",
+          "real SLT-file login and online status",
+          "v2 recipient registration and signed-default provider creation",
+          "signed provider HTTP request",
+          "native Ting daemon -> actual Rust SDK -> durable HTTP204 acceptance",
+          "CLI event and events preserve exact payload",
+          "CLI publication reports delivery and read ACK for the current destination",
+          "no Hook relay state or background process",
+          "removed delivery commands fail as unrecognized",
+          "logout removes local session and revokes access plus refresh family"
+        ],
+        "limitations": [
+          "normal fixture plane; sandbox CLI behavior tested separately",
+          "Ting type is fixture seeded"
+        ]
+      },
+      "unavailable": {
+        "complete": true,
+        "receiver_binary_sha256": "2e366e8a92d59aa71f87947bd764f8b7c4e2d398a208b81e2a480fa8859ad8c6",
+        "unavailable_event_id": "01a0cab0-f38f-7c80-a085-cda6eea59112",
+        "unavailable_ting_id": "msg_a48129239cac48afbea4e497f5c6abc9",
+        "next_event_id": "01a0cab0-f52d-7123-9e63-e28110e76bca",
+        "next_ting_id": "msg_dc9c2f0b441f4cf79d4a81aea45ab260",
+        "new_events": 1,
+        "unavailable": 1,
+        "duplicates": 2,
+        "next_payload_sha256": "e008b743beb8d0b724f73ed2dbb03badf706dda9f5cbfb4158d303c5dec0a2bc",
+        "checks": [
+          "real signed event published and durably queued by the native Ting daemon",
+          "exactly one owned fixture payload removed after Ting acceptance",
+          "authenticated structured Hook 404 becomes a durable unavailable delivery result",
+          "unavailable result is recorded separately and not counted as application work",
+          "HTTP204 releases the native unread queue",
+          "later valid event hydrates exact payload and receives read ACK",
+          "authenticated repeated terminal callback is durably deduplicated after host restart",
+          "expiry after durable acceptance retains the original accepted work on retry"
+        ],
+        "limitations": [
+          "retention is modeled by deleting selected isolated fixture rows; no 14-day clock wait",
+          "terminal replay is a controlled local callback; initial retry and later delivery use the real native daemon",
+          "normal fixture plane; sandbox clean not exercised"
+        ]
+      },
+      "web": {
+        "complete": true,
+        "web_server_sha256": "bfc5bdac35ae1feb3628bfc2682ff6838df90ec56217bb324003337666ce9c6b",
+        "event_id": "01a0cab1-91ee-71e1-9f75-669e3f422a4c",
+        "ting_id": "msg_7335fd0b2bce41138804586ffb4d86c6",
+        "payload_bytes": 300121,
+        "payload_sha256": "7e1e14a8d8e5259f2e641753ec2e3f8ab8633951c9c50163e0f7c63297953c2a",
+        "checks": [
+          "isolated real website server and private encrypted browser session",
+          "one official atomic IAM batch issues independent Hook and Ting SLTs",
+          "state-bound website callback exchanges both SLTs and supports completed retry",
+          "second paired sign-in revokes old Hook access/refresh and Ting session while its replacement stays usable",
+          "browser responses expose no Hook or Ting credentials",
+          "organization available to both application sessions",
+          "real Carbon recipient subscription and Ting watch_inbox notification",
+          "signed provider payload above 256KiB hydrates exactly through the BFF",
+          "live event matches authenticated event retrieval and history",
+          "browser observation leaves Ting unread",
+          "logout clears the browser identity and closes its receiving stream",
+          "authenticated operations fail after logout",
+          "logout revokes both real application sessions and the Hook refresh family"
+        ],
+        "limitations": [
+          "callback bridge HTTP protocol exercised; browser JavaScript rendering checked separately",
+          "normal fixture plane; documented sandbox receiver bootstrap gap remains",
+          "Ting type is fixture seeded"
+        ]
+      },
+      "web_browser": {
+        "complete": true,
+        "event_id": "01a0cab1-99d9-7a70-a47b-da3ae19ec41d",
+        "ting_id": "msg_7d54b7ab1dc54870be9c2c0f2ece4053",
+        "payload_bytes": 300124,
+        "payload_sha256": "c927ca91d3a6011e5b2bd182a48db6b7d4a4b1f02dc1f5df776b20541c12bd6d",
+        "viewport_desktop": "1440x1000",
+        "viewport_mobile": "390x844",
+        "mobile_document_width": 390,
+        "mobile_table_scroll": {
+          "clientWidth": 352,
+          "scrollWidth": 612,
+          "scrollLeft": 260,
+          "position": "relative"
+        },
+        "screenshots": [
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/web-0cg1d618/browser/overview-desktop.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/web-0cg1d618/browser/live-desktop.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/web-0cg1d618/browser/payload-desktop.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/web-0cg1d618/browser/deliveries-desktop.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/web-0cg1d618/browser/deliveries-mobile.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/web-0cg1d618/browser/live-mobile.png"
+        ],
+        "checks": [
+          "real callback JavaScript consumes IAM batch fragment and clears credentials from the URL",
+          "authenticated overview and organization/Silicon controls",
+          "actual Live connect uses BFF Ting receiving",
+          "large signed provider payload matches browser WebSocket and payload inspector exactly",
+          "Deliveries displays primary Silicon publication without acknowledgment controls",
+          "desktop and mobile pages render without horizontal page overflow; mobile table scroll remains available",
+          "UI sign-out clears the browser session",
+          "no browser JavaScript exceptions"
+        ],
+        "limitations": [
+          "official IAM CLI performs real batch consent/issuance; IAM consent webpage is not exercised",
+          "fixture uses production protocol on isolated loopback services; sandbox bootstrap is not covered"
+        ]
+      },
+      "publisher": {
+        "complete": true,
+        "cli_binary_sha256": "41e5171176134089a3c6b8f6a8c57db1236181b38fc0de15a5ae0d2d3fafde14",
+        "event_id": "01a0cab2-418e-7061-afe6-b932c4bdba8b",
+        "ting_id": "msg_74bd398e47c54ba0a9c1a32884020a99",
+        "payload_sha256": "2e6b5e5742f3f7ccc02e33f470054316359a247dcfbf019caabcd5ff0fc96ed6",
+        "checks": [
+          "separate owned Hook process/database and fresh synthetic publisher/recipient identities",
+          "real CLI publisher provision works without a Silicon target",
+          "only non-secret publisher metadata is returned",
+          "same mutation key and SLT replay returns identical metadata via stdin",
+          "replace-rejected refuses to replace a healthy publisher",
+          "CLI recipient registration and signed provider ingress",
+          "original publisher remains usable after refused replacement",
+          "real Ting inbox contains the exact recipient/event reference",
+          "CLI event hydration preserves exact provider body",
+          "owned secondary backend/database removed; Hook management and Ting sessions revoked; local IAM profiles cleared"
+        ],
+        "limitations": [
+          "isolated normal IAM data plane; Ting type definition is inherited from the seeded fixture",
+          "does not repeat native receiver durability checks; separate SDK and CLI fixtures cover those",
+          "IAM Silicon direct sessions and the backend-owned publisher family remain only in the disposable IAM fixture until its cleanup; IAM does not support Silicon logout-all"
+        ]
+      }
+    }
+  },
+  "upstream_limitations": {
+    "scope": "Expected upstream failure reproduced; not successful recovery",
+    "reports": {
+      "login_recovery": {
+        "complete": true,
+        "ting_version": "0.1.3",
+        "source_commit": "115954f074a9dfd48e3f14b39a70ecaf8cc7a6c5",
+        "server_archive_sha256": "2153cfc50dc8f250215163bb35550950cce6f532112939687457f1e423c85de0",
+        "initial_response_at_utc": "2026-09-22T20:04:18.868640+00:00",
+        "initial_http_status": 201,
+        "immediate_replay_http_status": 200,
+        "immediate_response_identical": true,
+        "minimum_wait_seconds": 125,
+        "actual_wait_seconds": 125.0,
+        "late_replay_http_status": 401,
+        "late_replay_error": {
+          "code": "session_expired",
+          "message": "The Ting session is expired or revoked.",
+          "hint": "Log in with a fresh Ting-bound IAM short-lived token.",
+          "retryable": false
+        },
+        "original_session_after_late_replay_http_status": 200,
+        "original_session_still_authenticated": true,
+        "session_environment": {
+          "kind": "production"
+        },
+        "checks": [
+          "new synthetic Silicon authenticated through real IAM and issued a Ting-bound SLT",
+          "initial Ting login and immediate exact-key/body replay return identical session responses",
+          "wait exceeded the server's 120-second operation window without clock/database modification",
+          "exact-key/body replay then returns 401 session_expired",
+          "original returned session remains authenticated despite the expired operation response",
+          "only the new Ting session was deleted and its credential subsequently returns 401"
+        ],
+        "limitations": [
+          "successful first response was captured privately as an oracle and cleanup credential; no actual lost packet or production outage was simulated",
+          "the caller-without-that-response case is inferred from the observed replay failure, not directly induced",
+          "synthetic direct IAM Silicon authority remains confined to the disposable IAM fixture until its cleanup"
+        ],
+        "cleanup_delete_http_status": 200,
+        "cleanup_session_http_status": 401,
+        "cleanup_error_code": "session_expired"
+      }
+    }
+  },
+  "ting_0_1_4": {
+    "version": "0.1.4",
+    "source_commit": "3253ea193c9fc244e6ef7e5fd818240ae0ad4782",
+    "scope": "Existing ordinary Hook delivery compatibility and retained login-operation recovery before adoption of scoped receivers and required delivery.",
+    "reports": {
+      "upgrade": {
+        "complete": true,
+        "version": "0.1.4",
+        "source_commit": "3253ea193c9fc244e6ef7e5fd818240ae0ad4782",
+        "previous_version": "0.1.3",
+        "retained_report_sha256": {
+          "native-verification.json": "2c575fbf5e91d41919e73648d24033494565b7c07bc051a7cfc60711947f9e87",
+          "publisher-verification.json": "93a2b03d5558004cb7c4fcb1e77b3a2839a094be292d39bc2ebf5a77a780ef4e",
+          "hook-verification.json": "f21f0daf41d901502730e0abda82e7a25f1286f31de5d2fcc9f25460e7b71acc",
+          "web-verification.json": "6c885bcb9ba57182e5ddc83f6225b87fab2027646d2e192233e5b5164cc530d3",
+          "unavailable-verification.json": "34f81f545e2dd2bdf8515eac9580a22ebbb2c5c5dbb4a3dd62c39f63d94bb376",
+          "cli-verification.json": "17b562fb2a60648653ad81d1e88ac4e3bfc17718acb2277913fb6ef2fce06daf",
+          "login-recovery-verification.json": "d4753de80f308ac4efa62e1d8304bd840af42dceba8755e7cea552169264678a",
+          "sdk-verification.json": "564bb5fa56b56c9eae3ab5cfc8c2c002309e7de7f82eb82ad1e908fa3e68fba4",
+          "web-browser-verification.json": "dd8c51b329b4dae4459be61476a15de78122358df03e1084f70d5ff0fde63fab",
+          "upgrade-verification.json": "7713ad02017460cec2f502e8c3f025e68f093fd18b517667712c17afed637f7c"
+        },
+        "server_archive_sha256": "f287a8b9327f575fb4921e58888ef11f412e354b4fbca62ed2a5739b78ba204b",
+        "native_archive_sha256": "ae26f0e852e799b81f2c833ac0ff5d85e96e7b883d9921f6e8fb69c3888ec59e",
+        "server_binary_sha256": "688a4eb576d94223409ceee9a7d1cd054848d888414d7c65ba2727eaecb248c0",
+        "native_cli_binary_sha256": "bf705db6c0507d89b7e043eca5033fefd0d367e571253f5069ff33d41992b1d4",
+        "native_daemon_binary_sha256": "9ba943b8f0671e3ea9d58b81f96ef61bd64c04a5b901869fb4882b19d1bd3416",
+        "health_response": {
+          "service": "ting",
+          "status": "ok",
+          "version": "0.1.4"
+        },
+        "session_environment_attestation": {
+          "kind": "production"
+        },
+        "checks": [
+          "published release archives verified against their SHA256SUMS",
+          "owned server SQLite and native profile/queue copied while both containers were stopped",
+          "old containers/data and historical reports retained unchanged",
+          "only fixture Ting server and daemon replaced; host services and production untouched",
+          "existing recipient Ting session survives migration and reports production environment",
+          "upgraded native CLI fresh isolated profile exchanges Ting-bound IAM SLT, checks status, and logs out"
+        ]
+      },
+      "login_recovery": {
+        "complete": true,
+        "ting_version": "0.1.4",
+        "expected_late_replay": "recovered",
+        "source_commit": "3253ea193c9fc244e6ef7e5fd818240ae0ad4782",
+        "server_archive_sha256": "f287a8b9327f575fb4921e58888ef11f412e354b4fbca62ed2a5739b78ba204b",
+        "initial_response_at_utc": "2026-09-22T22:09:21.596259+00:00",
+        "initial_http_status": 201,
+        "immediate_replay_http_status": 200,
+        "immediate_response_identical": true,
+        "minimum_wait_seconds": 125,
+        "actual_wait_seconds": 125.006,
+        "late_replay_http_status": 200,
+        "late_replay_error": null,
+        "late_replay_response_identical": true,
+        "original_session_after_late_replay_http_status": 200,
+        "original_session_still_authenticated": true,
+        "session_environment": {
+          "kind": "production"
+        },
+        "checks": [
+          "new synthetic Silicon authenticated through real IAM and issued a Ting-bound SLT",
+          "initial Ting login and immediate exact-key/body replay return identical session responses",
+          "wait exceeded the former 120-second operation window without clock/database modification",
+          "exact-key/body replay after 125 seconds recovers the identical original response with HTTP200",
+          "original returned session remains authenticated after late replay",
+          "only the new Ting session was deleted and its credential subsequently returns 401",
+          "exact login replay after logout returns 401 and cannot resurrect the revoked session"
+        ],
+        "limitations": [
+          "successful first response was captured privately as an oracle and cleanup credential; no actual lost packet or production outage was simulated",
+          "no actual lost-response transport failure was injected; this verifies the real exact-operation recovery boundary",
+          "synthetic direct IAM Silicon authority remains confined to the disposable IAM fixture until its cleanup"
+        ],
+        "cleanup_delete_http_status": 200,
+        "cleanup_session_http_status": 401,
+        "cleanup_error_code": "session_expired",
+        "post_logout_replay_http_status": 401,
+        "post_logout_replay_error_code": "session_expired",
+        "session_after_post_logout_replay_http_status": 401
+      },
+      "hook": {
+        "complete": true,
+        "hook_api": "v2",
+        "ting_commit": "3253ea193c9fc244e6ef7e5fd818240ae0ad4782",
+        "event_id": "01a0cb2a-9e43-7792-9eb1-cc39a307b087",
+        "ting_id": "msg_4a3ae93d21a64517aea9f6f5f4ace6a4",
+        "payload_sha256": "6794a3b8376a883d369f2c1a0048c02ab1721f3685ec4c3a87a0345fd4905011",
+        "retained_fixture_events_consumed": 2,
+        "checks": [
+          "real signed provider HTTP ingress",
+          "Hook event and outgoing record committed",
+          "dedicated IAM publisher SLT",
+          "fresh request-bound Ting send",
+          "real websocket receipt",
+          "current-authority Hook hydration preserves exact raw bytes",
+          "delivery ACK distinct from read ACK",
+          "Hook live publication status confirms recipient acceptance"
+        ],
+        "limitations": [
+          "Ting type seeded as fixture",
+          "native daemon/local webhook not exercised",
+          "isolated normal plane; sandbox lifecycle tested separately"
+        ]
+      },
+      "native": {
+        "complete": true,
+        "ting_version": "0.1.4",
+        "native_archive_sha256": "ae26f0e852e799b81f2c833ac0ff5d85e96e7b883d9921f6e8fb69c3888ec59e",
+        "event_id": "01a0cb2a-a12b-79f2-8689-cd118c827c0e",
+        "ting_id": "msg_630165a6f0e2454ea1716b0dcb36f78d",
+        "payload_sha256": "f025af4214bcd60e206041a257b9decde545bae80db9e1191645d4ddd73e656c",
+        "callback_batches": 1,
+        "checks": [
+          "official CLI Ting SLT login",
+          "native daemon in isolated OS namespace",
+          "signed Hook HTTP ingestion",
+          "native persistent queue and delivery ACK",
+          "secret-authenticated native HTTP batch callback",
+          "authenticated Hook hydration preserves exact bytes",
+          "publication unread before local HTTP204",
+          "native HTTP204 triggers read ACK visible in Hook"
+        ],
+        "limitations": [
+          "synthetic application callback; Hook SDK consumer not exercised",
+          "normal fixture plane; sandbox delivery not exercised",
+          "daemon restart/retry not exercised"
+        ]
+      },
+      "sdk": {
+        "complete": true,
+        "ting_version": "0.1.4",
+        "native_archive_sha256": "ae26f0e852e799b81f2c833ac0ff5d85e96e7b883d9921f6e8fb69c3888ec59e",
+        "receiver_binary_sha256": "2e366e8a92d59aa71f87947bd764f8b7c4e2d398a208b81e2a480fa8859ad8c6",
+        "event_id": "01a0cb2a-a54c-7a31-91bd-168d149accf1",
+        "ting_id": "msg_ef48c1f85f7d4b29991a117c478cb270",
+        "payload_bytes": 300098,
+        "payload_sha256": "4a9c471f57013e50277f5405164178a3b2583d586a70c9e065033bee414269d0",
+        "callback_bytes": 695,
+        "requests": 2,
+        "new_events": 1,
+        "duplicates": 1,
+        "checks": [
+          "real signed Hook ingress",
+          "compact native Ting callback below 256KiB for provider payload above 256KiB",
+          "actual Rust Hook Receiver authenticates and decodes native callback",
+          "actual SDK hydrates exact original payload",
+          "host writes and fsyncs event-ID acceptance before response",
+          "invalid local bearer rejected",
+          "non-204 leaves Ting unread with delivery ACK present",
+          "native daemon and SDK process restarted",
+          "automatic native retry preserves notification identity",
+          "durable event deduplication survives SDK restart",
+          "HTTP204 becomes native read ACK visible in Hook"
+        ],
+        "limitations": [
+          "normal fixture plane; sandbox delivery not exercised",
+          "type is fixture seeded; Honeycomb bootstrap untested",
+          "host acceptance uses the test example, not an external user application"
+        ]
+      },
+      "web": {
+        "complete": true,
+        "web_server_sha256": "bfc5bdac35ae1feb3628bfc2682ff6838df90ec56217bb324003337666ce9c6b",
+        "event_id": "01a0cb2c-8b44-74b0-b90f-1eb1810b7293",
+        "ting_id": "msg_a1926d3db539425c8f837ba98f9018ac",
+        "payload_bytes": 300121,
+        "payload_sha256": "442885a227cc0c33a4b13467da6758327a09c6297e2a30c5ffc1183444a0a0f6",
+        "checks": [
+          "isolated real website server and private encrypted browser session",
+          "one official atomic IAM batch issues independent Hook and Ting SLTs",
+          "state-bound website callback exchanges both SLTs and supports completed retry",
+          "second paired sign-in revokes old Hook access/refresh and Ting session while its replacement stays usable",
+          "browser responses expose no Hook or Ting credentials",
+          "organization available to both application sessions",
+          "real Carbon recipient subscription and Ting watch_inbox notification",
+          "signed provider payload above 256KiB hydrates exactly through the BFF",
+          "live event matches authenticated event retrieval and history",
+          "browser observation leaves Ting unread",
+          "logout clears the browser identity and closes its receiving stream",
+          "authenticated operations fail after logout",
+          "logout revokes both real application sessions and the Hook refresh family"
+        ],
+        "limitations": [
+          "callback bridge HTTP protocol exercised; browser JavaScript rendering checked separately",
+          "normal fixture plane; documented sandbox receiver bootstrap gap remains",
+          "Ting type is fixture seeded"
+        ]
+      }
+    }
+  },
+  "ting_0_1_4_adoption": {
+    "version": "0.1.4",
+    "source_commit": "3253ea193c9fc244e6ef7e5fd818240ae0ad4782",
+    "scope": "New Hook required-delivery and scoped testing receiver integration. Separate local fixtures; no production approval or deployment claim.",
+    "reports": {
+      "required_delivery": {
+        "complete": true,
+        "ting_version": "0.1.4",
+        "source_commit": "3253ea193c9fc244e6ef7e5fd818240ae0ad4782",
+        "hook_binary_sha256": "ce8ff148fd190124388e1f3ee9801e4ce24846da91f849af6cc3e5f0de45b29f",
+        "refused_then_retried_event_id": "01a0cb47-9b2f-7540-a71b-9b0623bb5085",
+        "ting_id": "msg_861d318ecede434da44cc974641452c0",
+        "immutable_body_sha256": "5198b006f1f0ee0d6fd06814723c0284391647313d744b92817af333b4327664",
+        "retry_wait_seconds": 301.023,
+        "native": {
+          "complete": true,
+          "ting_version": "0.1.4",
+          "native_archive_sha256": "ae26f0e852e799b81f2c833ac0ff5d85e96e7b883d9921f6e8fb69c3888ec59e",
+          "event_id": "01a0cb4c-35a1-7413-865e-dffd0919d80f",
+          "ting_id": "msg_aa0ef9a2b60f4692a0452120bc4c7b52",
+          "payload_sha256": "f3f0fcc3923227e35bb673fc724db2991074361ca9b134aba929867fd0fdebb2",
+          "callback_batches": 2,
+          "checks": [
+            "official CLI Ting SLT login",
+            "native daemon in isolated OS namespace",
+            "signed Hook HTTP ingestion",
+            "native persistent queue and delivery ACK",
+            "secret-authenticated native HTTP batch callback",
+            "authenticated Hook hydration preserves exact bytes",
+            "publication unread before local HTTP204",
+            "native HTTP204 triggers read ACK visible in Hook"
+          ],
+          "limitations": [
+            "synthetic application callback; Hook SDK consumer not exercised",
+            "normal fixture plane; sandbox delivery not exercised",
+            "daemon restart/retry not exercised"
+          ]
+        },
+        "checks": [
+          "missing explicit required-delivery opt-in leaves new Hook primary send pending",
+          "no ordinary fallback or Ting acceptance without consent",
+          "recipient own Ting session explicitly opts in in disposable fixture",
+          "unmodified scheduled worker retry preserves exact request bytes and key",
+          "muted required acceptance has delivery=required and silent=true with accepted_by_ting",
+          "real native delivery ACK precedes callback HTTP204/read ACK",
+          "original payload is hydrated under current Hook authorization"
+        ],
+        "limitations": [
+          "owned normal-plane fixture; not testing-plane or production approval evidence",
+          "native callback is the controlled fixture host; SDK restart covered separately"
+        ],
+        "recipient_preferences_restored": true
+      },
+      "testing_prerequisite": {
+        "complete": true,
+        "scope": "Direct upstream protocol prerequisite; Hook adapter not yet exercised",
+        "version": "0.1.4",
+        "source_commit": "3253ea193c9fc244e6ef7e5fd818240ae0ad4782",
+        "server_binary_sha256": "688a4eb576d94223409ceee9a7d1cd054848d888414d7c65ba2727eaecb248c0",
+        "iam_image": "sha256:8587c08daf65ba6552796395b5b8d72954e12041ad96e11041e0337548188529",
+        "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+        "generation": 1,
+        "coverage": {
+          "real_iam_testing_plane": true,
+          "real_honeycomb_coordinator": false,
+          "production_approval_verified": false,
+          "test_identity_sql_seed": false
+        },
+        "receivers": [
+          {
+            "kind": "carbon",
+            "for": "hook_test_admin",
+            "org_id": "01a0cb3b-5e78-73e0-928d-6207df5b0523",
+            "environment": {
+              "generation": 1,
+              "id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+              "kind": "testing"
+            },
+            "created_status": 201,
+            "exact_replay_status": 200,
+            "ordinary_session_rejected": 401,
+            "wrong_generation_rejected": 403,
+            "revoked_status": 401,
+            "historical_replay_did_not_resurrect": true,
+            "inbox_read_succeeded": true,
+            "scope_me_matched": true
+          },
+          {
+            "kind": "silicon",
+            "for": "hook-testing:tos",
+            "org_id": "01a0cb3b-5e78-73e0-928d-6207df5b0523",
+            "environment": {
+              "generation": 1,
+              "id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+              "kind": "testing"
+            },
+            "created_status": 201,
+            "exact_replay_status": 200,
+            "ordinary_session_rejected": 401,
+            "wrong_generation_rejected": 403,
+            "revoked_status": 401,
+            "historical_replay_did_not_resurrect": true,
+            "inbox_read_succeeded": true,
+            "scope_me_matched": true
+          }
+        ],
+        "checks": [
+          "Separate owned Docker network and separate IAM normal/testing databases",
+          "Actual IAM participant prepare/activate/import/private configuration/activate-apps",
+          "Actual test Carbon OTP signup/login and Silicon creation/authentication; no seeded test identities",
+          "Only Hook-bound consent/SLT app sessions used for receiving bootstrap",
+          "Every downstream call uses a fresh actual IAM proof and its separate Ting audience testing context",
+          "Actual Ting authenticated lifecycle import with matching environment and generation",
+          "Carbon and Silicon scoped create/read/replay/wrong-generation/revoke assertions passed"
+        ],
+        "limitations": [
+          "Full Honeycomb coordinator is not running; authenticated participant APIs are driven locally",
+          "Normal control identities are synthetic fixture rows; production OBO endpoints/scopes remain empty",
+          "Clean fencing will be exercised in the subsequent Hook adapter integration run",
+          "No production or shared test environment was modified"
+        ]
+      },
+      "testing_hook_events": {
+        "complete": true,
+        "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+        "shared_generation": 1,
+        "hook_event_generation": 2,
+        "event_id": "01a0cb4b-d708-7801-8346-d84d18d9d565",
+        "ting_ids": {
+          "test-recipient": "msg_134fef3f38a14edf9f09d66a773b8619",
+          "test-admin": "msg_d6b1c25b85704e9384a9c8acaab25854"
+        },
+        "payload_bytes": 300097,
+        "payload_sha256": "5a1cfbb9d1d7556eb6094a97658810d21d531f67988cd5a9aa1b50b11a01f2b4",
+        "hook_binary_sha256": "ce8ff148fd190124388e1f3ee9801e4ce24846da91f849af6cc3e5f0de45b29f",
+        "checks": [
+          "Actual signed provider request published through real Hook outbox and IAM/Ting",
+          "Separate explicit recipient-own Ting session opted in to required primary delivery",
+          "Carbon and Silicon received scoped watch hints and queried their own app inbox",
+          "Current Hook authorization hydrated exact 300KB provider bytes for both actors",
+          "Primary required policy and ordinary Carbon copy remained distinct",
+          "Scoped reads/watch did not ACK application acceptance",
+          "Explicit receiver renewal/reconnect invalidated old capability and recovered same unread record"
+        ],
+        "limitations": [
+          "Ting event type is synthetic fixture data seeded while only the owned Ting server was stopped",
+          "Authenticated participant APIs are driven locally; full Honeycomb coordinator and production scopes are not verified",
+          "No application read ACK is expected from a scoped receiver"
+        ]
+      },
+      "testing_hook_control": {
+        "complete": true,
+        "stage": "Hook adapter capability control",
+        "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+        "shared_generation": 1,
+        "hook_binary_sha256": "ce8ff148fd190124388e1f3ee9801e4ce24846da91f849af6cc3e5f0de45b29f",
+        "checks": [
+          {
+            "scope": {
+              "app_id": "tos>hook",
+              "for": "hook_test_admin",
+              "kind": "carbon",
+              "org_id": "01a0cb3b-5e78-73e0-928d-6207df5b0523",
+              "hook_org_id": "tos",
+              "environment": {
+                "kind": "testing",
+                "id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+                "generation": 1
+              }
+            },
+            "bootstrap_replay_identical": true,
+            "wrong_generation_status": 409,
+            "renewed_old_token_status": 401,
+            "renewed_token_valid_then_revoked": true
+          },
+          {
+            "scope": {
+              "app_id": "tos>hook",
+              "for": "hook-testing:tos",
+              "kind": "silicon",
+              "org_id": "01a0cb3b-5e78-73e0-928d-6207df5b0523",
+              "hook_org_id": "tos",
+              "environment": {
+                "kind": "testing",
+                "id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+                "generation": 1
+              }
+            },
+            "bootstrap_replay_identical": true,
+            "wrong_generation_status": 409,
+            "renewed_old_token_status": 401,
+            "renewed_token_valid_then_revoked": true
+          }
+        ],
+        "limitations": [
+          "Actual event/watch/clean checks follow in a separate stage",
+          "Local authenticated participant protocol; full Honeycomb coordinator and production approvals not exercised"
+        ]
+      },
+      "testing_hook_clean": {
+        "complete": true,
+        "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+        "old_shared_generation": 1,
+        "new_shared_generation": 2,
+        "clean_duration_seconds": 0.087,
+        "receiver_results": {
+          "test-admin": {
+            "ting_status": 401,
+            "ting_code": "receiver_expired",
+            "hook_status": 401,
+            "hook_code": "unauthenticated",
+            "seconds_before_original_expiry": 29.34
+          },
+          "test-recipient": {
+            "ting_status": 401,
+            "ting_code": "receiver_expired",
+            "hook_status": 401,
+            "hook_code": "unauthenticated",
+            "seconds_before_original_expiry": 29.335
+          }
+        },
+        "iam_completion": true,
+        "hook_state": "completed",
+        "ting_receipt": {
+          "app_id": "tos>ting",
+          "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+          "environment_revision": 2,
+          "generation": 2,
+          "key_version": 1,
+          "operation_id": "a3574a45-da6b-475a-b3b6-16ddf24b5b7f",
+          "state": "completed"
+        },
+        "checks": [
+          "Fresh Carbon and Silicon capabilities were live immediately before cleanup",
+          "Actual IAM environment clean erased selected identities/apps/sessions/proofs",
+          "Authenticated Hook and Ting participant clean used the same next shared generation",
+          "Both capabilities failed before their original thirty-second expiry",
+          "Old Hook selector and actor credentials failed without normal-plane fallback"
+        ],
+        "limitations": [
+          "Participant orchestration is the local harness; full Honeycomb coordinator not running",
+          "Rotation and restore are not claimed by this clean test"
+        ]
+      },
+      "required_sdk": {
+        "complete": true,
+        "ting_version": "0.1.4",
+        "source_commit": "3253ea193c9fc244e6ef7e5fd818240ae0ad4782",
+        "delivery": "required",
+        "silent": true,
+        "sdk": {
+          "complete": true,
+          "ting_version": "0.1.4",
+          "native_archive_sha256": "ae26f0e852e799b81f2c833ac0ff5d85e96e7b883d9921f6e8fb69c3888ec59e",
+          "receiver_binary_sha256": "e5fb202394917043e3e6ed0768b828fd1701e2e21f5a16047e23ec701e9e8d15",
+          "event_id": "01a0cb54-95d8-7c71-9c1c-1777ac6a46eb",
+          "ting_id": "msg_8be3a478c9b84188b0a8a1f0acd9cd44",
+          "payload_bytes": 300098,
+          "payload_sha256": "49d7b01ca16194660a47c63a2ece7d310073e2f468ac81a9756fdada9d4ff373",
+          "callback_bytes": 696,
+          "requests": 2,
+          "new_events": 1,
+          "duplicates": 1,
+          "checks": [
+            "real signed Hook ingress",
+            "compact native Ting callback below 256KiB for provider payload above 256KiB",
+            "actual Rust Hook Receiver authenticates and decodes native callback",
+            "actual SDK hydrates exact original payload",
+            "host writes and fsyncs event-ID acceptance before response",
+            "invalid local bearer rejected",
+            "non-204 leaves Ting unread with delivery ACK present",
+            "native daemon and SDK process restarted",
+            "automatic native retry preserves notification identity",
+            "durable event deduplication survives SDK restart",
+            "HTTP204 becomes native read ACK visible in Hook"
+          ],
+          "limitations": [
+            "normal fixture plane; sandbox delivery not exercised",
+            "type is fixture seeded; Honeycomb bootstrap untested",
+            "host acceptance uses the test example, not an external user application"
+          ]
+        },
+        "checks": [
+          "recipient-own session explicitly opts into required delivery",
+          "muted required send reaches real native daemon and updated Rust SDK",
+          "durable acceptance and duplicate replay survive both process restarts",
+          "final publication and read receipt preserve required policy and silent visibility"
+        ],
+        "limitations": [
+          "owned normal-plane fixture; not production approval evidence",
+          "SDK host is the controlled example, not an external business application"
+        ],
+        "recipient_preferences_restored": true
+      },
+      "testing_cli": {
+        "complete": true,
+        "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+        "shared_generation": 2,
+        "cli_binary_sha256": "ba72dc7c806233faba12b7e0e1c49ead1be2401f893182804ed79463db281b6a",
+        "scope": {
+          "app_id": "tos>hook",
+          "for": "hook-testing:tos",
+          "kind": "silicon",
+          "org_id": "01a0cb4e-c61d-7c52-9dbf-4f9c6d7b9d91",
+          "hook_org_id": "tos",
+          "environment": {
+            "kind": "testing",
+            "id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+            "generation": 2
+          }
+        },
+        "receiver_id": "receiver_199274deb07f4f28983d6c581a0e9adb",
+        "capability_file_mode": "0600",
+        "checks": [
+          "Fresh private CLI profile selected only Hook's test app secret",
+          "Actual Hook-bound IAM consent/SLT login for the isolated Silicon",
+          "CLI invoked real SDK scope/bootstrap/renew methods against Hook and Ting0.1.4",
+          "Exact scope/key replay recovered identical token/expiry into a separate new file",
+          "Existing output file refused unchanged; no secret in stdout/stderr/profile",
+          "Explicit new-key same-ID renewal invalidated old token",
+          "Stale generation rejected with receiver_environment_changed and no capability file",
+          "Revocation remained effective after historical receipt replay",
+          "Every command printed selected testing footer; no receiving daemon or profile transport state"
+        ],
+        "limitations": [
+          "CLI is the SDK integration caller; no additional SDK example was introduced",
+          "This handoff gate does not start a receiver transport; real scoped transport is covered separately",
+          "macOS private file behavior tested; Windows source inspected; Windows compile/runtime unverified because SDK headers are unavailable"
+        ],
+        "cleanup": {
+          "capabilities_revoked": true,
+          "capability_files_removed": true,
+          "cli_family_logged_out": true
+        }
+      },
+      "normal_website_before_selector_fix": {
+        "complete": true,
+        "ting_version": "0.1.4",
+        "scope": "Updated normal-plane paired website and actual Chrome regression",
+        "web": {
+          "complete": true,
+          "web_server_sha256": "c6fcbaea07ade142ffa8fa34dfbeb32ad637dae87153dd6666daf25e4ca78bdd",
+          "event_id": "01a0cb5f-854a-7863-ab4a-4a0516adb970",
+          "ting_id": "msg_d2637409169840d6a8d97114424b4595",
+          "payload_bytes": 300121,
+          "payload_sha256": "171b1ae91df40eb7850116d969b9c89e6a7bf7b2fe021fb29f27f8dcfac02d55",
+          "checks": [
+            "isolated real website server and private encrypted browser session",
+            "one official atomic IAM batch issues independent Hook and Ting SLTs",
+            "state-bound website callback exchanges both SLTs and supports completed retry",
+            "second paired sign-in revokes old Hook access/refresh and Ting session while its replacement stays usable",
+            "browser responses expose no Hook or Ting credentials",
+            "organization available to both application sessions",
+            "real Carbon recipient subscription and Ting watch_inbox notification",
+            "signed provider payload above 256KiB hydrates exactly through the BFF",
+            "live event matches authenticated event retrieval and history",
+            "browser observation leaves Ting unread",
+            "logout clears the browser identity and closes its receiving stream",
+            "authenticated operations fail after logout",
+            "logout revokes both real application sessions and the Hook refresh family"
+          ],
+          "limitations": [
+            "callback bridge HTTP protocol exercised; browser JavaScript rendering checked separately",
+            "normal fixture plane only; scoped testing receiving is verified separately",
+            "Ting type is fixture seeded"
+          ]
+        },
+        "browser": {
+          "complete": true,
+          "event_id": "01a0cb5f-8e7a-7cf0-bb45-bce51e68d7e4",
+          "ting_id": "msg_73a7abf9bff442e8b3a5b897034b2bd8",
+          "payload_bytes": 300124,
+          "payload_sha256": "b4f75cb105f42b40ec5e22dd716618fdf663d5446450541c0ab038ecb1b1b478",
+          "viewport_desktop": "1440x1000",
+          "viewport_mobile": "390x844",
+          "mobile_document_width": 390,
+          "mobile_table_scroll": {
+            "clientWidth": 352,
+            "scrollWidth": 612,
+            "scrollLeft": 260,
+            "position": "relative"
+          },
+          "screenshots": [
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-tlsqbfid/browser/overview-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-tlsqbfid/browser/live-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-tlsqbfid/browser/payload-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-tlsqbfid/browser/deliveries-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-tlsqbfid/browser/deliveries-mobile.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-tlsqbfid/browser/live-mobile.png"
+          ],
+          "checks": [
+            "real callback JavaScript consumes IAM batch fragment and clears credentials from the URL",
+            "authenticated overview and organization/Silicon controls",
+            "actual Live connect uses BFF Ting receiving",
+            "large signed provider payload matches browser WebSocket and payload inspector exactly",
+            "Deliveries displays primary Silicon publication without acknowledgment controls",
+            "desktop and mobile pages render without horizontal page overflow; mobile table scroll remains available",
+            "UI sign-out clears the browser session",
+            "no browser JavaScript exceptions"
+          ],
+          "limitations": [
+            "official IAM CLI performs real batch consent/issuance; IAM consent webpage is not exercised",
+            "fixture uses production protocol on isolated loopback services; sandbox bootstrap is not covered"
+          ]
+        },
+        "recipient_required_preference_restored": true
+      },
+      "normal_website": {
+        "complete": true,
+        "ting_version": "0.1.4",
+        "scope": "Updated normal-plane paired website and actual Chrome regression",
+        "web": {
+          "complete": true,
+          "web_server_sha256": "095ec733035200ea6f8a2ac48fea0c1fab93f3de948db28813c09a466f21f294",
+          "event_id": "01a0cb77-c2a1-7490-978d-c184931ef4ba",
+          "ting_id": "msg_0e4a8324f9a74647ab6bd1a24fc2189b",
+          "payload_bytes": 300121,
+          "payload_sha256": "b76c8aac1ef52712791f9096131384f0dd3a85f37cba8c9468106177b02fb7ea",
+          "checks": [
+            "isolated real website server and private encrypted browser session",
+            "one official atomic IAM batch issues independent Hook and Ting SLTs",
+            "state-bound website callback exchanges both SLTs and supports completed retry",
+            "second paired sign-in revokes old Hook access/refresh and Ting session while its replacement stays usable",
+            "browser responses expose no Hook or Ting credentials",
+            "organization available to both application sessions",
+            "real Carbon recipient subscription and Ting watch_inbox notification",
+            "signed provider payload above 256KiB hydrates exactly through the BFF",
+            "live event matches authenticated event retrieval and history",
+            "browser observation leaves Ting unread",
+            "logout clears the browser identity and closes its receiving stream",
+            "authenticated operations fail after logout",
+            "logout revokes both real application sessions and the Hook refresh family"
+          ],
+          "limitations": [
+            "callback bridge HTTP protocol exercised; browser JavaScript rendering checked separately",
+            "normal fixture plane only; scoped testing receiving is verified separately",
+            "Ting type is fixture seeded"
+          ]
+        },
+        "browser": {
+          "complete": true,
+          "event_id": "01a0cb77-ce45-7180-af61-9a8abd88b7d7",
+          "ting_id": "msg_33df6fb4c3ea47188fd48d5a7a033551",
+          "payload_bytes": 300124,
+          "payload_sha256": "f230b908ed7a26cac95a6bbaf4fa5d8d3659a16ca460491f02a6478705f63d1a",
+          "viewport_desktop": "1440x1000",
+          "viewport_mobile": "390x844",
+          "mobile_document_width": 390,
+          "mobile_table_scroll": {
+            "clientWidth": 352,
+            "scrollWidth": 604,
+            "scrollLeft": 252,
+            "position": "relative"
+          },
+          "screenshots": [
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-g9swtsfd/browser/overview-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-g9swtsfd/browser/live-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-g9swtsfd/browser/payload-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-g9swtsfd/browser/deliveries-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-g9swtsfd/browser/deliveries-mobile.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-g9swtsfd/browser/live-mobile.png"
+          ],
+          "checks": [
+            "real callback JavaScript consumes IAM batch fragment and clears credentials from the URL",
+            "authenticated overview and organization/Silicon controls",
+            "actual Live connect uses BFF Ting receiving",
+            "large signed provider payload matches browser WebSocket and payload inspector exactly",
+            "Deliveries displays primary Silicon publication without acknowledgment controls",
+            "desktop and mobile pages render without horizontal page overflow; mobile table scroll remains available",
+            "UI sign-out clears the browser session",
+            "no browser JavaScript exceptions"
+          ],
+          "limitations": [
+            "official IAM CLI performs real batch consent/issuance; IAM consent webpage is not exercised",
+            "fixture uses production protocol on isolated loopback services; sandbox bootstrap is not covered"
+          ]
+        },
+        "recipient_required_preference_restored": true
+      },
+      "testing_rate_limit_diagnostic": {
+        "complete": true,
+        "scope": "application:tos>hook:/api/v1/application/testing-context",
+        "limit_name": "applications_client_request",
+        "limit_per_minute": 120,
+        "selected_hook_request_bucket_increment": 4,
+        "historical_same_bucket_blocked_counts": [
+          123,
+          126
+        ],
+        "idle_two_second_poll_observed_units_per_minute": 60,
+        "finding": "Same verified application/path bucket consumed by idle worker plus selected BFF requests; not only setup pressure",
+        "cleanup": "Failed attempt recovered its encrypted logout after natural reset; known observer session revoked and preferences restored",
+        "source_code_unchanged_for_diagnostic": true
+      },
+      "testing_idle_quota": {
+        "complete": true,
+        "duration_seconds": 30.158,
+        "worker_poll_milliseconds": 1000,
+        "no_due_work_throughout": true,
+        "observed_application_quota_units": {},
+        "iam_limit_changed": false,
+        "hook_binary_sha256": "b8af1aae63cda0bb3c238d86d608ae716a3494ffe63ea90b3c757788e46955a0",
+        "baseline_before_fix": {
+          "worker_poll_milliseconds": 2000,
+          "idle_units_per_minute": 60,
+          "blocked_limit_name": "applications_client_request",
+          "limit_per_minute": 120
+        },
+        "checks": [
+          "Read-only real IAM rate buckets sampled across natural wall-clock time",
+          "No application requests or due outbox work during the measurement",
+          "No bucket resets, database clocks or limits changed"
+        ]
+      },
+      "normal_website_before_quota_fix": {
+        "complete": true,
+        "ting_version": "0.1.4",
+        "scope": "Updated normal-plane paired website and actual Chrome regression",
+        "web": {
+          "complete": true,
+          "web_server_sha256": "d2f35c6902631b5815c9e1b5d868a66203a514400b6eaf816a0a4a253260c449",
+          "event_id": "01a0cb63-3967-7403-a979-aa4901a6574f",
+          "ting_id": "msg_20c92648c05c47868ab0c165844a130a",
+          "payload_bytes": 300121,
+          "payload_sha256": "a960ffd635d3a096b9fcf91ac4aea4803b8016d9dfd7766ce88677f46d33d2d3",
+          "checks": [
+            "isolated real website server and private encrypted browser session",
+            "one official atomic IAM batch issues independent Hook and Ting SLTs",
+            "state-bound website callback exchanges both SLTs and supports completed retry",
+            "second paired sign-in revokes old Hook access/refresh and Ting session while its replacement stays usable",
+            "browser responses expose no Hook or Ting credentials",
+            "organization available to both application sessions",
+            "real Carbon recipient subscription and Ting watch_inbox notification",
+            "signed provider payload above 256KiB hydrates exactly through the BFF",
+            "live event matches authenticated event retrieval and history",
+            "browser observation leaves Ting unread",
+            "logout clears the browser identity and closes its receiving stream",
+            "authenticated operations fail after logout",
+            "logout revokes both real application sessions and the Hook refresh family"
+          ],
+          "limitations": [
+            "callback bridge HTTP protocol exercised; browser JavaScript rendering checked separately",
+            "normal fixture plane only; scoped testing receiving is verified separately",
+            "Ting type is fixture seeded"
+          ]
+        },
+        "browser": {
+          "complete": true,
+          "event_id": "01a0cb63-41d7-7e23-a2b4-d2d13ac7ef79",
+          "ting_id": "msg_7377a54815774f3fba8824e16df51051",
+          "payload_bytes": 300124,
+          "payload_sha256": "6f9bf14ad110557b2230b23378bc3cc5804003a6dd53b5daead526f0ca20ec2f",
+          "viewport_desktop": "1440x1000",
+          "viewport_mobile": "390x844",
+          "mobile_document_width": 390,
+          "mobile_table_scroll": {
+            "clientWidth": 352,
+            "scrollWidth": 604,
+            "scrollLeft": 252,
+            "position": "relative"
+          },
+          "screenshots": [
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-kd14m4wd/browser/overview-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-kd14m4wd/browser/live-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-kd14m4wd/browser/payload-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-kd14m4wd/browser/deliveries-desktop.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-kd14m4wd/browser/deliveries-mobile.png",
+            "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/web-kd14m4wd/browser/live-mobile.png"
+          ],
+          "checks": [
+            "real callback JavaScript consumes IAM batch fragment and clears credentials from the URL",
+            "authenticated overview and organization/Silicon controls",
+            "actual Live connect uses BFF Ting receiving",
+            "large signed provider payload matches browser WebSocket and payload inspector exactly",
+            "Deliveries displays primary Silicon publication without acknowledgment controls",
+            "desktop and mobile pages render without horizontal page overflow; mobile table scroll remains available",
+            "UI sign-out clears the browser session",
+            "no browser JavaScript exceptions"
+          ],
+          "limitations": [
+            "official IAM CLI performs real batch consent/issuance; IAM consent webpage is not exercised",
+            "fixture uses production protocol on isolated loopback services; sandbox bootstrap is not covered"
+          ]
+        },
+        "recipient_required_preference_restored": true
+      },
+      "normal_fixture_stop": {
+        "complete": true,
+        "scope": "Owned original normal-plane E2E services stopped; containers/data/private reports preserved",
+        "network": "hook-ting-e2e-oknmdvvv",
+        "hook_api_pid": 87287,
+        "verified_api_port": 60980,
+        "containers": [
+          "hook-ting-e2e-oknmdvvv-hook-db",
+          "hook-ting-e2e-oknmdvvv-iam",
+          "hook-ting-e2e-oknmdvvv-native",
+          "hook-ting-e2e-oknmdvvv-native-013",
+          "hook-ting-e2e-oknmdvvv-native-014",
+          "hook-ting-e2e-oknmdvvv-postgres",
+          "hook-ting-e2e-oknmdvvv-ting",
+          "hook-ting-e2e-oknmdvvv-ting-013",
+          "hook-ting-e2e-oknmdvvv-ting-014"
+        ],
+        "stopped_running_containers": [
+          "hook-ting-e2e-oknmdvvv-hook-db",
+          "hook-ting-e2e-oknmdvvv-iam",
+          "hook-ting-e2e-oknmdvvv-native-014",
+          "hook-ting-e2e-oknmdvvv-postgres",
+          "hook-ting-e2e-oknmdvvv-ting-014"
+        ],
+        "removed_containers": false,
+        "unrelated_services_touched": false
+      },
+      "testing_website_http": {
+        "complete": true,
+        "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+        "shared_generation": 2,
+        "server_sha256": "095ec733035200ea6f8a2ac48fea0c1fab93f3de948db28813c09a466f21f294",
+        "receiver_id": "receiver_1a0ef15a793647ea9f976e4503cc5dfb",
+        "automatic_renewal_wait_seconds": 35.091,
+        "events": [
+          {
+            "event_id": "01a0cb7b-e073-75a2-9da5-9b7bdaf297f5",
+            "ting_id": "msg_f6de33ee6211456eb65ce8866872cbfc",
+            "silent": false,
+            "payload_bytes": 300133,
+            "payload_sha256": "709bcca6910bba06d335371f85230f2d233151802af0b8f63fedcdddd5ce418f",
+            "primary_read": false,
+            "observer_read": false
+          },
+          {
+            "event_id": "01a0cb7b-eef1-7a01-aca6-18c9a83dbf0a",
+            "ting_id": "msg_b13fd333e4cb4028a9408cbe5603c8aa",
+            "silent": true,
+            "payload_bytes": 300127,
+            "payload_sha256": "e7c5a38a8114a590cc4fbc40b10d82071bf881c467d8f3bceda3eae0c128ff72",
+            "primary_read": false,
+            "observer_read": false
+          }
+        ],
+        "checks": [
+          "Browser BFF received only Hook test app selector and actual Hook SLT",
+          "Real scoped receiver and encrypted durable capability; no general Ting session",
+          "Automatic renewal beyond 30 seconds preserved receiver ID and replaced token",
+          "Actual signed large events hydrated exactly, including silent Carbon inbox catch-up",
+          "Observer and primary remain unread; website performed no application read ACK",
+          "Logout revoked current capability, closed stream and denied subsequent proxy access"
+        ],
+        "limitations": [
+          "Local authenticated participant APIs; full Honeycomb coordinator and production approval activation unverified",
+          "Synthetic type fixture; actual IAM consent/SLT and Ting runtime"
+        ],
+        "recipient_preferences_and_required_policy_restored": true,
+        "hook_binary_sha256": "b8af1aae63cda0bb3c238d86d608ae716a3494ffe63ea90b3c757788e46955a0",
+        "hook_runtime_provenance": "Owned refresh at 2026-09-23 04:50:20 local; hash measured immediately by idle quota gate; PID86584 still maps inode192856325 while later Cargo replaced on-disk executable inode192862653",
+        "later_on_disk_artifact_sha256": "f84746d84460aabd6066f3c5383ca80eb4625acf6f27aed95a90cf480f753e52"
+      },
+      "testing_website_browser": {
+        "complete": true,
+        "server_sha256": "095ec733035200ea6f8a2ac48fea0c1fab93f3de948db28813c09a466f21f294",
+        "hook_binary_sha256": "b8af1aae63cda0bb3c238d86d608ae716a3494ffe63ea90b3c757788e46955a0",
+        "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+        "shared_generation": 2,
+        "automatic_renewal_wait_seconds": 35,
+        "event_id": "01a0cb80-d6bd-7b63-84bc-21db693ff4ad",
+        "ting_id": "msg_783f84bc77f841bf9e94aa559a7f3489",
+        "payload_bytes": 300124,
+        "payload_sha256": "02c33db59b782a83cf6196dc594b548a197b53ad8d131c81259f54ff73fcc6f1",
+        "viewport_desktop": "1440x1000",
+        "viewport_mobile": "390x844",
+        "mobile_document_width": 390,
+        "production_header_mobile_width": 390,
+        "mobile_table_scroll": {
+          "clientWidth": 352,
+          "scrollWidth": 664,
+          "scrollLeft": 312,
+          "position": "relative"
+        },
+        "screenshots": [
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/hook-ting-e2e-testing-7o0m384x/testing-web-scc7h3qp/browser/overview-desktop.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/hook-ting-e2e-testing-7o0m384x/testing-web-scc7h3qp/browser/live-desktop.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/hook-ting-e2e-testing-7o0m384x/testing-web-scc7h3qp/browser/payload-desktop.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/hook-ting-e2e-testing-7o0m384x/testing-web-scc7h3qp/browser/deliveries-desktop.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/hook-ting-e2e-testing-7o0m384x/testing-web-scc7h3qp/browser/deliveries-mobile.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/hook-ting-e2e-testing-7o0m384x/testing-web-scc7h3qp/browser/live-mobile.png",
+          "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/hook-ting-e2e-testing-7o0m384x/testing-web-scc7h3qp/browser/production-header-mobile.png"
+        ],
+        "checks": [
+          "actual UI attaches only Hook selector and signs in with real Hook SLT",
+          "automatic scoped receiver renewal survives beyond 30 seconds without another app credential",
+          "silent ordinary Carbon event appears through periodic inbox reconciliation without read ACK",
+          "authenticated overview and organization/Silicon controls",
+          "actual Live connect uses BFF Ting receiving",
+          "large signed provider payload matches browser WebSocket and payload inspector exactly",
+          "Deliveries displays primary Silicon publication without acknowledgment controls",
+          "desktop and mobile pages render without horizontal page overflow; mobile table scroll remains available",
+          "UI sign-out clears the browser session; the observed scoped capability is revoked by completion",
+          "production header fits390px after logout and Exit testing mode",
+          "no browser JavaScript exceptions"
+        ],
+        "limitations": [
+          "official IAM CLI performs real testing consent/SLT issuance; IAM consent webpage is not exercised",
+          "local participant lifecycle only; full Honeycomb coordinator and production approvals unverified"
+        ],
+        "phase": "independent actual browser repeat; successful HTTP evidence preserved",
+        "http_evidence_server_sha256": "095ec733035200ea6f8a2ac48fea0c1fab93f3de948db28813c09a466f21f294",
+        "preferences_and_required_policy_restored": true,
+        "hook_runtime_provenance": "Owned refresh at 2026-09-23 04:50:20 local; hash measured immediately by idle quota gate; PID86584 still maps inode192856325 while later Cargo replaced on-disk executable inode192862653",
+        "later_on_disk_artifact_sha256": "f84746d84460aabd6066f3c5383ca80eb4625acf6f27aed95a90cf480f753e52"
+      },
+      "testing_catchup": {
+        "complete": true,
+        "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+        "shared_generation": 2,
+        "duration_seconds": 316.605,
+        "event_ids": [
+          "01a0cb82-7618-73c2-99d6-106e89839ff1",
+          "01a0cb82-7637-7d71-91d7-cc23aea09e4d",
+          "01a0cb82-7659-7f00-b395-ac7e88f5dcd1",
+          "01a0cb82-7676-71e2-a4f7-84be5f1b20ab",
+          "01a0cb82-7693-71f1-a83f-0a606dba800d",
+          "01a0cb82-76b0-76f3-85ce-72492b2c7dac",
+          "01a0cb82-76cd-7070-9c05-4b4e8eb1c0b3",
+          "01a0cb82-76eb-72b0-a9be-2ee733ba46fa",
+          "01a0cb82-7705-7532-9976-085f81a0b491",
+          "01a0cb82-7720-7921-a075-fcf580350671",
+          "01a0cb82-7739-7441-bab4-5ee818c250c2",
+          "01a0cb82-7753-7ba1-82ee-d0135567c9ea",
+          "01a0cb82-776e-7ff2-b93f-56a053d89b8a",
+          "01a0cb82-778d-77c2-97e9-6d1fb62bb795",
+          "01a0cb82-77a9-7391-8f1f-d5130b89f75b",
+          "01a0cb82-77c6-7fe2-b80e-7e294cd37674",
+          "01a0cb82-77e2-7430-aa50-8aec3966c9e2",
+          "01a0cb82-77fd-7230-afef-1f965e3dfb93",
+          "01a0cb82-7819-7b70-9f85-61ce37921306",
+          "01a0cb82-7833-7492-8011-2f13792d8303",
+          "01a0cb82-784e-74c3-a4b5-480e60ac1fe6",
+          "01a0cb82-786b-70e0-814d-25632281c130",
+          "01a0cb82-7888-7743-a0b2-a8357e1f0e0f",
+          "01a0cb82-78a5-7f11-b17c-8fb9f8959c44",
+          "01a0cb82-78c4-7980-9f37-1a50cc879a9e",
+          "01a0cb82-78e0-7651-9c5e-8cca0f528ae3",
+          "01a0cb82-78fb-7502-b09f-f0d173c57d03",
+          "01a0cb83-63ae-7250-ac46-c1681fb8b014",
+          "01a0cb83-63d7-79c3-918a-6de445c8c993",
+          "01a0cb83-63fe-7962-866e-540d9360721c",
+          "01a0cb83-6423-7191-8569-dffb9683ef1f",
+          "01a0cb83-6442-76f1-b548-a2cc04097aa5"
+        ],
+        "actual_publications": {
+          "total": 64,
+          "accepted": 64,
+          "errors": null
+        },
+        "forwarded_unique_records": 32,
+        "duplicate_frames": 0,
+        "scoped_unread_silent_records_verified": 32,
+        "stream_warning_codes": [
+          "inbox_catchup_limit",
+          "rate_limited"
+        ],
+        "setup_ingress_rate_limits": 2,
+        "server_sha256": "095ec733035200ea6f8a2ac48fea0c1fab93f3de948db28813c09a466f21f294",
+        "hook_binary_sha256": "b8af1aae63cda0bb3c238d86d608ae716a3494ffe63ea90b3c757788e46955a0",
+        "checks": [
+          "32 actual signed provider ingress requests;64 primary/observer outbox sends accepted by real Ting",
+          "Default latest32 scoped observer view completed on one live stream across natural IAM429",
+          "Forwarded event IDs remained unique across pause/resume",
+          "Same receiver ID renewed with replacement token after rate backoff",
+          "No seeded accepted notifications, limit changes, clock changes or application read ACK",
+          "Logout revoked the current receiver"
+        ],
+        "limitations": [
+          "Synthetic local participant fixture; full coordinator and production approval not covered"
+        ],
+        "preferences_and_required_policy_restored": true
+      },
+      "testing_final_clean": {
+        "complete": true,
+        "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+        "old_shared_generation": 2,
+        "new_shared_generation": 3,
+        "clean_duration_seconds": 0.09,
+        "receiver_results": {
+          "test-admin": {
+            "ting_status": 401,
+            "ting_code": "receiver_expired",
+            "hook_status": 401,
+            "hook_code": "unauthenticated",
+            "seconds_before_original_expiry": 28.984
+          },
+          "test-recipient": {
+            "ting_status": 401,
+            "ting_code": "receiver_expired",
+            "hook_status": 401,
+            "hook_code": "unauthenticated",
+            "seconds_before_original_expiry": 28.981
+          }
+        },
+        "iam_completion": true,
+        "hook_state": "completed",
+        "ting_receipt": {
+          "app_id": "tos>ting",
+          "environment_id": "9436b01e-ccb5-4222-976e-fd01f3dcab36",
+          "environment_revision": 4,
+          "generation": 3,
+          "key_version": 1,
+          "operation_id": "175202dc-a68a-4001-83ee-3f7cbdd12ebc",
+          "state": "completed"
+        },
+        "checks": [
+          "Fresh Carbon and Silicon capabilities were live immediately before cleanup",
+          "Actual IAM environment clean erased selected identities/apps/sessions/proofs",
+          "Authenticated Hook and Ting participant clean used the same next shared generation",
+          "Both capabilities failed before their original thirty-second expiry",
+          "Old Hook selector and actor credentials failed without normal-plane fallback"
+        ],
+        "limitations": [
+          "Participant orchestration is the local harness; full Honeycomb coordinator not running",
+          "Rotation and restore are not claimed by this clean test"
+        ],
+        "evidence_archive": "/private/var/folders/cr/4xxx8tw93k50dllp_gz65rdm0000gn/T/hook-ting-e2e-oknmdvvv/ting-0.1.3-zdj0t4v0/ting-0.1.4-byn1mfmp/hook-ting-e2e-testing-7o0m384x/generation-2-evidence",
+        "iam_revision_before_current_read": 20,
+        "iam_revision_verified_before_clean": 21,
+        "unknown_failed_attempt_observer_session": {
+          "count": 1,
+          "fenced_by": "complete IAM and Ting environment clean",
+          "limitation": "Original token was lost in the first failed harness attempt; whole-generation fencing is verified, not that token individually"
+        }
+      },
+      "testing_services_stopped": {
+        "complete": true,
+        "containers": {
+          "hook-ting-e2e-testing-7o0m384x-postgres": "exited",
+          "hook-ting-e2e-testing-7o0m384x-iam": "exited",
+          "hook-ting-e2e-testing-7o0m384x-ting": "exited",
+          "hook-ting-e2e-testing-7o0m384x-hook-db": "exited"
+        },
+        "hook_process_stopped": true,
+        "data_and_logs_retained": true,
+        "unrelated_services_touched": false
+      }
+    },
+    "local_regression": {
+      "backend_tests_passed": 196,
+      "client_tests_passed": 29,
+      "cli_tests_passed": 29,
+      "ignored_tests": 1,
+      "ignored_reason": "Opt-in Space Station integration",
+      "workspace_clippy": "passed with all targets/features and warnings denied",
+      "rustdoc": "passed with warnings denied",
+      "formatting": "passed",
+      "openapi": "passed",
+      "dependency_policy": "passed",
+      "windows": "source inspected; compilation stopped before CLI in aws-lc-sys because Windows SDK headers are missing; runtime ACL not verified",
+      "website_tests_passed": 36,
+      "website_typecheck": "passed",
+      "website_build": "passed",
+      "website_formatting": "passed",
+      "cli_documentation_bundle": "current; final CLI rebuild passed",
+      "documentation_site": {
+        "build": "passed",
+        "pages": 22,
+        "local_links_and_assets_verified": 950
+      },
+      "harness_python_compilation": "passed"
+    },
+    "public_rollout_check": {
+      "checked_at": "2026-09-22T23:53:51.454438+00:00",
+      "approval_or_deployment_performed": false,
+      "ting_health": {
+        "service": "ting",
+        "status": "ok",
+        "version": "0.1.4"
+      },
+      "ting_catalog": {
+        "url": "https://backend.honeycomb.teamofsilicons.com/api/v1/apps/tos%3Eting",
+        "revision": 3,
+        "effective_revision": 2,
+        "iam_revision": 22,
+        "effective_receivers_bootstrap": false
+      },
+      "hook_catalog": {
+        "url": "https://backend.honeycomb.teamofsilicons.com/api/v1/apps/tos%3Ehook",
+        "revision": 2,
+        "effective_revision": 1,
+        "iam_revision": 15,
+        "effective_external_scopes": []
+      }
+    },
+    "current_artifacts_sha256": {
+      "target/debug/hook-api": "f84746d84460aabd6066f3c5383ca80eb4625acf6f27aed95a90cf480f753e52",
+      "target/debug/hook-worker": "385ce43d7dd74366fd78b133d758e48dc23dd870adf35f9a13639a876c84e326",
+      "target/debug/hook-migrate": "d47d4a0c013e475cdeccf0302c04478f45b4ff346c31893adda172da52fbf84c",
+      "web/dist/server.js": "095ec733035200ea6f8a2ac48fea0c1fab93f3de948db28813c09a466f21f294",
+      "web/dist/client/assets/index-C2FeoIlV.js": "c9f3b3149c7daaf52fc3500fb2d8ba99d81806606c0f2deb9f011de4b1619ec6",
+      "web/dist/client/assets/index-CQzK4iFC.css": "a052b2c66ca609fd54463c643bc247af1ffb8c67a07251b8e083de127f4f73b8",
+      "target/debug/hook": "a29b5f615969c8bd513ef52f5ebfda091d422683b48319148b3e507b7ad1581a"
+    },
+    "artifact_provenance": "Reports identify the binaries loaded for each E2E stage. The current artifact inventory includes later rebuilds from the same backend source and the final CLI documentation bundle; it does not replace historical launch hashes."
+  }
+}

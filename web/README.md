@@ -1,6 +1,7 @@
 # Silicon Hook frontend
 
-Minimal SolidJS + TypeScript console, with a same-origin Node gateway. The visual
+Internal SolidJS + TypeScript management console, with a Node gateway. Applications
+handle Hook and Ting setup for their users. The visual
 reference is the **hosted IAM console at iam.teamofsilicons.com**, not IAM's docs:
 IBM Plex fonts, the Silicon brand mark, a pale sidebar, fine borders, white panels
 and restrained blue controls. Brand assets are reused from the local IAM frontend.
@@ -38,13 +39,20 @@ and Docker contexts. Never put server secrets in `VITE_*` variables.
 
 ## Sign in and select a workspace
 
-- Production sign-in offers only **Continue with IAM**. It starts an unscoped
-  login for `tos>hook`, without an `org_id`; users choose organizations in IAM.
-  The sidebar's workspace selection does not scope sign-in. Hook binds the
-  return to a five-minute, one-use server-side state value. `/auth/callback`
-  exchanges the SLT through Hook's backend and immediately redirects to a clean
-  URL; no token is returned to frontend JS. Browser handoff needs an HTTPS
-  callback accepted by IAM.
+- Production sign-in offers only **Continue with IAM**. The gateway requests
+  Hook and Ting SLTs in one unscoped IAM batch login; users choose organizations
+  in IAM. The sidebar's workspace selection does not scope sign-in. Hook binds
+  the return to a five-minute, one-use server-side state value. The callback
+  script clears the SLT fragment and posts the pair to the same-origin gateway.
+  Both exchanges must identify the same actor before the session becomes active.
+  Receiving requires Ting 0.1.3 or a compatible `/v1/me` response that explicitly
+  identifies the production environment. A missing, malformed or testing
+  environment is rejected before activating the paired session.
+  Access, refresh and opaque Ting session tokens remain encrypted server-side.
+  Browser handoff needs a callback accepted by IAM. Batch consent may name both
+  internal apps; hiding them behind an enclosing app requires IAM's application
+  bundle contract. `HOOK_IAM_BUNDLE_ID` selects an existing bundle containing
+  exactly Hook and Ting; the gateway still checks the exact returned app pair.
 - Token entry/file sign-in is available only for attached testing environments,
   using an SLT issued for `tos>hook` in the linked IAM test world.
 - The organization picker loads the organizations shared with Hook from IAM
@@ -53,13 +61,18 @@ and Docker contexts. Never put server secrets in `VITE_*` variables.
   requests wait for that selection. Sandbox organization comes from its attached
   environment. Silicon sign-in fills its own ID; Carbon users enter the target
   Silicon ID. Credentials stay server-side during organization discovery.
-- Attach a Hook test root key to open a sandbox, then sign in with a token from
-  its linked **IAM test world**. Production and each test environment keep
-  separate credentials. Test requests never fall back to production tokens.
-- Production identity is used to create/list/delete/restore sandboxes and
-  retrieve/rotate their keys. An attached root key can inspect, clean and configure
-  its test world without an actor token. Creation/key retrieval/rotation save the
-  resulting root key in the current browser's server-side session.
+- Attach a Hook test application secret to select its sandbox, then sign in as
+  an identity from its linked **IAM test world**. Production and each test
+  environment keep separate credentials. Test requests never fall back to
+  production tokens. Honeycomb owns environment lifecycle; IAM owns identities.
+- Test receiving uses Ting 0.1.4's scoped inbox/watch through Hook, using only
+  the attached Hook app secret and signed-in test actor. The gateway validates
+  the full scope, keeps the capability encrypted, renews the same receiver ID
+  before expiry, and revokes it on close/logout/context replacement. It can
+  retain four receiving slots per test plane, including pending cleanup.
+  Lost responses are recovered with the exact saved operation; unresolved
+  cleanup retains authority and reports `receiver_cleanup_pending`. See the
+  [authority-loss recovery limitation](../docs/ting-integration-issues.md#uncertain-scoped-receiver-cleanup-after-authority-loss).
 
 ## Feature coverage
 
@@ -70,24 +83,33 @@ and Docker contexts. Never put server secrets in `VITE_*` variables.
 | Signing editor | All twelve algorithms; all four signature and six secret encodings; full payload/locator expressions, explicit BYOS selection at creation and editing, custom shared secret and PEM public key; generated secret display/copy/download |
 | Events | Per-hook and account-wide history, selectable limits through 10000, opaque-cursor pagination, headers/body/metadata/full-JSON inspector, JSON export |
 | Blocked requests | Separate retained history with reason/detail, filtering, pagination, inspection and export |
-| Deliveries | Pull pending events, page by sequence, read the consumer cursor, explicitly acknowledge a contiguous sequence |
-| Live stream | Multiple Silicon IDs, ready/event/error/ACK frames, heartbeat replies, bounded recent display, reconnect, explicit ACK and resume |
-| Testing environments | Create with optional IAM bootstrap, attach keys, list/filter/page, inspect current sandbox, retrieve/rotate key, delete/restore, typed confirmation for clean, configure IAM credentials |
-| Connections & setup | Sign in/switch/refresh/revoke/forget the selected identity, connect IAM notifications, liveness/readiness/version/API negotiation, CLI and SDK relay setup |
+| Deliveries | Retained events, pagination, publication state, ordinary/required policy, independent notification silence, separate destination receipt and acceptance |
+| Live stream | Authorized Silicon selection, internal Ting inbox watch, original event hydration, explicit errors, bounded recent display and reconnect |
+| Testing environments | Select with the Hook app secret, inspect current sandbox, sign in as a test identity and return to production |
+| Connections & setup | Sign in/switch/refresh/revoke/forget the selected identity, connect IAM notifications, liveness/readiness/version/API negotiation, CLI and stateless SDK management |
 
-The browser never silently acknowledges a request. Acknowledgments change the
-shared cursor used by all clients of that Silicon. Live display keeps the latest
+The browser's live view observes Ting's inbox and never sends delivery/read ACKs.
+Both normal and scoped watches reconcile the inbox every ten seconds so silent
+arrivals appear even without a watch hint. On a scoped rate limit, the gateway
+pauses the watch and polling for Retry-After while preserving the receiver slot
+and already displayed event IDs. It then renews the same receiver, including
+after capability expiry, and resumes reconciliation without duplicate rows.
+Logout cancels the pending recovery. Each compact reference is fetched from
+Hook using current authorization and its original event generation. An
+unavailable original is reported rather than displayed as a processed event.
+Publication status refers to the primary Silicon, not the viewing Carbon's
+observer copy. Receipt and acceptance are distinct from completed work.
+Live display keeps the latest
 32 events; full retained data stays available in history. Large history bodies
 can reduce a page's item count; continue with Next. Request content is rendered
 as text, including HTML-like payloads; binary bodies remain available as base64
 and in downloads. Hooks' endpoint and IAM application receivers remain backend
 HTTP endpoints used by providers, not browser-authenticated proxy routes.
 
-A hosted page cannot start or supervise a daemon on the user's computer. The
-Connections view provides CLI/SDK setup; its browser stream runs only while the
-page is open. The CLI owns local recipient forwarding, local request receipts,
-its own profiles and executable updates. OBO and the deferred report command
-are not frontend operations.
+The browser stream runs while the page is open. The enclosing application owns
+the shared Ting runtime for continuous delivery. The Hook CLI manages its own
+profiles and provides management and inspection commands; it starts no delivery
+daemon. Honeycomb manages its installation and updates.
 
 ## Sessions and gateway
 
@@ -105,12 +127,19 @@ calling IAM through Hook, and reuses it after a failed response. Expired session
 are removed when accessed; operators may remove old abandoned session files as
 part of maintenance. Changing the encryption key invalidates existing sessions.
 
+Replacing an identity revokes the previous saved sessions before activating the
+new pair. Interrupted exchanges retain their recovery state encrypted on the
+server. Sign out and Forget also revoke partial sign-ins. If revocation fails,
+the identity is disabled locally and its credentials remain only for retrying
+cleanup; the console exposes **Retry sign out**.
+
 The gateway accepts only the explicitly listed public management operations.
 It cannot forward browser-supplied Authorization, testing keys or arbitrary
 origins. It excludes IAM event receivers, provider ingress and raw auth routes.
 Responses are no-store; the production server adds CSP, frame denial, nosniff,
 no-referrer and HTTPS transport headers. Limits: 2 MiB console request body,
-64 MiB upstream response, 4 MiB upstream WebSocket message, 8 KiB browser frame.
+64 MiB Hook response, 2 MiB Ting response, 64 KiB Ting watch frame and 8 KiB
+browser frame. The browser stream does not accept application commands or ACKs.
 
 The file store is deliberately a **single-process, single-instance** deployment.
 Do not run multiple workers against it: its refresh lock is in-process. Before
@@ -133,6 +162,10 @@ The production process requires:
 | `HOOK_WEB_ORIGIN` | Exact gateway HTTPS origin; production uses `https://backend.hook.teamofsilicons.com` |
 | `HOOK_FRONTEND_ORIGIN` | Exact browser origin; production uses `https://hook.teamofsilicons.com`; defaults to gateway origin locally |
 | `HOOK_API_UPSTREAM` | Hook backend origin, e.g. `https://backend.hook.teamofsilicons.com` |
+| `HOOK_TING_UPSTREAM` | Ting backend origin; defaults to `https://backend.ting.teamofsilicons.com` |
+| `HOOK_IAM_API_UPSTREAM` | Trusted IAM API origin; defaults to `https://backend.iam.teamofsilicons.com` |
+| `HOOK_IAM_AUTHORIZE_ORIGIN` | IAM browser sign-in origin; defaults to `https://auth.iam.teamofsilicons.com` |
+| `HOOK_IAM_BUNDLE_ID` | Optional existing IAM bundle for Hook and Ting; otherwise internal console batch login is used |
 | `HOOK_SESSION_KEY` | Stable, secret base64 encoding of 32 random bytes |
 | `HOOK_SESSION_DIR` | Dedicated private persistent directory |
 | `HOST` | Bind address; defaults to loopback, use `0.0.0.0` inside a container |

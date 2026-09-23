@@ -303,8 +303,12 @@ export function EventDetail(p: { event: Event; close: () => void }) {
           <dd>{e().silicon_id}</dd>
           <dt>Hook</dt>
           <dd>{e().hook_id}</dd>
-          <dt>Sequence</dt>
-          <dd>{e().delivery_sequence ?? "Not delivered"}</dd>
+          <dt>Receipt sequence</dt>
+          <dd>{e().delivery_sequence ?? "Not applicable"}</dd>
+          <Show when={e().summary}>
+            <dt>Summary</dt>
+            <dd>{e().summary}</dd>
+          </Show>
           <dt>Source IP</dt>
           <dd>{e().request.remote_ip}</dd>
           <dt>Content type</dt>

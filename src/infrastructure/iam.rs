@@ -18,6 +18,8 @@ use thiserror::Error;
 use url::Url;
 use zeroize::Zeroizing;
 
+mod ting;
+
 use crate::{
     config::{IamSettings, IamWebhookSettings},
     domain::{

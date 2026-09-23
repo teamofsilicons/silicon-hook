@@ -61,18 +61,31 @@ pub(super) async fn request_scope(mut request: Request, next: Next) -> Response 
 }
 
 fn is_management_path(path: &str) -> bool {
-    path.starts_with("/api/v1/testing-environment")
-        || path.starts_with("/api/v1/silicons/")
-        || path.starts_with("/api/v1/auth/")
-        || path == "/api/v1/ws"
+    super::version::split_path(path).is_some_and(|(_, relative)| {
+        relative.starts_with("testing-environment")
+            || relative.starts_with("silicons/")
+            || relative.starts_with("auth/")
+            || relative.starts_with("delivery/")
+            || relative == "ws"
+    })
 }
 
 /// Refuses versioned requests pinned to another API major before any handler
 /// runs, so a client that negotiated a different contract is never served
 /// this one by accident.
 pub(super) async fn enforce_api_version(request: Request, next: Next) -> Response {
+    let major = super::version::split_path(request.uri().path()).map(|(major, _)| major);
     match super::version::check_pinned(request.headers(), request.uri().path()) {
-        Ok(()) => next.run(request).await,
+        Ok(()) => {
+            let mut response = next.run(request).await;
+            if let Some(major) = major {
+                response.headers_mut().insert(
+                    super::version::API_VERSION_HEADER,
+                    http::HeaderValue::from_static(major),
+                );
+            }
+            response
+        }
         Err(error) => error.into_response(),
     }
 }

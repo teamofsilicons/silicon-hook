@@ -149,7 +149,9 @@ export default function App() {
         });
     }
   });
-  createEffect(() => { if (ready()) void track(ctx(), "page_view", route()); });
+  createEffect(() => {
+    if (ready()) void track(ctx(), "page_view", route());
+  });
   const needsTarget = () =>
     ["hooks", "events", "blocked", "deliveries", "live"].includes(route());
   return (
@@ -283,8 +285,17 @@ export default function App() {
               value={ctx().plane === "production" ? "Production" : "Test"}
             />
             <Show when={ctx().plane !== "production"}>
-              <span class="small muted truncate">Test environment: {current()?.name} · {current()?.actor?.id || "Not signed in"}</span>
-              <Button onClick={() => context({ plane: "production", org: "", silicon: "" })}>Exit testing mode</Button>
+              <span class="small muted truncate">
+                Test environment: {current()?.name} ·{" "}
+                {current()?.actor?.id || "Not signed in"}
+              </span>
+              <Button
+                onClick={() =>
+                  context({ plane: "production", org: "", silicon: "" })
+                }
+              >
+                Exit testing mode
+              </Button>
             </Show>
           </div>
           <Button onClick={() => setDialog("login")}>
@@ -321,7 +332,9 @@ export default function App() {
                     </Empty>
                     <Show when={!ready()}>
                       <div class="actions centered">
-                        <Button onClick={() => setDialog("attach")}>Use test app_secret</Button>
+                        <Button onClick={() => setDialog("attach")}>
+                          Use test app_secret
+                        </Button>
                         <Button primary onClick={() => setDialog("login")}>
                           {ctx().plane === "production"
                             ? "Continue with IAM"
@@ -498,8 +511,8 @@ function TokenLogin(p: {
           Use an IAM short-lived token issued for <code>tos&gt;hook</code>.
         </p>
         <div class="notice subtle">
-          Signing in to <strong>{p.name}</strong>. Use a test SLT or an existing Carbon/Silicon ID from the IAM test
-          world linked to this sandbox.
+          Signing in to <strong>{p.name}</strong>. Use a test SLT or an existing
+          Carbon/Silicon ID from the IAM test world linked to this sandbox.
         </div>
         <Field label="Short-lived token">
           <input
@@ -573,7 +586,8 @@ function Attach(p: { close: () => void; done: (id: string) => Promise<void> }) {
         }}
       >
         <p class="muted">
-          Enter the IAM test application app_secret to select its sandbox. Then sign in with a test SLT or an existing test identity ID.
+          Enter the IAM test application app_secret to select its sandbox. Then
+          sign in with a test SLT or an existing test identity ID.
         </p>
         <Field
           label="IAM test app_secret"
@@ -741,7 +755,7 @@ function Overview(p: { ctx: Context; signedIn: boolean; login: () => void }) {
           <h3>
             Keep delivery running <span>↗</span>
           </h3>
-          <p>Set up the Rust client or local CLI relay.</p>
+          <p>Inspect delivery status and manage your integration.</p>
         </a>
       </div>
       <Show when={selected()}>
@@ -772,7 +786,7 @@ function Connections(p: {
     async () => {
       const ctx = { ...p.ctx, plane: "production" };
       const [version, ready, live, negotiation] = await Promise.all([
-        api(ctx, "/api/v1/version"),
+        api(ctx, "/api/v2/version"),
         api(ctx, "/readyz"),
         api(ctx, "/healthz"),
         api(ctx, "/api/version"),
@@ -792,18 +806,21 @@ function Connections(p: {
             : "Refresh your session?",
       description:
         type === "logout"
-          ? "Revoke this IAM refresh-token family and remove the selected session. IAM may also invalidate sibling tokens from the same source sign-in."
+          ? "Revoke the saved sign-in sessions and sign out here. IAM may also invalidate related tokens from the same sign-in."
           : type === "forget"
-            ? "Remove this browser’s saved identity and key. This does not revoke IAM tokens or delete the backend environment."
+            ? "Remove this browser’s saved connection and revoke its sign-in sessions. This does not delete the backend environment."
             : "Renew the selected IAM session without changing environments.",
       action: async () => {
-        await request(
-          "/console/" + type + "?plane=" + p.ctx.plane,
-          "POST",
-          {},
-          key,
-        );
-        await p.refresh();
+        try {
+          await request(
+            "/console/" + type + "?plane=" + p.ctx.plane,
+            "POST",
+            {},
+            key,
+          );
+        } finally {
+          await p.refresh();
+        }
       },
     });
   }
@@ -827,10 +844,30 @@ function Connections(p: {
   }
   const [telemetry, changeTelemetry] = createSignal(telemetryEnabled());
   const command = () =>
-    `hook ${p.ctx.plane !== "production" ? "--test " + p.ctx.plane + " " : ""}login --slt-file ./iam-token --webhook-url http://127.0.0.1:8080/events`;
+    `hook ${p.ctx.plane !== "production" ? "--test " + p.ctx.plane + " " : ""}login --slt-file ./iam-token`;
   return (
     <>
-      <section class="panel"><h2>Diagnostic telemetry</h2><p>Share operational events to help diagnose Hook. Events exclude credentials, webhook payloads and form contents. This setting applies to this browser.</p><label><input type="checkbox" checked={telemetry()} onChange={(e) => { const enabled = e.currentTarget.checked; setTelemetry(enabled); changeTelemetry(enabled); void request("/console/session"); }} /> Share diagnostic events</label></section>
+      <section class="panel">
+        <h2>Diagnostic telemetry</h2>
+        <p>
+          Share operational events to help diagnose Hook. Events exclude
+          credentials, webhook payloads and form contents. This setting applies
+          to this browser.
+        </p>
+        <label>
+          <input
+            type="checkbox"
+            checked={telemetry()}
+            onChange={(e) => {
+              const enabled = e.currentTarget.checked;
+              setTelemetry(enabled);
+              changeTelemetry(enabled);
+              void request("/console/session");
+            }}
+          />{" "}
+          Share diagnostic events
+        </label>
+      </section>
       <div class="page-heading">
         <div>
           <p class="eyebrow">SETUP</p>
@@ -844,7 +881,13 @@ function Connections(p: {
         <div class="panel-title">
           <h3>Current identity</h3>
           <Badge
-            value={current()?.authenticated ? "Connected" : "Signed out"}
+            value={
+              current()?.logout_pending
+                ? "Sign-out pending"
+                : current()?.authenticated
+                  ? "Connected"
+                  : "Signed out"
+            }
           />
         </div>
         <div class="panel-body">
@@ -860,6 +903,12 @@ function Connections(p: {
             <dt>Backend</dt>
             <dd class="mono">{p.session.upstream}</dd>
           </dl>
+          <Show when={current()?.logout_pending}>
+            <p class="notice">
+              This session is disabled here. Retry sign out to finish revoking
+              its saved sign-in sessions.
+            </p>
+          </Show>
           <div class="actions wrap">
             <Button primary onClick={p.login}>
               {current()?.authenticated ? "Switch identity" : "Sign in"}
@@ -868,6 +917,9 @@ function Connections(p: {
             <Show when={current()?.authenticated}>
               <Button onClick={() => action("refresh")}>Refresh session</Button>
               <Button onClick={() => action("logout")}>Sign out</Button>
+            </Show>
+            <Show when={current()?.logout_pending}>
+              <Button onClick={() => action("logout")}>Retry sign out</Button>
             </Show>
             <Button danger onClick={() => action("forget")}>
               Forget connection
@@ -894,14 +946,13 @@ function Connections(p: {
       </div>
       <div class="panel">
         <div class="panel-title">
-          <h3>Continuous delivery</h3>
+          <h3>Integration tools</h3>
           <Badge value="CLI / SDK" />
         </div>
         <div class="panel-body">
           <p>
-            The browser’s live stream runs while the page is open. For
-            continuous delivery to a local recipient, use the Hook CLI daemon or
-            Rust SDK.
+            Your application handles continuous delivery internally. Use the CLI
+            or Rust SDK to manage webhooks and inspect retained events.
           </p>
           <Field label="CLI sign-in">
             <div class="command">
@@ -912,48 +963,25 @@ function Connections(p: {
           <Show when={p.ctx.plane !== "production"}>
             <p class="small muted">
               First attach the sandbox with{" "}
-              <code>
-                hook env use --app-secret-file ./hook-test-app-secret
-              </code>
+              <code>hook env use --app-secret-file ./hook-test-app-secret</code>
               .
             </p>
           </Show>
           <pre tabIndex={0}>
-            {"hook daemon start\nhook daemon status\nhook daemon subscribe " +
+            {"hook login status --json\nhook --silicon " +
               (p.ctx.silicon || "cos:tos") +
-              "\nhook daemon request --file ./request.json\nhook daemon stop"}
+              " list\nhook docs ting-delivery"}
           </pre>
           <details>
             <summary>Rust SDK setup</summary>
             <pre tabIndex={0}>
               {
-                'let session = client.login(\n    &slt,\n    &Recipient::new("http://127.0.0.1:8080/events")?,\n    &Mutation::new(),\n).await?;\n// Keep the session alive for local relay and token refresh.\nsession.shutdown().await?;'
+                "let tokens = client.login(&slt, &Mutation::new()).await?;\nlet client = client\n    .with_token(tokens.access_token.expose())\n    .with_organization(&org);\nlet hooks = client.list_hooks(&silicon, false).await?;"
               }
             </pre>
             <p class="muted small">
-              The stateless SDK keeps credentials in memory. The CLI maintains
-              its own local profiles; browser sessions do not alter them.
-            </p>
-          </details>
-          <details>
-            <summary>Local request format</summary>
-            <pre tabIndex={0}>
-              {JSON.stringify(
-                {
-                  method: "GET",
-                  path: "/api/v1/silicons/cos:tos/hooks",
-                  query: [],
-                  headers: [],
-                  body_base64: "",
-                },
-                null,
-                2,
-              )}
-            </pre>
-            <p class="muted small">
-              Run <code>hook docs relay</code> for local identity tokens and
-              exact request receipts. A hosted web page cannot start a daemon on
-              your machine.
+              The host owns secure token storage and refresh for the stateless
+              SDK. The CLI and browser keep their own separate sessions.
             </p>
           </details>
         </div>

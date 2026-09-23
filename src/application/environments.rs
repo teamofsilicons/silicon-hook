@@ -160,6 +160,72 @@ impl fmt::Debug for EnvironmentService {
 }
 
 impl EnvironmentService {
+    /// Bounded keyset discovery for background delivery, without exposing credentials.
+    ///
+    /// # Errors
+    /// Returns storage failures; the publisher never falls back to production.
+    pub(crate) async fn delivery_environment_ids(
+        &self,
+        after: Option<Uuid>,
+    ) -> Result<Vec<Uuid>, AppError> {
+        sqlx::query_scalar(
+            "SELECT id FROM hook_control.environments
+            WHERE deleted_at IS NULL AND (honeycomb_state IS NULL OR honeycomb_state='ready')
+              AND ($1::uuid IS NULL OR id > $1)
+            ORDER BY id LIMIT 8",
+        )
+        .bind(after)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(internal)
+    }
+
+    /// Revalidates IAM and the current generation before a background test send.
+    ///
+    /// # Errors
+    /// Rejects disabled, cleaned, unready or unavailable environments.
+    pub(crate) async fn delivery_context(&self, id: Uuid) -> Result<EnvironmentContext, AppError> {
+        self.context(self.record(id).await?).await
+    }
+
+    /// Cheap scheduling hint only: idle queues must not consume IAM authority calls.
+    pub(crate) async fn delivery_pending(&self, id: Uuid) -> Result<bool, AppError> {
+        if id.is_nil() {
+            return Ok(false);
+        }
+        let mut tx = self.pool.begin().await.map_err(internal)?;
+        let generation: Option<i64> = sqlx::query_scalar(
+            "SELECT generation FROM hook_control.environments WHERE id=$1
+             AND deleted_at IS NULL AND (honeycomb_state IS NULL OR honeycomb_state='ready')",
+        )
+        .bind(id)
+        .fetch_optional(&mut *tx)
+        .await
+        .map_err(internal)?;
+        let Some(generation) = generation else {
+            return Ok(false);
+        };
+        // Transaction-local selectors preserve normal RLS and cannot leak to
+        // the next control-pool borrower. No claim or authorization is granted.
+        sqlx::query("SELECT set_config('hook.environment_id',$1,true), set_config('hook.environment_generation',$2,true)")
+            .bind(id.to_string()).bind(generation.to_string()).execute(&mut *tx).await.map_err(internal)?;
+        let pending = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM hook_private.ting_outbox
+             WHERE environment_id=$1 AND environment_generation<=$2
+               AND hook_private.environment_is_available()
+               AND accepted_at IS NULL AND expires_at>clock_timestamp()
+               AND next_attempt_at<=clock_timestamp()
+               AND (lease_until IS NULL OR lease_until<=clock_timestamp() OR environment_generation<$2))",
+        )
+        .bind(id)
+        .bind(generation)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(internal)?;
+        tx.rollback().await.map_err(internal)?;
+        Ok(pending)
+    }
+
     /// Metadata for an already selected isolated application context.
     ///
     /// # Errors

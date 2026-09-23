@@ -644,6 +644,7 @@ dialog > .notice {
   color: #a33c35;
 }
 .table-wrap {
+  position: relative;
   width: 100%;
   overflow: auto;
 }
@@ -1072,7 +1073,10 @@ details p {
     display: grid;
   }
   .topbar {
-    padding: 0 18px;
+    height: auto;
+    min-height: 66px;
+    padding: 10px 18px;
+    flex-wrap: wrap;
     position: sticky;
     top: 0;
     z-index: 10;
@@ -1081,7 +1085,7 @@ details p {
     max-width: 110px;
   }
   .topbar > .actions {
-    gap: 9px;
+    display: contents;
   }
   main {
     padding: 26px 18px;

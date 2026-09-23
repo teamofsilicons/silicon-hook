@@ -27,7 +27,7 @@ async fn byos_creation_and_replacement_keep_test_routing_and_policy_fields()
         );
         assert_eq!(headers["x-org-id"], "tos");
         assert_eq!(headers["authorization"], "Bearer test-token");
-        assert_eq!(headers["silicon-hook-api-version"], "v1");
+        assert_eq!(headers["silicon-hook-api-version"], "v2");
         calls.lock().await.push(body);
         // An intentional API error avoids coupling this request contract test to hook response fields.
         (
@@ -38,10 +38,10 @@ async fn byos_creation_and_replacement_keep_test_routing_and_policy_fields()
     let app = Router::new()
         .route(
             "/api/version",
-            get(|| async { Json(json!({"service":"silicon-hook", "selected_api_version":"v1"})) }),
+            get(|| async { Json(json!({"service":"silicon-hook", "selected_api_version":"v2"})) }),
         )
-        .route("/api/v1/silicons/cos:tos/hooks", post(record))
-        .route("/api/v1/silicons/cos:tos/hooks/{id}", patch(record))
+        .route("/api/v2/silicons/cos:tos/hooks", post(record))
+        .route("/api/v2/silicons/cos:tos/hooks/{id}", patch(record))
         .with_state(calls.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let client = Client::new(&format!("http://{}", listener.local_addr()?))?

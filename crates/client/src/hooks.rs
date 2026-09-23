@@ -210,48 +210,4 @@ impl Client {
         self.call(Method::GET, &path, &query, None::<&()>, None)
             .await
     }
-    pub async fn deliveries(
-        &self,
-        silicon: &str,
-        limit: u32,
-        after_sequence: Option<i64>,
-    ) -> Result<DeliveryBatch> {
-        let mut query = vec![("limit", limit.to_string())];
-        if let Some(after) = after_sequence {
-            query.push(("after_sequence", after.to_string()));
-        }
-        self.call(
-            Method::GET,
-            &["silicons", silicon, "deliveries"],
-            &query,
-            None::<&()>,
-            None,
-        )
-        .await
-    }
-    pub async fn acknowledge(
-        &self,
-        silicon: &str,
-        through_sequence: i64,
-        mutation: &Mutation,
-    ) -> Result<DeliveryCursor> {
-        self.call(
-            Method::POST,
-            &["silicons", silicon, "deliveries", "ack"],
-            &[],
-            Some(&serde_json::json!({"through_sequence":through_sequence})),
-            Some(mutation),
-        )
-        .await
-    }
-    pub async fn delivery_cursor(&self, silicon: &str) -> Result<DeliveryCursor> {
-        self.call(
-            Method::GET,
-            &["silicons", silicon, "deliveries", "cursor"],
-            &[],
-            None::<&()>,
-            None,
-        )
-        .await
-    }
 }

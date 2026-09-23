@@ -12,6 +12,7 @@ pub(super) struct ApiState {
     pub(super) application: HookApplication,
     pub(super) environments: Option<crate::application::environments::EnvironmentService>,
     pub(super) iam: IamClient,
+    pub(super) ting: crate::infrastructure::ting::TingClient,
     pub(super) trusted_proxy_hops: u8,
     pub(super) realtime: RealtimeSettings,
     pub(super) wakeups: DeliveryWakeups,

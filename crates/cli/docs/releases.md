@@ -1,6 +1,6 @@
 # Build a Hook release for Honeycomb
 
-Install the released CLI with `honeycomb install 'tos>hook'`, then run `hook login <slt>` and `hook webhook <webhook-url>`. Honeycomb owns installation and updates. The Rust client remains a normal Cargo dependency and never modifies a consuming project at runtime.
+Install the released CLI with `honeycomb install 'tos>hook'`, then run `hook login --slt-file ./hook-slt`. The enclosing application configures internal Ting receiving; Hook's CLI manages webhooks and inspects retained events. Honeycomb owns installation and updates. The Rust client remains a normal Cargo dependency and never modifies a consuming project at runtime.
 
 ## Build all targets
 
@@ -42,6 +42,27 @@ cargo xwin build --locked --release -p silicon-hook-cli --target x86_64-pc-windo
 The Linux cross builds target glibc 2.28 or newer. Collect the outputs from each build directory's `<rust-target>/release/` into the artifact layout above before packaging. Native CI builds use the system libraries of their listed runners.
 
 Locally staged executables can also live at the paths declared by the root manifest: `targets/<honeycomb-target>/bin/<executable>`. Then `honeycomb validate .` verifies the complete local package. Generated `targets/` and `dist/` are kept on disk and excluded from source commits.
+
+## 0.8.0: internal Ting delivery
+
+API v2 publishes verified events through Ting 0.1.4. Applications fetch the full
+original from Hook using current authorization; the CLI and stateless Rust SDK
+provide management and receiving helpers. The website handles its paired normal
+sessions and scoped testing receiver internally. Login no longer starts a Hook
+relay, and the removed `webhook`, `unhook` and daemon commands must be replaced by
+the enclosing application's Ting runtime. Existing v1 contracts retain their
+recorded deprecation/sunset policy; they are not restored by installing 0.8.0.
+
+Deploy migrations 10–16 to both databases, activate the approved Ting scopes,
+register the Hook notification type, and provision a dedicated publisher in each
+organization. Required primary delivery needs the recipient's explicit automation
+opt-in. Existing queued requests keep their original policy and retry identity.
+See [internal delivery setup](ting-delivery.md) and [deployment](deployment.md).
+
+The release includes scoped capability replay/renewal, private CLI output,
+rate-limit recovery without duplicate browser events, and silent inbox polling.
+The [verification record](verification/ting-e2e-2026-09-23.md) documents real
+send/receive, native ACKs, restart recovery, CLI/browser checks and remaining limits.
 
 ## 0.7.0: event payload without summary
 

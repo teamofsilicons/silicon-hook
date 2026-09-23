@@ -1,3 +1,33 @@
+# Ting/API v2 source verification — 2026-09-23
+
+The current website uses paired IAM sign-in, Ting inbox watching and authorized
+Hook event hydration. Thirty-six gateway/session/receiver tests, TypeScript checking and the
+production build pass. The real-service HTTP flow passes paired login and
+replacement, Carbon receiving, exact 300,121-byte hydration without a read ACK,
+stream closure and remote credential revocation on logout. Actual Chrome tests
+also pass the callback script, live delivery and exact payload inspection,
+publication status, mobile navigation and UI sign-out. The 390px page has no
+horizontal document overflow; its table still scrolls independently. Screenshots
+were inspected. See [the current E2E record](../docs/verification/ting-e2e-2026-09-23.md)
+for correlated IDs, hashes and coverage limits.
+
+The final normal-plane HTTP and browser flows pass against published Ting 0.1.4.
+Scoped testing receiving uses private 30-second capabilities and same-ID renewal;
+36 tests cover replay, cleanup uncertainty, rate-limit backoff without duplicate
+events, renewal after expiry and resumed silent polling. Actual scoped Chrome
+passes Hook-only sign-in, renewal after 35 seconds, exact silent payload hydration,
+no read ACK, inspection and logout. A testing-mode mobile header overflow was fixed
+and verified at 390px in both testing and production headers. Real catchup of 32
+events also passes across an actual IAM rate limit on one stream: same-ID renewal,
+no duplicate frames and no read ACKs. The gateway now requires its explicit production environment
+attestation during paired login and when resuming receiving. Tests reject
+missing, malformed or testing context before activation or registration and
+verify that rejected session pairs remain available for revocation.
+
+The older sections below are historical checks of the previous transport and
+deployments. Their Hook WebSocket cursor/ACK controls are removed from v2; they
+are not claims about the current source or a new deployment.
+
 # Frontend verification — 2026-09-06
 
 This records actual checks of the SolidJS console, not complete backend E2E

@@ -6,7 +6,7 @@
 honeycomb install 'tos>hook'
 ```
 
-Honeycomb installs a prebuilt executable for Linux, Windows or macOS on x86_64 or aarch64. No Rust compiler is needed. Then run `hook login <slt>` and `hook webhook <webhook-url>`.
+Honeycomb installs a prebuilt executable for Linux, Windows or macOS on x86_64 or aarch64. No Rust compiler is needed. Then run `hook login <slt>` for internal management. The enclosing app handles Ting receiving separately from this management CLI, without an extra end-user setup flow.
 
 For local source development:
 
@@ -15,7 +15,6 @@ git clone https://github.com/teamofsilicons/silicon-hook.git
 cd silicon-hook
 cargo build --workspace --bins --locked
 cargo install --path crates/cli --locked
-hook daemon start
 ```
 
 Use the reviewed revision containing the required features, and deploy its backend before connecting a new client. See [compatibility](contracts.md).
@@ -24,7 +23,7 @@ Use the reviewed revision containing the required features, and deploy its backe
 
 `SILICON_HOME` is the base for the private `.silicon-hook` directory. If absent, Hook uses `$HOME`. `SILICON_HOOK_HOME` overrides the full state directory. `hook config home <directory>` relocates the configured base. Files are private and state writes are atomic.
 
-`--profile` selects independent saved sessions. `env use` remembers a sandbox per profile; `--test` overrides it for one command and `--production` temporarily uses production. The daemon has one backend origin, configured by the default profile. Profiles registering with it must use that same origin. It maintains one prewarmed WebSocket and separate logical subscriptions/acknowledgments per identity.
+`--profile` selects independent saved sessions. `env use` remembers a sandbox per profile; `--test` overrides it for one command and `--production` temporarily uses production. The CLI refreshes sessions under its private state lock. It starts no Hook daemon or delivery connection.
 
 ## Common configuration
 
@@ -32,16 +31,13 @@ Use the reviewed revision containing the required features, and deploy its backe
 hook config show
 hook config set url https://backend.hook.teamofsilicons.com
 hook config set org tos
-hook webhook http://127.0.0.1:9000/events --secret-file ./receiver-secret
-hook webhook https://sandbox.example/events --test-destination
-hook --isi worker-17 webhook http://127.0.0.1:9000/events
 ```
 
-`ISI`/`--isi` is optional internal Silicon metadata. It is stored locally and included in receiver metadata when present; it never changes authorization. `--secret-file` configures local delivery HMAC signing and never sends that secret to Hook. Mark remote test destinations explicitly to prevent accidental production effects.
+The enclosing runtime owns destination configuration, optional internal Silicon metadata and callback authentication through Ting. See the [stateless receiving adapter](client/relay.md) and [service setup](ting-delivery.md). Keep test destinations and sessions isolated from production.
 
 ## Automatic updates
 
-Honeycomb owns CLI updates. Hook commands and its daemon never install or replace binaries. Rust dependencies change only when the consuming project updates its manifest or lockfile. After upgrading, restart a running daemon with `hook daemon stop` and `hook daemon start`.
+Honeycomb owns CLI updates. Hook commands never install or replace binaries. Rust dependencies change only when the consuming project updates its manifest or lockfile. Before upgrading from the legacy transport, use the old executable's `hook daemon stop`. The new CLI removes delivery fields on its next state save while preserving login credentials; it cannot manage the retired daemon.
 
 ## Diagnose and report
 

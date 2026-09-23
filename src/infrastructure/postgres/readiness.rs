@@ -9,6 +9,9 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "hook.events",
     "hook.hooks",
     "hook_private.audit_log",
+    "hook_private.ting_outbox",
+    "hook_private.ting_publisher_credentials",
+    "hook_private.ting_recipient_bindings",
     "hook_private.telemetry_events",
     "hook_private.contract_versions",
     "hook_private.delivery_cursors",
@@ -51,6 +54,13 @@ const API_TABLE_PRIVILEGES: &[&str] = &[
     "hook_private.management_idempotency|DELETE",
     "hook_private.audit_log|INSERT",
     "hook_private.telemetry_events|INSERT",
+    "hook_private.ting_outbox|SELECT",
+    "hook_private.ting_outbox|INSERT",
+    "hook_private.ting_publisher_credentials|SELECT",
+    "hook_private.ting_publisher_credentials|INSERT",
+    "hook_private.ting_recipient_bindings|SELECT",
+    "hook_private.ting_recipient_bindings|INSERT",
+    "hook_private.ting_recipient_bindings|DELETE",
     "hook_control.environments|SELECT",
     "hook_control.environments|INSERT",
     "hook_control.environments|UPDATE",
@@ -62,6 +72,36 @@ const API_TABLE_PRIVILEGES: &[&str] = &[
     "hook_control.lifecycle_operations|SELECT",
     "hook_control.lifecycle_operations|INSERT",
     "hook_control.lifecycle_operations|UPDATE",
+];
+
+// Publication may advance progress or rotate encrypted sessions, but may not
+// rewrite an event's prepared body, producer key, destination, or tenant scope.
+const API_COLUMN_PRIVILEGES: &[&str] = &[
+    "hook_private.ting_recipient_bindings|encrypted_authority|UPDATE",
+    "hook_private.ting_recipient_bindings|authority_version|UPDATE",
+    "hook_private.ting_outbox|environment_generation|UPDATE",
+    "hook_private.ting_outbox|next_attempt_at|UPDATE",
+    "hook_private.ting_outbox|attempts|UPDATE",
+    "hook_private.ting_outbox|last_attempt_at|UPDATE",
+    "hook_private.ting_outbox|last_error_code|UPDATE",
+    "hook_private.ting_outbox|lease_id|UPDATE",
+    "hook_private.ting_outbox|lease_until|UPDATE",
+    "hook_private.ting_outbox|accepted_at|UPDATE",
+    "hook_private.ting_outbox|ting_id|UPDATE",
+    "hook_private.ting_outbox|silent|UPDATE",
+    "hook_private.ting_publisher_credentials|environment_generation|UPDATE",
+    "hook_private.ting_publisher_credentials|provision_request_hash|UPDATE",
+    "hook_private.ting_publisher_credentials|provision_input_hash|UPDATE",
+    "hook_private.ting_publisher_credentials|encrypted_credentials|UPDATE",
+    "hook_private.ting_publisher_credentials|actor_id|UPDATE",
+    "hook_private.ting_publisher_credentials|expires_at|UPDATE",
+    "hook_private.ting_publisher_credentials|validated|UPDATE",
+    "hook_private.ting_publisher_credentials|rejected|UPDATE",
+    "hook_private.ting_publisher_credentials|operation_key|UPDATE",
+    "hook_private.ting_publisher_credentials|operation_started_at|UPDATE",
+    "hook_private.ting_publisher_credentials|lease_id|UPDATE",
+    "hook_private.ting_publisher_credentials|lease_until|UPDATE",
+    "hook_private.ting_publisher_credentials|updated_at|UPDATE",
 ];
 
 const WORKER_TABLE_PRIVILEGES: &[&str] = &[
@@ -184,6 +224,15 @@ impl PostgresStore {
             MISSING_TABLE_PRIVILEGES_SQL,
         )
         .await?;
+        if role == RuntimeDatabaseRole::Api {
+            ensure_privileges(
+                &self.pool,
+                "column",
+                API_COLUMN_PRIVILEGES,
+                MISSING_COLUMN_PRIVILEGES_SQL,
+            )
+            .await?;
+        }
         ensure_privileges(
             &self.pool,
             "function",
@@ -225,6 +274,19 @@ const MISSING_TABLE_PRIVILEGES_SQL: &str = "
         current_user,
         split_part(descriptor, '|', 1),
         split_part(descriptor, '|', 2)
+    )
+    ORDER BY descriptor
+";
+
+const MISSING_COLUMN_PRIVILEGES_SQL: &str = "
+    WITH required(descriptor) AS (SELECT unnest($1::text[]))
+    SELECT descriptor
+    FROM required
+    WHERE NOT has_column_privilege(
+        current_user,
+        split_part(descriptor, '|', 1),
+        split_part(descriptor, '|', 2),
+        split_part(descriptor, '|', 3)
     )
     ORDER BY descriptor
 ";

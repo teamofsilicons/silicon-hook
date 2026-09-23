@@ -1,6 +1,6 @@
 # Silicon Hook API documentation
 
-This document explains every operation in the Silicon Hook OpenAPI contract. The machine-readable contract is in [`openapi.yaml`](./openapi.yaml). The product behavior it implements is [`UNDERSTANDING.md`](../../understanding/UNDERSTANDING.md).
+This document explains the Silicon Hook backend API contract. The machine-readable contract is in [`openapi.yaml`](../../openapi.yaml). The product requirements are in [`UNDERSTANDING.md`](../../understanding/UNDERSTANDING.md).
 
 ## API conventions
 
@@ -9,7 +9,7 @@ This document explains every operation in the Silicon Hook OpenAPI contract. The
 Management, history, and delivery operations use:
 
 ```text
-https://hook.teamofsilicons.com/api/v1
+https://backend.hook.teamofsilicons.com/api/v2
 ```
 
 An authenticated Silicon owns the namespace `https://hook.teamofsilicons.com/{silicon_id}/`. Each hook it creates receives a public endpoint inside that namespace:
@@ -26,10 +26,12 @@ Every route belongs to an API major. Before anything else a client sends the unv
 
 ```http
 GET /api/version
-Silicon-Hook-Supported-API-Versions: v1
+Silicon-Hook-Supported-API-Versions: v2,v1
 ```
 
-Hook answers with the highest major both sides support, in the body (`service`, `selected_api_version`, `supported_api_versions`, `build`, `commit`) and in `Silicon-Hook-API-Version`, and varies the response on the advertised list. With no shared major it answers `406 api_version_unsupported`. A client then pins the major on every request with `Silicon-Hook-API-Version: v1`; a pin that disagrees with the route is refused with `400 api_version_mismatch`. The official Rust client, `silicon-hook-client`, performs this handshake on connect.
+Hook answers with the highest shared, nonsunset major in the body (`service`, `selected_api_version`, `supported_api_versions`, `build`, `commit`) and in `Silicon-Hook-API-Version`, and varies the response on the advertised list. With no shared major it answers `406 api_version_unsupported`. A v2 client pins every versioned call with `Silicon-Hook-API-Version: v2`; a pin that disagrees with the route is refused with `400 api_version_mismatch`. Advertise only majors the client actually implements. An existing client that implements only the legacy transport must continue advertising `v1` until migrated.
+
+Unprefixed operation paths below are relative to `/api/v2`, except in the explicitly marked legacy sections. Hook management, authentication, history and testing operations also remain available under `/api/v1`. Publisher provisioning, recipient grants, event hydration and publication status are available in both majors; Carbon receiving interests require v2. The migration marks v1 deprecated; it continues serving its existing delivery protocol until the [seven idle day sunset policy](../contracts.md) retires it. Backend support does not imply that installed clients, the CLI or website have migrated.
 
 ### Authentication
 
@@ -189,14 +191,14 @@ Shopify: payload request.raw_body
 
 ### `ANY https://hook.teamofsilicons.com/silicon/{silicon_id}/{endpoint_key}`
 
-Receives a provider request. `POST` is the common case, but every method is captured because some providers verify endpoints with `GET`. The `/api/v1/silicon/...` route and an optional trailing slash are aliases.
+Receives a provider request. `POST` is the common case, but every method is captured because some providers verify endpoints with `GET`. The `/api/v2/silicon/...` and legacy `/api/v1/silicon/...` routes and an optional trailing slash are aliases.
 
 Processing order:
 
 1. Resolve the endpoint. Unknown, disabled, and deleted endpoints return `404`; a retired key returns `410 endpoint_retired`.
 2. Check the client address against the hook's block list. A blocked address receives `403 ip_blocked` (with `Retry-After` for a temporary block) and nothing it sent is stored.
 3. Capture the exact method, URL, headers (at most 128 fields, 64 KiB), and body (at most 1 MiB). Multipart bodies are parsed for expressions.
-4. If the policy requires signatures, verify. A verified request joins the log and the Silicon's delivery stream; an unverified request goes to the blocked log and counts against the address.
+4. If the policy requires signatures, verify. A verified request and its Ting publication rows commit in one database transaction; it also retains a sequence for history and v1 compatibility. An unverified request goes to the blocked log and counts against the address, with no Ting publication.
 5. Respond `200 {"status":"webhook.ok","receipt_id":"..."}`. The response is identical for verified and withheld requests so it cannot be used as a signature oracle.
 
 Behind a load balancer the deployment sets `HOOK_TRUSTED_PROXY_HOPS` so the blocked address is the real sender rather than the balancer.
@@ -217,7 +219,127 @@ Return withheld requests in the same shape with a `reason_code` (for example `si
 
 Cursors are authenticated and bound to the organization, Silicon, collection, and filter; a cursor from the events list is rejected on the blocked list.
 
-## Deliveries
+## Ting delivery (v2)
+
+Hook keeps the exact provider request and signature verification result. Ting carries a compact reference, so a provider body up to Hook's 1 MiB limit does not need to fit inside Ting's 256 KiB send limit. Every queued send persists its complete bytes and producer key. Background retries reuse both and obtain a fresh, request-bound IAM proof for every attempt, including retries after an uncertain response. A temporary IAM or Ting outage leaves committed events pending until their 14-day retention expires.
+
+The event payload carried by Ting is:
+
+```json
+{
+  "type": "new_event",
+  "data": {
+    "sender": "stripe",
+    "metadata": {
+      "id": "0198c21a-6330-7000-8000-000000000001",
+      "org_id": "tos",
+      "silicon_id": "cos:tos",
+      "hook_id": "0198c21a-6330-7000-8000-000000000002",
+      "delivery_sequence": 42,
+      "received_at": "2026-09-22T10:00:00Z",
+      "summary": "stripe triggered at 10:00:00 22-09-2026 UTC",
+      "environment_id": "00000000-0000-0000-0000-000000000000",
+      "environment_generation": 0
+    }
+  }
+}
+```
+
+The registered Ting type is `<Hook app_id>.webhook.received`; the outer Ting send names the organization, recipient and stable producer key. The payload above contains no captured provider body, headers or endpoint secret. Use `metadata.id` for deduplication. `delivery_sequence` records Hook receipt order; Ting can arrive out of order and does not advance the legacy cumulative ACK cursor.
+
+`environment_generation` in this reference records the original event's generation. Runtime generation fences authorize current work separately. Key rotation or restore must not rewrite already prepared notification bytes; a clean deletes the canonical event and invalidates its reference. Current IAM authority is always required to hydrate it.
+
+### `POST /delivery/publisher`
+
+An organization owner or administrator acting as a **Carbon** provisions a dedicated Silicon session used exclusively by Hook's backend publisher. Require `Authorization`, `X-Org-ID`, `Idempotency-Key` and `Content-Type: application/json`.
+
+```json
+{"slt":"<new Hook application SLT for the publisher Silicon>","replace_rejected":false}
+```
+
+`slt` is required. `replace_rejected` is optional and defaults to `false`. Supply a fresh Hook application SLT for a Silicon authorized in the selected organization; do not supply a caller's access or refresh token. Hook encrypts and exclusively owns the resulting family, serializes refreshes, and persists mutation keys before IAM calls. Retry the same request with the same idempotency key when its outcome is uncertain. The response is `200` with only `org_id`, `actor_id` and access-token `expires_at`; tokens are never returned.
+
+`replace_rejected: true` explicitly recovers a rejected bootstrap or publisher family. Hook durably revokes the old family, when present, before exchanging the replacement SLT; it does not replace a usable publisher on an arbitrary retry. State conflicts return `409 publisher_already_configured` or `409 publisher_busy`, invalid input returns `422 invalid_publisher_slt`, rejected authority returns `403`, and dependency failures return `503`. A missing publisher does not reject verified provider ingress: publication remains pending with `publisher_not_configured`.
+
+### `POST /delivery/recipient`
+
+Registers the authenticated actor's Ting grant to the configured Hook application. Require `Authorization` and `X-Org-ID`; send an **empty body**, not `{}`. A fresh IAM proof represents the caller. The `200` response contains `id`, `app_id`, `for`, `active` and `required_delivery`. Registration does not enable required delivery; that separate choice belongs to the recipient through its own Ting session. The caller cannot choose another recipient or a remote URL. Nonempty bodies return `400 unexpected_body`; authority failures return `401` or `403`, rate limits return `429` with `Retry-After`, and dependency failures return `503`.
+
+### `GET`, `POST /delivery/receiver` (v2, testing only)
+
+GET returns the selected actor's current `app_id`, `for`, `kind`, Ting organization
+UUID `org_id`, Hook handle `hook_org_id`, and `environment: {kind, id, generation}`.
+This is the shared Honeycomb generation, separate from Hook's credential and
+original-event generations. The enclosing runtime pins this scope before POST.
+
+POST requires `Idempotency-Key` and JSON containing `environment_id`, `generation`
+and an optional existing `receiver_id` for renewal. Hook derives the represented
+actor and app from current authorization and sends a fresh request-bound IAM
+proof. An active recipient grant is required; bootstrap does not create one.
+The `200` response contains the scope plus `receiver_id`, private `receiver_token`
+and RFC3339 `expires_at`, with `Cache-Control: no-store`.
+
+Keep the original scope, body and key for an uncertain retry. Exact replay retains
+its original expiry, including an expired historical result. Renew with a new
+operation key and the same receiver ID. Capabilities last at most 30 seconds and
+only read/watch that app's scoped Ting inbox; they cannot send, ACK, enroll a
+native destination or change preferences. The enclosing runtime keeps them
+private, validates scope, renews/reconnects and revokes them through Ting. Clean
+and lost authority invalidate them; a changed pinned generation returns
+`409 receiver_environment_changed`. Production is rejected.
+
+### `GET`, `POST`, `DELETE /silicons/{silicon_id}/delivery/subscription`
+
+A Carbon with current permission to read that Silicon's events can inspect or enable their own receiving interest through v2. An authenticated Carbon can remove their own interest after losing target visibility. Require `Authorization` and `X-Org-ID`; POST and DELETE take no body and no recipient selector. POST first registers the Carbon's Ting grant, then records the interest for **future** verified events and encrypts the current access token; it does not backfill history. Silicon recipients already receive their own events and do not use this Carbon-only operation.
+
+GET and POST return `200`:
+
+```json
+{
+  "receiving": true,
+  "subscription": {
+    "id": "0198c21a-6330-7000-8000-000000000003",
+    "org_id": "tos",
+    "silicon_id": "cos:tos",
+    "recipient_id": "alice",
+    "created_at": "2026-09-22T10:00:00Z"
+  }
+}
+```
+
+GET returns `{"receiving":false,"subscription":null}` when no interest exists. DELETE returns `204` with no body, including when already absent or no longer visible. POST retains the same binding ID while renewing its encrypted current access authority; DELETE is idempotent. A Silicon allows at most 100 Carbon observers; exceeding the limit returns `409 receiving_subscription_limit`. Non-Carbon callers receive `403`; GET and POST for invisible Silicons receive `404`. An expired caller token returns `401 unauthenticated`, so the runtime must refresh its own Hook session before retrying POST. Temporary IAM, Ting or encrypted-storage failures return `503 provider_unavailable` and leave the caller able to retry.
+
+The enclosing runtime must repeat POST after every Hook token refresh and when resuming receiving. Publication rechecks the exact Carbon's current identity and Silicon visibility through IAM before sending event metadata to Ting. Missing/expired authority keeps queued copies pending with `observer_authority_refresh_required`; unavailable checks retry with `observer_authorization_unavailable`. Revoked target visibility removes the binding and its queued copies. These diagnostics are internal observer queue state; the event publication endpoint below describes only the primary Silicon send. Removing an interest cannot retract a notification already accepted by Ting. Hook retains no Carbon refresh credentials, returns no encrypted authority in subscription responses, and raw-event hydration still requires current IAM permission.
+
+### `GET /silicons/{silicon_id}/events/{event_id}`
+
+Hydrates one retained event using the caller's current IAM read authority. Returns `200` with the same full Event object used by history: `id`, `org_id`, `silicon_id`, `hook_id`, `provider`, `delivery_sequence`, `received_at`, `summary` and captured `request`. The summary identifies the provider and receipt time with an IANA timezone. The compact Ting reference is not a bearer credential.
+
+When hydrating a reference, pass its `environment_id` and `environment_generation` as paired query parameters. Both may be omitted for ordinary authorized lookup; supplying only one, or a negative generation, returns `422 environment_id_and_generation_required_together`. The generation must match the original event, not the current runtime generation: retained events remain hydratable after key rotation or restore. Foreign, invisible, expired or cleaned events return `404`. Use the selected test environment's current credentials for test references; failed selection never falls back to production.
+
+### `GET /silicons/{silicon_id}/events/{event_id}/publication`
+
+Returns the event's publication status for its **primary Silicon recipient** after current read authorization. There is no recipient selector. The response fields are `event_id`, `recipient_id`, `state`, `attempts`, `ting_id`, `last_error_code`, `accepted_at`, `next_attempt_at`, `expires_at`, `delivery`, `silent`, `recipient_receipt` and `recipient_status_error`. `delivery` is `ordinary` or `required`; `silent` is null before verified acceptance and otherwise records notification visibility.
+
+| State | Meaning |
+| --- | --- |
+| `pending` | No verified Ting acceptance yet; inspect the bounded `last_error_code`. |
+| `accepted_by_ting` | Ting confirmed durable acceptance; recipient processing is not established. |
+| `accepted_silently` | Ting accepted an ordinary event under a silent preference, without automatic delivery. |
+
+New primary Silicon sends use `required` policy; without separate recipient opt-in, they remain pending with `required_delivery_not_enabled`. Required muted acceptance is `accepted_by_ting` with `silent: true`, and remains eligible for automatic delivery. Carbon copies and existing queued sends retain ordinary policy. Retries never change the persisted body or key.
+
+If available, `recipient_receipt` contains `id`, `read`, `silent`, `delivery`, `deliveries` and `more_destinations`. Each destination has `webhook_id`, `delivery_acked` (Ting's daemon durably received it) and `read_acked` (the local destination accepted it). `read` can also indicate a Carbon viewed the notification. This is the first destination page; `more_destinations: true` means the list is incomplete. These ACKs do not mean the recipient completed its work.
+
+Receipt lookup is best effort. `recipient_receipt` is null before acceptance or when the live lookup fails; `recipient_status_error` is null, `publisher_unavailable` or `recipient_status_unavailable`. A successful status request can still return `200` with one of those diagnostics and the durable Hook publication state.
+
+### Retired v2 transport operations
+
+Every method on `/api/v2/ws`, `/api/v2/relay/ws`, `/api/v2/silicons/{silicon_id}/deliveries`, and its `/pull`, `/ack` and `/cursor` subpaths returns `410 delivery_transport_replaced`. There is no v2 Hook WebSocket, polling delivery queue or cumulative delivery ACK. History reads remain available.
+
+## Legacy delivery (deprecated v1)
+
+The following operations and wire shapes apply only to `/api/v1`, while its contract remains nonsunset. They describe the compatibility transport; v2 uses Ting as documented above.
 
 Every verified request is one position in its Silicon's ordered delivery stream. Each consumer (the authenticated actor) has an acknowledged cursor per Silicon, so a Silicon's own acknowledgments and a Carbon viewer's are independent.
 
@@ -255,18 +377,18 @@ return Event objects in `items`.
 
 After `ready` the server sends every event after the acknowledged cursor, then live events as they arrive. The server sends `ping` every 30 seconds; the client answers with a `pong` carrying the same `ping_id`. If no valid pong arrives for two minutes the server closes with code `4000` and reason `heartbeat-timeout`. Pings and pongs are never stored, never acknowledged, and never consume sequences. `resume` replays from a client-held position without changing the cursor.
 
-### `GET /silicons/{silicon_id}/deliveries`
+### `GET /api/v1/silicons/{silicon_id}/deliveries`
 
 Polling alternative. Without `after_sequence` it returns the unacknowledged backlog, oldest first, with the consumer's `cursor` and the Silicon's `latest_sequence`.
 
-### `POST /silicons/{silicon_id}/deliveries/ack`
+### `POST /api/v1/silicons/{silicon_id}/deliveries/ack`
 
 Acknowledges everything through `through_sequence`. Cursors never move backwards.
 The value must be between zero and the stream's latest allocated sequence;
 acknowledging a future event returns 422 without changing the cursor. The same
 validation applies to WebSocket ACKs, which return a recoverable `invalid_ack`.
 
-### `GET /silicons/{silicon_id}/deliveries/cursor`
+### `GET /api/v1/silicons/{silicon_id}/deliveries/cursor`
 
 Reads the consumer's acknowledged position.
 
@@ -281,8 +403,8 @@ There is no password, OTP, redirect or callback endpoint in Hook.
 JSON `{"slt":"<short-lived IAM token>"}` with `Idempotency-Key`. Returns
 `access_token`, `refresh_token`, `token_type`, `expires_in`, `scopes`, `actor`
 and `org_id`. IAM consumes the SLT; retry with the same idempotency key after an
-uncertain result. The client requires a local recipient URL but never includes
-it in this backend request.
+uncertain result. Login starts no receiver; the enclosing application handles
+internal Ting receiving separately.
 
 ### `POST /auth/refresh`
 
@@ -317,11 +439,13 @@ Receives Hook's own Application webhook from IAM. Deliveries are verified with t
 Provider POSTs to the endpoint URL
   -> Hook routes the key and checks the address
   -> Hook captures the exact request and verifies the signature policy
-  -> Hook answers 200 webhook.ok
-  -> verified: appended to the 14-day log and the Silicon's delivery stream
+  -> verified: event and Ting outbox commit together in the 14-day retained log
      withheld: appended to the blocked log and counted against the address
-  -> connected sessions receive {"type":"new_event","data":{...}} and acknowledge
-  -> unacknowledged events replay on the next connection
+  -> Hook answers 200 webhook.ok
+  -> publisher obtains a fresh IAM proof and sends the compact reference to Ting
+  -> uncertain acceptance retries the same bytes/key with a new proof
+  -> Ting delivers according to recipient preferences and records separate receipt ACKs
+  -> recipient hydrates the original event through Hook using current IAM authority
 ```
 
 ### New Silicon
@@ -331,27 +455,26 @@ Silicon authenticates with IAM and calls POST /silicons/{silicon_id}/hooks/iam
   -> Hook creates the Silicon IAM hook with IAM's signing convention
   -> Hook registers the endpoint as the Silicon's IAM webhook with the Silicon's bearer
   -> IAM issues the signing secret; Hook stores it as the hook's signing secret
-  -> IAM signs every Silicon event to that endpoint; verified events flow to the stream
+  -> IAM signs every Silicon event to that endpoint; verified events enter the Ting outbox
 ```
 
 ## Deliberately deferred operations
 
-- No event-detail endpoint by event ID.
-- No explicit replay of an individual event beyond `resume`.
+- No public operation to create a fresh Ting send for an individual historical event; v1 retains its legacy `resume` behavior.
 - No timestamp-tolerance option in signature policies; a signed timestamp is authenticated but is not checked for freshness by Hook. Providers requiring replay prevention should deduplicate by provider event ID and enforce timestamp freshness at the recipient.
 - No public permanent-purge operation; the worker purges deleted hooks after 45 days and logs after 14 days.
 - No unblock operation for addresses; temporary blocks expire after one day and inactive blocks are forgotten after 30 days.
 
 ## Testing environments
 
-Use `X-Hook-Test-Key: <32-alphanumeric-root-key>` on ordinary API v1 calls.
+Use `X-Hook-Test-App-Secret` for app-selected environments, or the legacy `X-Hook-Test-Key: <32-alphanumeric-root-key>`, on ordinary versioned calls. These selectors are mutually exclusive.
 The same bearer authorization, permissions and request shapes then apply
 inside that environment. See the [complete testing API guide](../testing/api.md)
 for legacy configuration. Honeycomb now coordinates shared environment lifecycle; see [the participant contract](../testing/honeycomb.md).
 Public test ingress uses `/test/silicon/{silicon_id}/{endpoint_key}` and carries
 no test key. Its endpoint ledger determines the environment.
 
-## WebSocket flow control
+## Legacy v1 WebSocket flow control
 
 At most 32 events per subscribed Silicon are outstanding on a connection.
 Acknowledging an event releases capacity for the next retained event. Read
@@ -369,19 +492,19 @@ Loss of authority closes with `4003 authorization-changed`.
 
 ## Login discovery and status
 
-`GET /api/v1/auth/iam` needs no bearer. It returns `app_id`, `iam_url`,
+`GET /api/v2/auth/iam` (also available in v1) needs no bearer. It returns `app_id`, `iam_url`,
 `testing`, and `login_method: "short_lived_token"`; `app_id` is null when only
 local development auth is configured. It never exposes secrets. Attach
 `x-hook-test-key` for the test application's configuration; an invalid or
 unconfigured environment cannot fall back to the production application.
 
-`GET /api/v1/auth/status` requires a bearer and `x-org-id`, plus the test key
+`GET /api/v2/auth/status` (also available in v1) requires a bearer and `x-org-id`, plus the test selector
 in a test environment. Hook checks the actor and current membership online
 through the official IAM client. Success returns `authenticated: true`,
 `actor: {"type": "carbon" | "silicon", "id": "..."}`, and `org_id`.
 Invalid/revoked credentials return 401; permission and provider failures retain
 their normal error responses. Both discovery and status use `Cache-Control: no-store`.
 
-Local relay destinations are configured after SLT exchange through the client
+For the legacy v1 transport, local relay destinations are configured after SLT exchange through the client
 or CLI and never appear in the backend login request. `webhook` and `unhook`
 change local delivery configuration; neither changes a provider hook URL.

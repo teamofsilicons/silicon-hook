@@ -134,18 +134,18 @@ test("expired sessions cannot recover saved tokens or keys", async () => {
 test("gateway does not expose ingress, IAM receivers, arbitrary auth or unsupported methods", () => {
   for (const path of [
     "/webhook/",
-    "/api/v1/auth/login",
-    "/api/v1/auth/refresh",
-    "/api/v1/iam/events",
+    "/api/v2/auth/login",
+    "/api/v2/auth/refresh",
+    "/api/v2/iam/events",
     "/silicon/cos:tos/ABC12345",
     "https://example.com/",
     "//example.com/",
   ])
     for (const method of ["GET", "POST", "DELETE"])
       assert.equal(allowed(path, method), false, path);
-  assert.equal(allowed("/api/v1/testing-environment/clean", "GET"), false);
-  assert.equal(allowed("/api/v1/silicons/cos%3Atos/hooks", "PUT"), false);
-  assert.equal(allowed("/api/v1/silicons/cos%3Atos/hooks", "POST"), true);
+  assert.equal(allowed("/api/v2/testing-environment/clean", "GET"), false);
+  assert.equal(allowed("/api/v2/silicons/cos%3Atos/hooks", "PUT"), false);
+  assert.equal(allowed("/api/v2/silicons/cos%3Atos/hooks", "POST"), true);
 });
 
 test("production cannot start with insecure or missing session configuration", () => {
@@ -195,15 +195,20 @@ test("organization discovery uses the selected private session and IAM grant pag
     globalThis,
     "fetch",
     async (input: URL | string, init: RequestInit) => {
-      calls++;
       const url = new URL(input);
+      if (url.pathname === "/api/version")
+        return Response.json({
+          service: "silicon-hook",
+          selected_api_version: "v2",
+        });
+      calls++;
       const headers = init.headers as Record<string, string>;
-      if (url.pathname === "/api/v1/telemetry") {
+      if (url.pathname === "/api/v2/telemetry") {
         assert.equal(headers["x-org-id"], "first");
         assert.equal(headers.authorization, "Bearer private-production-token");
         return new Response(null, { status: 202 });
       }
-      if (url.pathname === "/api/v1/testing-session") {
+      if (url.pathname === "/api/v2/testing-session") {
         assert.equal(headers["x-hook-telemetry"], "off");
         assert.equal(headers["x-hook-test-key"], "sandbox-root");
         assert.equal(headers.authorization, undefined);
@@ -218,12 +223,23 @@ test("organization discovery uses the selected private session and IAM grant pag
       return Response.json(
         url.searchParams.has("cursor")
           ? {
-              items: [{ org_id: "second", name: "Second" }],
+              items: [
+                {
+                  id: "00000000-0000-7000-8000-000000000002",
+                  org_id: "second",
+                  name: "Second",
+                },
+              ],
               page: { has_more: false },
             }
           : {
               items: [
-                { org_id: "first", name: "First", private_field: "omit" },
+                {
+                  id: "00000000-0000-7000-8000-000000000001",
+                  org_id: "first",
+                  name: "First",
+                  private_field: "omit",
+                },
               ],
               page: { has_more: true, next_cursor: "page-two" },
             },
@@ -326,6 +342,11 @@ test("stale access and delayed refresh replies recover without changing mutation
       "fetch",
       async (input: URL | string, init: RequestInit) => {
         const headers = new Headers(init.headers);
+        if (String(input).endsWith("/api/version"))
+          return Response.json({
+            service: "silicon-hook",
+            selected_api_version: "v2",
+          });
         if (String(input).endsWith("/auth/refresh")) {
           refreshes++;
           if (replay && refreshes === 1)
@@ -365,7 +386,7 @@ test("stale access and delayed refresh replies recover without changing mutation
           {
             host: "127.0.0.1",
             port: (server.address() as { port: number }).port,
-            path: "/console/proxy/api/v1/silicons/actor/hooks?plane=production",
+            path: "/console/proxy/api/v2/silicons/actor/hooks?plane=production",
             method: "POST",
             headers: {
               host: "hook.example",

@@ -12,6 +12,36 @@ use crate::{
 };
 
 impl HookApplication {
+    /// Hydrates a retained Ting reference using current authority and its original generation.
+    ///
+    /// # Errors
+    /// Rejects invisible, expired or cleaned events and mismatched environments.
+    pub async fn get_event(
+        &self,
+        authorization: &crate::domain::AuthorizationContext,
+        silicon_id: &crate::domain::SiliconId,
+        event_id: crate::domain::EventId,
+        expected_environment: Option<(uuid::Uuid, i64)>,
+    ) -> Result<EventRecord, ApplicationError> {
+        authorize_action(authorization, Action::ReadEvents, silicon_id)?;
+        if let Some((expected_id, _)) = expected_environment
+            && expected_id != self.environment.map_or(uuid::Uuid::nil(), |(id, _)| id)
+        {
+            return Err(ApplicationError::NotFound);
+        }
+        let _guard = self.delivery_guard().await?;
+        self.store
+            .get_event(
+                authorization.organization_id(),
+                silicon_id,
+                event_id,
+                expected_environment.map(|(_, generation)| generation),
+            )
+            .await
+            .map_err(map_store_error)?
+            .ok_or(ApplicationError::NotFound)
+    }
+
     /// Lists the most recent verified requests, newest first.
     ///
     /// # Errors

@@ -15,20 +15,8 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Session {
-    #[serde(default)]
-    pub webhook_secret: Option<Secret>,
-    #[serde(default)]
-    pub isi: Option<String>,
-    #[serde(default)]
-    pub test_destination: bool,
     pub tokens: Tokens,
     pub expires_at: u64,
-    #[serde(default)]
-    pub webhook_url: Option<String>,
-    #[serde(default)]
-    pub silicons: Vec<String>,
-    #[serde(default)]
-    pub relay_token: Option<Secret>,
     /// Persisted before refresh so a lost response can be retried safely.
     #[serde(default)]
     pub pending_refresh_key: Option<String>,
@@ -325,8 +313,8 @@ pub async fn refresh_if_needed(
             }
             None => profile.session = Some(session.clone()),
         }
-        // The lock and durable write span the request: another CLI process or the
-        // daemon must never rotate the same refresh token with a different key.
+        // The lock and durable write span the request: another CLI process
+        // must never rotate the same refresh token with a different key.
         store.save()?;
         let tokens = client.refresh(session.tokens.refresh_token.expose(), &mutation)
         .await.context("Session refresh failed; retry the command, or sign in again with hook login --slt-file <file>")?;

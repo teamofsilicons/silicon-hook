@@ -13,42 +13,20 @@ use tower_http::{
 };
 
 use super::{environments, handlers, middleware, state::ApiState, ws};
-use crate::config::ServerSettings;
+use crate::{config::ServerSettings, error::AppError};
 
 const IAM_EVENT_BODY_LIMIT: usize = 1024 * 1024;
 
-#[allow(
-    clippy::too_many_lines,
-    reason = "declarative route and middleware ordering kept together"
-)]
 pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
     let system = Router::new()
-        .route(
-            "/api/v1/telemetry",
-            post(super::telemetry_events::ingest).layer(DefaultBodyLimit::max(8192)),
-        )
         .route("/healthz", get(handlers::liveness))
         .route("/readyz", get(handlers::readiness))
         .route("/api/version", get(handlers::negotiate_api_version))
-        .route("/api/v1/version", get(handlers::version));
-
-    // Sign-in runs before any bearer exists, so it lives outside management.
-    let auth = Router::new()
-        .route("/api/v1/auth/iam", get(handlers::iam_information))
-        .route("/api/v1/auth/status", get(handlers::login_status))
-        .route("/api/v1/auth/login", post(handlers::login))
-        .route("/api/v1/auth/refresh", post(handlers::refresh_tokens))
-        .route("/api/v1/auth/logout", post(handlers::logout))
-        .layer(DefaultBodyLimit::max(settings.max_management_body_bytes));
-
-    // IAM signs deliveries over the exact body, which may carry complete
-    // directory state; the verifier's own bound is the same one megabyte.
+        .route("/api/contracts", get(super::contracts::catalog));
     let iam_events = Router::new()
-        .route("/api/v1/iam/events", post(handlers::receive_iam_event))
         .route("/webhook/", post(handlers::receive_iam_event))
         .route("/webhook", post(handlers::receive_iam_event))
         .layer(DefaultBodyLimit::max(IAM_EVENT_BODY_LIMIT));
-
     let ingress = Router::new()
         .route(
             "/test/silicon/{silicon_id}/{endpoint_key}",
@@ -66,63 +44,16 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
             "/silicon/{silicon_id}/{endpoint_key}/",
             any(handlers::receive),
         )
-        .route(
-            "/api/v1/silicon/{silicon_id}/{endpoint_key}",
-            any(handlers::receive),
-        )
-        .route(
-            "/api/v1/silicon/{silicon_id}/{endpoint_key}/",
-            any(handlers::receive),
-        )
         .layer(DefaultBodyLimit::max(settings.max_ingress_body_bytes));
 
-    let testing = Router::new()
-        .route("/api/contracts", get(super::contracts::catalog))
-        .route("/api/v1/contracts", get(super::contracts::catalog))
-        .route("/api/v1/testing-session", get(environments::selected))
-        .route(
-            "/api/v1/testing-environments",
-            get(environments::list).post(environments::create),
-        )
-        .route(
-            "/api/v1/testing-environments/{id}",
-            get(environments::get).delete(environments::delete),
-        )
-        .route(
-            "/api/v1/testing-environments/{id}/key",
-            get(environments::key),
-        )
-        .route(
-            "/api/v1/testing-environments/{id}/key/rotate",
-            post(environments::rotate),
-        )
-        .route(
-            "/api/v1/testing-environments/{id}/restore",
-            post(environments::restore),
-        )
-        .route("/api/v1/testing-environment", get(environments::current))
-        .route(
-            "/api/v1/testing-environment/clean",
-            post(environments::clean),
-        )
-        .route(
-            "/api/v1/testing-environment/iam",
-            axum::routing::put(environments::configure_iam),
-        )
-        .layer(DefaultBodyLimit::max(settings.max_management_body_bytes));
-
     system
-        .merge(testing)
-        .merge(management_router(settings))
-        .merge(auth)
+        .merge(versioned_router("/api/v1", true, settings))
+        .merge(versioned_router("/api/v2", false, settings))
         .merge(iam_events)
         .merge(ingress)
         .fallback(handlers::not_found)
         .method_not_allowed_fallback(handlers::method_not_allowed)
-        .layer(axum_middleware::from_fn_with_state(
-            state.clone(),
-            environments::scope,
-        ))
+        .layer(axum_middleware::from_fn_with_state(state.clone(), environments::scope))
         .merge(Router::new().route(
             "/internal/honeycomb/organizations/{org}/testing-environments/{environment}/operations/{operation}",
             axum::routing::put(super::lifecycle::apply).get(super::lifecycle::status),
@@ -136,75 +67,212 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
             http::HeaderName::from_static("x-hook-test-app-secret"),
         ]))
         .layer(ConcurrencyLimitLayer::new(settings.concurrency_limit))
-        .layer(axum_middleware::from_fn_with_state(
-            settings.request_timeout,
-            middleware::enforce_timeout,
-        ))
+        .layer(axum_middleware::from_fn_with_state(settings.request_timeout, middleware::enforce_timeout))
         .layer(CatchPanicLayer::custom(middleware::handle_panic))
         .layer(axum_middleware::from_fn(middleware::request_scope))
 }
 
-fn management_router(settings: &ServerSettings) -> Router<ApiState> {
-    Router::new()
+fn versioned_router(
+    prefix: &str,
+    legacy_delivery: bool,
+    settings: &ServerSettings,
+) -> Router<ApiState> {
+    let route = |suffix: &str| format!("{prefix}{suffix}");
+    let system = Router::new()
+        .route(&route("/version"), get(handlers::version))
         .route(
-            "/api/v1/silicons/{silicon_id}/hooks",
+            &route("/telemetry"),
+            post(super::telemetry_events::ingest).layer(DefaultBodyLimit::max(8192)),
+        );
+    // Sign-in must work before any bearer exists.
+    let auth = Router::new()
+        .route(&route("/auth/iam"), get(handlers::iam_information))
+        .route(&route("/auth/status"), get(handlers::login_status))
+        .route(&route("/auth/login"), post(handlers::login))
+        .route(&route("/auth/refresh"), post(handlers::refresh_tokens))
+        .route(&route("/auth/logout"), post(handlers::logout))
+        .layer(DefaultBodyLimit::max(settings.max_management_body_bytes));
+    let iam = Router::new()
+        .route(&route("/iam/events"), post(handlers::receive_iam_event))
+        .layer(DefaultBodyLimit::max(IAM_EVENT_BODY_LIMIT));
+    let ingress = Router::new()
+        .route(
+            &route("/silicon/{silicon_id}/{endpoint_key}"),
+            any(handlers::receive),
+        )
+        .route(
+            &route("/silicon/{silicon_id}/{endpoint_key}/"),
+            any(handlers::receive),
+        )
+        .layer(DefaultBodyLimit::max(settings.max_ingress_body_bytes));
+    system
+        .merge(auth)
+        .merge(iam)
+        .merge(ingress)
+        .merge(testing_router(prefix, settings))
+        .merge(management_router(prefix, legacy_delivery, settings))
+}
+
+fn testing_router(prefix: &str, settings: &ServerSettings) -> Router<ApiState> {
+    let route = |suffix: &str| format!("{prefix}{suffix}");
+    Router::new()
+        .route(&route("/contracts"), get(super::contracts::catalog))
+        .route(&route("/testing-session"), get(environments::selected))
+        .route(
+            &route("/testing-environments"),
+            get(environments::list).post(environments::create),
+        )
+        .route(
+            &route("/testing-environments/{id}"),
+            get(environments::get).delete(environments::delete),
+        )
+        .route(
+            &route("/testing-environments/{id}/key"),
+            get(environments::key),
+        )
+        .route(
+            &route("/testing-environments/{id}/key/rotate"),
+            post(environments::rotate),
+        )
+        .route(
+            &route("/testing-environments/{id}/restore"),
+            post(environments::restore),
+        )
+        .route(&route("/testing-environment"), get(environments::current))
+        .route(
+            &route("/testing-environment/clean"),
+            post(environments::clean),
+        )
+        .route(
+            &route("/testing-environment/iam"),
+            axum::routing::put(environments::configure_iam),
+        )
+        .layer(DefaultBodyLimit::max(settings.max_management_body_bytes))
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "shared declarative management and transport routes"
+)]
+fn management_router(
+    prefix: &str,
+    legacy_delivery: bool,
+    settings: &ServerSettings,
+) -> Router<ApiState> {
+    let route = |suffix: &str| format!("{prefix}{suffix}");
+    let management = Router::new()
+        .route(
+            &route("/delivery/publisher"),
+            post(super::delivery::provision_publisher),
+        )
+        .route(
+            &route("/delivery/recipient"),
+            post(super::delivery::register_recipient),
+        )
+        .route(
+            &route("/silicons/{silicon_id}/events/{event_id}/publication"),
+            get(super::delivery::publication_status),
+        )
+        .route(
+            &route("/silicons/{silicon_id}/hooks"),
             get(handlers::list_hooks)
                 .post(handlers::create_hook)
                 .patch(handlers::set_hooks_enabled),
         )
         .route(
-            "/api/v1/silicons/{silicon_id}/hooks/{hook_id}",
+            &route("/silicons/{silicon_id}/hooks/{hook_id}"),
             get(handlers::get_hook)
                 .patch(handlers::update_hook)
                 .delete(handlers::delete_hook),
         )
         .route(
-            "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/restore",
+            &route("/silicons/{silicon_id}/hooks/{hook_id}/restore"),
             post(handlers::restore_hook),
         )
         .route(
-            "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/secret/rotate",
+            &route("/silicons/{silicon_id}/hooks/{hook_id}/secret/rotate"),
             post(handlers::rotate_hook_secret),
         )
         .route(
-            "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/endpoint/rotate",
+            &route("/silicons/{silicon_id}/hooks/{hook_id}/endpoint/rotate"),
             post(handlers::rotate_hook_endpoint),
         )
         .route(
-            "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/events",
+            &route("/silicons/{silicon_id}/hooks/{hook_id}/events"),
             get(handlers::list_hook_events),
         )
         .route(
-            "/api/v1/silicons/{silicon_id}/hooks/{hook_id}/blocked-requests",
+            &route("/silicons/{silicon_id}/hooks/{hook_id}/blocked-requests"),
             get(handlers::list_hook_blocked_requests),
         )
         .route(
-            "/api/v1/silicons/{silicon_id}/events",
+            &route("/silicons/{silicon_id}/events"),
             get(handlers::list_events),
         )
         .route(
-            "/api/v1/silicons/{silicon_id}/blocked-requests",
+            &route("/silicons/{silicon_id}/events/{event_id}"),
+            get(super::delivery::event),
+        )
+        .route(
+            &route("/silicons/{silicon_id}/blocked-requests"),
             get(handlers::list_blocked_requests),
         )
         .route(
-            "/api/v1/silicons/{silicon_id}/deliveries",
-            get(handlers::pull_deliveries),
-        )
-        .route(
-            "/api/v1/silicons/{silicon_id}/deliveries/ack",
-            post(handlers::acknowledge_deliveries),
-        )
-        .route(
-            "/api/v1/silicons/{silicon_id}/deliveries/cursor",
-            get(handlers::delivery_cursor),
-        )
-        .route(
-            "/api/v1/silicons/{silicon_id}/hooks/iam",
+            &route("/silicons/{silicon_id}/hooks/iam"),
             post(handlers::connect_iam_hook),
-        )
-        .route("/api/v1/ws", get(ws::upgrade))
-        .route("/api/v1/relay/ws", get(ws::upgrade_relay))
-        .layer(DefaultBodyLimit::max(settings.max_management_body_bytes))
+        );
+    let management = if legacy_delivery {
+        management
+            .route(
+                &route("/silicons/{silicon_id}/deliveries"),
+                get(handlers::pull_deliveries),
+            )
+            .route(
+                &route("/silicons/{silicon_id}/deliveries/ack"),
+                post(handlers::acknowledge_deliveries),
+            )
+            .route(
+                &route("/silicons/{silicon_id}/deliveries/cursor"),
+                get(handlers::delivery_cursor),
+            )
+            .route(&route("/ws"), get(ws::upgrade))
+            .route(&route("/relay/ws"), get(ws::upgrade_relay))
+    } else {
+        management
+            .route(
+                &route("/delivery/receiver"),
+                get(super::receivers::get).post(super::receivers::bootstrap),
+            )
+            .route(
+                &route("/silicons/{silicon_id}/delivery/subscription"),
+                get(super::subscriptions::get)
+                    .post(super::subscriptions::subscribe)
+                    .delete(super::subscriptions::unsubscribe),
+            )
+            .route(
+                &route("/silicons/{silicon_id}/deliveries"),
+                any(ting_delivery_required),
+            )
+            .route(
+                &route("/silicons/{silicon_id}/deliveries/pull"),
+                any(ting_delivery_required),
+            )
+            .route(
+                &route("/silicons/{silicon_id}/deliveries/ack"),
+                any(ting_delivery_required),
+            )
+            .route(
+                &route("/silicons/{silicon_id}/deliveries/cursor"),
+                any(ting_delivery_required),
+            )
+            .route(&route("/ws"), any(ting_delivery_required))
+            .route(&route("/relay/ws"), any(ting_delivery_required))
+    };
+    management.layer(DefaultBodyLimit::max(settings.max_management_body_bytes))
+}
+
+async fn ting_delivery_required() -> AppError {
+    AppError::gone("delivery_transport_replaced")
 }
 
 #[cfg(test)]
@@ -290,6 +358,10 @@ mod tests {
         Ok(router(
             ApiState {
                 environments: None,
+                ting: crate::infrastructure::ting::TingClient::new(
+                    "http://127.0.0.1:1",
+                    Duration::from_secs(1),
+                )?,
                 application,
                 iam,
                 trusted_proxy_hops: 0,
@@ -404,7 +476,7 @@ mod tests {
                 .headers()
                 .get("silicon-hook-api-version")
                 .and_then(|value| value.to_str().ok()),
-            Some("v1")
+            Some("v2")
         );
         assert_eq!(
             negotiated
@@ -415,8 +487,11 @@ mod tests {
         );
         let body: Value = serde_json::from_slice(&to_bytes(negotiated.into_body(), 4096).await?)?;
         assert_eq!(body["service"], "silicon-hook");
-        assert_eq!(body["selected_api_version"], "v1");
-        assert_eq!(body["supported_api_versions"], serde_json::json!(["v1"]));
+        assert_eq!(body["selected_api_version"], "v2");
+        assert_eq!(
+            body["supported_api_versions"],
+            serde_json::json!(["v2", "v1"])
+        );
 
         let unsupported = test_router()
             .await?
