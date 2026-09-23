@@ -439,7 +439,7 @@ async fn foreign_reference_authority_or_ting_identity_is_rejected_before_http() 
     let fixture = Fixture::start().await?;
     let valid = notification_value(EVENT_ID, TING_ID, 42);
     let changes = [
-        ("/type", json!("hook.webhook.received")),
+        ("/type", json!("foreign-hook.webhook.received")),
         ("/data/type", json!("another_event")),
         ("/data/data/metadata/org_id", json!("foreign-org")),
         ("/data/data/metadata/environment_id", json!(ENVIRONMENT_ID)),
