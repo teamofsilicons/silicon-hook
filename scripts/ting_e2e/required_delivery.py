@@ -27,7 +27,7 @@ def verify(directory):
     if upstream.get("ting_commit") != "3253ea193c9fc244e6ef7e5fd818240ae0ad4782":
         raise RuntimeError("this regression requires the pinned Ting 0.1.4 fixture")
     actor, org = upstream["actor_id"], upstream["org_id"]
-    app, event_type = "tos>hook", "tos>hook.webhook.received"
+    app, event_type = "hook", "hook.webhook.received"
 
     # This fixture can survive hours of staged tests. Renew its own management
     # family before the real five-minute retry wait, retaining the refresh key

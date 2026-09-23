@@ -1915,13 +1915,13 @@ async fn application_secret_selects_empty_isolated_storage_and_revalidates_lifec
     let server = MockServer::start().await;
     Mock::given(method("GET")).and(path("/api/version")).respond_with(ResponseTemplate::new(200).insert_header("silicon-iam-api-version","v1").insert_header("vary","Silicon-IAM-Supported-API-Versions").set_body_json(serde_json::json!({"service":"silicon-iam","selected_api_version":"v1","supported_api_versions":["v1"],"build":"test","commit":"test"}))).mount(&server).await;
     let secret = format!("ask_{}", "A".repeat(43));
-    let selector = format!("Basic {}", STANDARD.encode(format!("tos>hook:{secret}")));
+    let selector = format!("Basic {}", STANDARD.encode(format!("hook:{secret}")));
     let id = uuid::Uuid::now_v7();
     let context = |version, cleaned: Option<&str>| {
         serde_json::json!({
             "environment_id":id,"webhook_key_digest":"ab".repeat(32),
-            "environment":{"environment_id":id,"org_id":"tos","name":"SDK sandbox","description":null,"version":version,"key_generation":1,"cleaned_at":cleaned,"created_at":"2026-09-13T00:00:00Z","creator_type":"carbon","creator_id":"alice"},
-            "application":{"app_id":"tos>hook","base_url":"https://backend.hook.teamofsilicons.com","app_scope":{"iam":[],"external":[]},"webhook_scope":[],"testing_idle_days":15}
+            "environment":{"environment_id":id,"org_id":"tos","name":"SDK sandbox","description":null,"version":version,"key_generation":1,"cleaned_at":cleaned,"created_at":"2026-09-13T00:00:00Z","creator_type":"carbon","creator_id":"c:alice"},
+            "application":{"app_id":"hook","base_url":"https://backend.hook.teamofsilicons.com","app_scope":{"iam":[],"external":[]},"webhook_scope":[],"testing_idle_days":15}
         })
     };
     let selected = Mock::given(method("GET"))
@@ -1932,7 +1932,7 @@ async fn application_secret_selects_empty_isolated_storage_and_revalidates_lifec
         .await;
     let iam = IamClient::connect(&IamSettings {
         base_url: Url::parse(&server.uri())?,
-        app_id: Some("tos>hook".into()),
+        app_id: Some("hook".into()),
         app_secret: Some(secrecy::SecretString::from(format!(
             "ask_{}",
             "P".repeat(43)
@@ -2019,7 +2019,7 @@ async fn application_secret_selects_empty_isolated_storage_and_revalidates_lifec
     );
     let service = service.with_honeycomb_control(
         secrecy::SecretString::from("dedicated-hook-honeycomb-service-token"),
-        "tos>hook".into(),
+        "hook".into(),
         Url::parse(&server.uri())?,
     )?;
     let mut current = context(3, Some("2026-09-13T01:00:00Z"));
@@ -2037,7 +2037,7 @@ async fn application_secret_selects_empty_isolated_storage_and_revalidates_lifec
         silicon_hook::application::environments::lifecycle::LifecycleOperation,
     > {
         Ok(serde_json::from_value(
-            serde_json::json!({"operation_id":uuid::Uuid::now_v7(),"environment_id":id,"org_id":"tos","app_id":"tos>hook","environment_revision":revision,"generation":generation,"key_version":1,"action":action,"testing_key":"A".repeat(32)}),
+            serde_json::json!({"operation_id":uuid::Uuid::now_v7(),"environment_id":id,"org_id":"tos","app_id":"hook","environment_revision":revision,"generation":generation,"key_version":1,"action":action,"testing_key":"A".repeat(32)}),
         )?)
     };
     assert_eq!(
@@ -2219,7 +2219,7 @@ async fn honeycomb_lifecycle_fences_cleanup_retries_and_retains_binding() -> Res
         .await?
         .with_honeycomb_control(
             SecretString::from("dedicated-hook-honeycomb-service-credential"),
-            "tos>hook".into(),
+            "hook".into(),
             Url::parse(&coordinator.uri())?,
         )?;
     assert!(service.authorize_honeycomb("user-token").is_err());
@@ -2231,7 +2231,7 @@ async fn honeycomb_lifecycle_fences_cleanup_retries_and_retains_binding() -> Res
                      key_version|
      -> Result<LifecycleOperation> {
         Ok(serde_json::from_value(
-            serde_json::json!({"operation_id":Uuid::now_v7(),"environment_id":id,"org_id":"org:integration","app_id":"tos>hook","environment_revision":revision,"generation":generation,"key_version":key_version,"action":action,"testing_key":"A".repeat(32),"snapshot":{}}),
+            serde_json::json!({"operation_id":Uuid::now_v7(),"environment_id":id,"org_id":"org:integration","app_id":"hook","environment_revision":revision,"generation":generation,"key_version":key_version,"action":action,"testing_key":"A".repeat(32),"snapshot":{}}),
         )?)
     };
     let prepare = operation("prepare", 1, 1, 1)?;
@@ -2322,7 +2322,7 @@ async fn honeycomb_lifecycle_fences_cleanup_retries_and_retains_binding() -> Res
     service.touch(id, generation).await?;
     Mock::given(method("POST"))
         .and(path(format!(
-            "/api/v1/environments/{id}/apps/tos%3Ehook/activity"
+            "/api/v1/environments/{id}/apps/hook/activity"
         )))
         .and(header("x-testing-environment-key", "A".repeat(32)))
         .respond_with(ResponseTemplate::new(503))
@@ -2497,5 +2497,72 @@ async fn honeycomb_lifecycle_fences_cleanup_retries_and_retains_binding() -> Res
         .await?,
         serde_json::json!({})
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_identifier_cutover_preserves_hook_credentials_and_history_keys() -> Result<()> {
+    let db = TestDatabase::start_unmigrated().await?;
+    let pool = db.store.pool();
+    sqlx::migrate!("./migrations").run_to(16, pool).await?;
+    let id = uuid::Uuid::new_v4();
+    sqlx::query("INSERT INTO hook.hooks(id,org_id,silicon_id,endpoint_key,name,signature_config,created_by_kind,created_by_id,created_at,updated_at,encryption_key_id,secret_nonce,encrypted_signing_secret) VALUES($1,'tos','assistant:tos','A1B2C3D4','Retained hook','{}','carbon','alice',now(),now(),'key-1',$2,$3)")
+        .bind(id).bind(vec![7_u8;12]).bind(vec![9_u8;32]).execute(pool).await?;
+    let before: serde_json::Value = sqlx::query_scalar(
+        "SELECT to_jsonb(h)-'silicon_id'-'created_by_id' FROM hook.hooks h WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    sqlx::raw_sql("CREATE FUNCTION schema_trigger_probe() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; CREATE TRIGGER schema_disabled AFTER UPDATE ON hook.hooks FOR EACH ROW EXECUTE FUNCTION schema_trigger_probe(); ALTER TABLE hook.hooks DISABLE TRIGGER schema_disabled; CREATE TRIGGER schema_replica AFTER UPDATE ON hook.hooks FOR EACH ROW EXECUTE FUNCTION schema_trigger_probe(); ALTER TABLE hook.hooks ENABLE REPLICA TRIGGER schema_replica; CREATE TRIGGER schema_always AFTER UPDATE ON hook.hooks FOR EACH ROW EXECUTE FUNCTION schema_trigger_probe(); ALTER TABLE hook.hooks ENABLE ALWAYS TRIGGER schema_always; ").execute(pool).await?;
+    migrate(pool).await?;
+    let after: serde_json::Value = sqlx::query_scalar(
+        "SELECT to_jsonb(h)-'silicon_id'-'created_by_id' FROM hook.hooks h WHERE id=$1",
+    )
+    .bind(id)
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(
+        before, after,
+        "UUID, endpoint key, ciphertext, nonce, version and timestamps must remain exact"
+    );
+    let ids: (String, String) =
+        sqlx::query_as("SELECT silicon_id,created_by_id FROM hook.hooks WHERE id=$1")
+            .bind(id)
+            .fetch_one(pool)
+            .await?;
+    assert_eq!(ids, ("si:assistant".into(), "c:alice".into()));
+    let modes: Vec<(String,String)> = sqlx::query_as("SELECT tgname,tgenabled::text FROM pg_trigger WHERE tgrelid='hook.hooks'::regclass AND tgname LIKE 'schema_%' ORDER BY tgname").fetch_all(pool).await?;
+    assert_eq!(
+        modes,
+        vec![
+            ("schema_always".into(), "A".into()),
+            ("schema_disabled".into(), "D".into()),
+            ("schema_replica".into(), "R".into())
+        ]
+    );
+    sqlx::raw_sql("DROP TRIGGER schema_disabled ON hook.hooks; DROP TRIGGER schema_replica ON hook.hooks; DROP TRIGGER schema_always ON hook.hooks; DROP FUNCTION schema_trigger_probe();").execute(pool).await?;
+    let disabled:i64=sqlx::query_scalar("SELECT count(*) FROM pg_trigger t JOIN pg_class c ON c.oid=t.tgrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname IN('hook','hook_private','hook_control') AND NOT t.tgisinternal AND t.tgenabled='D'")
+        .fetch_one(pool).await?;
+    assert_eq!(disabled, 0);
+    db.store.ready().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn public_identifier_collision_aborts_without_changing_owners() -> Result<()> {
+    let db = TestDatabase::start_unmigrated().await?;
+    let pool = db.store.pool();
+    sqlx::migrate!("./migrations").run_to(16, pool).await?;
+    for org in ["alpha", "other"] {
+        sqlx::query("INSERT INTO hook.hooks(id,org_id,silicon_id,endpoint_key,name,signature_config,created_by_kind,created_by_id,created_at,updated_at) VALUES($1,$2,$3,'A1B2C3D4','Collision hook','{}','carbon','alice',now(),now())")
+            .bind(uuid::Uuid::new_v4()).bind(org).bind(format!("assistant:{org}")).execute(pool).await?;
+    }
+    assert!(migrate(pool).await.is_err());
+    let ids: Vec<String> =
+        sqlx::query_scalar("SELECT silicon_id FROM hook.hooks ORDER BY silicon_id")
+            .fetch_all(pool)
+            .await?;
+    assert_eq!(ids, vec!["assistant:alpha", "assistant:other"]);
     Ok(())
 }

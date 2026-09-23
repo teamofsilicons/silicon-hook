@@ -125,8 +125,8 @@ mod tests {
 
     #[test]
     fn silicon_can_manage_only_itself() -> Result<(), Box<dyn std::error::Error>> {
-        let own = silicon("silicon:own")?;
-        let other = silicon("silicon:other")?;
+        let own = silicon("si:own")?;
+        let other = silicon("si:other")?;
         let principal = context(
             ActorKind::Silicon,
             own.as_str(),
@@ -156,8 +156,8 @@ mod tests {
     #[test]
     fn visible_carbon_can_read_and_create_but_not_mutate() -> Result<(), Box<dyn std::error::Error>>
     {
-        let target = silicon("silicon:target")?;
-        let hidden = silicon("silicon:hidden")?;
+        let target = silicon("si:target")?;
+        let hidden = silicon("si:hidden")?;
         let principal = context(
             ActorKind::Carbon,
             "carbon-member",
@@ -192,7 +192,7 @@ mod tests {
     #[test]
     fn owners_and_admins_need_an_authoritative_target_fact()
     -> Result<(), Box<dyn std::error::Error>> {
-        let target = silicon("silicon:target")?;
+        let target = silicon("si:target")?;
         for role in [OrganizationRole::Owner, OrganizationRole::Admin] {
             let unconfirmed = context(ActorKind::Carbon, "carbon-manager", role, &[])?;
             assert_eq!(

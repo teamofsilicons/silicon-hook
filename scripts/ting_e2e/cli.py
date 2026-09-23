@@ -114,7 +114,7 @@ def verify(directory, binary, receiver_binary):
             port = reservation.getsockname()[1]
             destination = native.cli(daemon, ["webhook", f"http://host.docker.internal:{port}/ting", "--secret-stdin"], (secret + "\n").encode())
             fixture.private(config, {"hook_url": backend["url"], "hook_token": tokens["access_token"],
-                "app_id": "tos>hook", "org_id": org, "recipient_id": actor, "environment_id": str(uuid.UUID(int=0)),
+                "app_id": "hook", "org_id": org, "recipient_id": actor, "environment_id": str(uuid.UUID(int=0)),
                 "webhook_id": destination["id"], "callback_secret": secret, "listen_addr": f"0.0.0.0:{port}",
                 "output": str(output), "ack_gate": None})
         process = subprocess.Popen([str(receiver_binary), str(config)], stdout=log, stderr=log)

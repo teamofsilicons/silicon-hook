@@ -664,9 +664,9 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/api/v1/obo-access/applications/tos%3Eting/endpoints"))
+            .and(path("/api/v1/obo-access/applications/ting/endpoints"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "application":{"app_id":"tos>ting","org_id":"tos"},
+                "application":{"app_id":"ting","org_id":"tos"},
                 "endpoints":[{"endpoint_id":"tings.send","path":"/v1/tings","metadata":{},
                     "critical":true,"ttl_seconds":60},
                     {"endpoint_id":"subscriptions.register","path":"/v1/subscriptions",
@@ -688,7 +688,7 @@ mod tests {
             .await;
         let iam = IamClient::connect(&IamSettings {
             base_url: Url::parse(&server.uri())?,
-            app_id: Some("tos>hook".to_owned()),
+            app_id: Some("hook".to_owned()),
             app_secret: Some(SecretString::from("ask_fixture_signing_secret")),
             connect_timeout: Duration::from_secs(2),
             request_timeout: Duration::from_secs(2),
@@ -832,7 +832,7 @@ mod tests {
             .await;
         let client = TingClient::new(&server.uri(), Duration::from_secs(2))?;
         let subject = SecretString::from("oat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
-        let body = br#"{ "key": "key-fixture", "org_id":"tos", "type":"tos>hook.webhook.received", "for":"worker:tos", "data": {"type":"new_event","data":{}} }"#;
+        let body = br#"{ "key": "key-fixture", "org_id":"tos", "type":"hook.webhook.received", "for":"si:worker", "data": {"type":"new_event","data":{}} }"#;
         client.send(&iam, &subject, body).await?;
         client.send(&iam, &subject, body).await?;
         let requests = server.received_requests().await.ok_or("missing requests")?;
@@ -865,7 +865,7 @@ mod tests {
                 hex::encode(Sha256::digest(body))
             );
             assert_eq!(request["request"]["method"], "POST");
-            assert_eq!(request["audience"], "tos>ting");
+            assert_eq!(request["audience"], "ting");
             assert_eq!(request["org_id"], "tos");
         }
         Ok(())
@@ -878,7 +878,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/subscriptions"))
             .respond_with(ResponseTemplate::new(201).set_body_json(json!({
-                "id":"sub_fixture","app_id":"tos>hook","for":"different:tos","active":true})))
+                "id":"sub_fixture","app_id":"hook","for":"si:different","active":true})))
             .mount(&server)
             .await;
         let client = TingClient::new(&server.uri(), Duration::from_secs(2))?;
@@ -886,7 +886,7 @@ mod tests {
             .register_recipient(
                 &iam,
                 &SecretString::from("oat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
-                br#"{"org_id":"tos","app_id":"tos>hook","for":"worker:tos"}"#,
+                br#"{"org_id":"tos","app_id":"hook","for":"si:worker"}"#,
             )
             .await;
         assert!(matches!(result, Err(TingError::InvalidResponse)));
@@ -897,7 +897,7 @@ mod tests {
     async fn receipt_validates_identity_and_preserves_incomplete_destination_state() -> TestResult {
         let (_issuer, iam) = iam_fixture().await?;
         let server = MockServer::start().await;
-        let detail = json!({"id":"msg_fixture", "type":"tos>hook.webhook.received", "for":"worker:tos",
+        let detail = json!({"id":"msg_fixture", "type":"hook.webhook.received", "for":"si:worker",
             "read":false,"silent":false,"deliveries":[{"webhook_id":"hook_a","delivery_acked":true,"read_acked":false}],
             "deliveries_next_cursor":"another-page"});
         Mock::given(method("POST"))
@@ -913,7 +913,7 @@ mod tests {
                 &token,
                 "tos",
                 "msg_fixture",
-                "worker:tos",
+                "si:worker",
                 TingDeliveryMode::Ordinary,
             )
             .await?;
@@ -928,7 +928,7 @@ mod tests {
                     &token,
                     "tos",
                     "msg_other",
-                    "worker:tos",
+                    "si:worker",
                     TingDeliveryMode::Ordinary
                 )
                 .await,
@@ -941,7 +941,7 @@ mod tests {
                     &token,
                     "tos",
                     "msg_fixture",
-                    "another:tos",
+                    "si:another",
                     TingDeliveryMode::Ordinary
                 )
                 .await,
@@ -954,7 +954,7 @@ mod tests {
                     &token,
                     "tos",
                     "msg_fixture",
-                    "worker:tos",
+                    "si:worker",
                     TingDeliveryMode::Required
                 )
                 .await,

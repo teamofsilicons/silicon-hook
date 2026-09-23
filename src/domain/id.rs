@@ -197,11 +197,11 @@ mod tests {
 
     #[test]
     fn external_identifiers_round_trip_through_json() -> Result<(), Box<dyn std::error::Error>> {
-        let id = SiliconId::new("cos:tos")?;
+        let id = SiliconId::new("si:cos")?;
         let encoded = serde_json::to_value(&id)?;
         let decoded: SiliconId = serde_json::from_value(encoded.clone())?;
 
-        assert_eq!(encoded, json!("cos:tos"));
+        assert_eq!(encoded, json!("si:cos"));
         assert_eq!(decoded, id);
         Ok(())
     }

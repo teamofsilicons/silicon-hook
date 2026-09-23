@@ -455,7 +455,7 @@ mod tests {
     fn scope() -> Result<HistoryCursorScope, DomainError> {
         Ok(HistoryCursorScope::new(
             OrganizationId::new("org:test")?,
-            SiliconId::new("silicon:test")?,
+            SiliconId::new("si:test")?,
             HistoryCollection::Events,
             HistoryFilter::new(None),
         ))

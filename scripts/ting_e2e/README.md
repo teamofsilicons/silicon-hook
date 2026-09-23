@@ -38,7 +38,7 @@ websocket receipt of the exact event, delivery ACK (still unread), and read ACK.
 For Hook, read `fixture.private.json` inside a script without printing it:
 
 - `iam_url`, `ting_url`: the local service origins.
-- `app_secrets["tos>hook"]`: `HOOK_IAM_APP_SECRET`; use `tos>hook` for the app ID.
+- `app_secrets["hook"]`: `HOOK_IAM_APP_SECRET`; use `hook` for the app ID.
 - `hook_admin.access_token`: synthetic org-owner application token for setup.
 - `hook_recipient.access_token`: recipient application token for Hook login.
 - `actor_id`, `org_id`: recipient and organization.
@@ -49,14 +49,14 @@ exchange it and retain its own refreshable service session:
 
 ```sh
 /tmp/hook-ting-e2e-tools/bin/python scripts/ting_e2e/fixture.py slt FIXTURE_DIRECTORY \
-  --actor publisher --app 'tos>hook' --output /tmp/hook-publisher.private.json
+  --actor publisher --app 'hook' --output /tmp/hook-publisher.private.json
 ```
 
 The same command supports `--actor admin` or `--actor recipient` and app
-`tos>ting`. Read the output's `slt` field privately; do not paste it into logs.
+`ting`. Read the output's `slt` field privately; do not paste it into logs.
 
 Identity/contact rows and application catalogue rows are fixture seeded. The
-Hook notification type `tos>hook.webhook.received` is seeded while Ting is
+Hook notification type `hook.webhook.received` is seeded while Ting is
 stopped; Honeycomb type-management bootstrap is therefore untested. This uses
 the normal data plane of a disposable IAM instance, so IAM testing-plane
 isolation is untested. The receiver is a real websocket harness; native Ting

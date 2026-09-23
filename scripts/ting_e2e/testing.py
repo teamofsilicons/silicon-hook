@@ -96,7 +96,7 @@ def setup(parent_directory):
         "postgres": name + "-postgres", "iam": name + "-iam", "ting": name + "-ting",
         "containers": [], "iam_cli": parent["iam_cli"], "iam_image": parent["iam_image"],
         "direct": {}, "org_id": "tos", "org_uuid": fixture.ORG_UUID,
-        "app_secrets": {app: fixture.token("ask_") for app in ("tos>hook", "tos>ting", "tos>honeycomb")},
+        "app_secrets": {app: fixture.token("ask_") for app in ("hook", "ting", "honeycomb")},
         "honeycomb_credential": fixture.token("hck_"), "ting_control_token": secrets.token_urlsafe(36),
         "environment_id": str(uuid.uuid4()), "generation": 1, "key_version": 1,
         "testing_key": "".join(secrets.choice("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890") for _ in range(32)),
@@ -130,7 +130,7 @@ def setup(parent_directory):
         "IAM_ENCRYPTION_CURRENT_VERSION": "1", "IAM_ENCRYPTION_KEYRING": json.dumps({"1": b64(secrets.token_bytes(32))}),
         "IAM_COOKIE_KEY": b64(secrets.token_bytes(32)), "IAM_PUBLIC_BASE_URL": "http://127.0.0.1:8080",
         "IAM_AUTH_BASE_URL": "http://127.0.0.1:8080", "IAM_CORS_ALLOWED_ORIGINS": "http://127.0.0.1:8080",
-        "IAM_HONEYCOMB_APP_ID": "tos>honeycomb", "IAM_HONEYCOMB_CREDENTIAL_SHA256": hashlib.sha256(state["honeycomb_credential"].encode()).hexdigest()}
+        "IAM_HONEYCOMB_APP_ID": "honeycomb", "IAM_HONEYCOMB_CREDENTIAL_SHA256": hashlib.sha256(state["honeycomb_credential"].encode()).hexdigest()}
     fixture.private(directory / "iam.env", "".join(f"{key}={value}\n" for key, value in env.items()))
     fixture.command(["docker", "run", "--rm", "--network", name, "--env-file", str(directory / "iam.env"), state["iam_image"], "iam-migrate"], log=directory / "migration-error.log")
     grants = fixture.command(["docker", "run", "--rm", "--entrypoint", "cat", state["iam_image"], "/opt/silicon-iam/postgres/runtime-grants.sql"]).decode()
@@ -157,7 +157,7 @@ def setup(parent_directory):
     state["server_binary_sha256"] = hashlib.sha256(binary.read_bytes()).hexdigest()
     tenv = {"TING_BIND": "0.0.0.0:8082", "TING_PUBLIC_ORIGIN": "http://127.0.0.1:8082",
         "TING_DATABASE_PATH": "/data/ting.sqlite", "TING_ENCRYPTION_KEY": secrets.token_hex(32),
-        "TING_IAM_URL": "http://127.0.0.1:8080", "TING_IAM_APP_SECRET": state["app_secrets"]["tos>ting"],
+        "TING_IAM_URL": "http://127.0.0.1:8080", "TING_IAM_APP_SECRET": state["app_secrets"]["ting"],
         "TING_HONEYCOMB_URL": "http://127.0.0.1:1", "TING_HONEYCOMB_CONTROL_TOKEN": state["ting_control_token"],
         "TING_SPACESTATION_URL": "http://127.0.0.1:1", "TING_SPACESTATION_KEY": "table-fixture-" + secrets.token_hex(16),
         "TING_SPACESTATION_TABLE": "fixture", "TING_DOCS_URL": "http://127.0.0.1:8080/docs", "RUST_LOG": "error"}
@@ -175,7 +175,7 @@ def setup(parent_directory):
 
 def prepare(state):
     if "honeycomb_actor" not in state:
-        state["honeycomb_actor"] = fixture.exchange(state, "admin", "tos>honeycomb")
+        state["honeycomb_actor"] = fixture.exchange(state, "admin", "honeycomb")
         fixture.save(state)
     if not state.get("iam_revision"):
         lifecycle(state, "prepare", org_id="tos", name="Owned Hook scoped receiver E2E",
@@ -203,9 +203,9 @@ def prepare(state):
         fixture.save(state)
     if "test_recipient" not in state:
         state["test_recipient"] = iam(state, "POST", "/silicon-auth/token", {
-            "silicon_id": "hook-testing:tos", "silicon_token": state["test_silicon"]["silicon_token"]})
+            "silicon_id": "si:hook-testing", "silicon_token": state["test_silicon"]["silicon_token"]})
         fixture.save(state)
-    test_profile(state, "test-recipient", "hook-testing:tos", "silicon", state["test_recipient"])
+    test_profile(state, "test-recipient", "si:hook-testing", "silicon", state["test_recipient"])
     print("TESTING_IDENTITIES_READY real signup/login and isolated organization", flush=True)
     configure(state)
 
@@ -214,16 +214,16 @@ def configure(state):
     state.setdefault("test_apps", {})
     state.setdefault("source_apps", {})
     state.setdefault("imports", {})
-    for app in ("tos>ting", "tos>hook"):
+    for app in ("ting", "hook"):
         if app in state["test_apps"]:
             continue
-        config = {"org_id": "tos", "name": app, "base_url": "http://127.0.0.1:8082" if app == "tos>ting" else "http://127.0.0.1:8083",
+        config = {"org_id": "tos", "name": app, "base_url": "http://127.0.0.1:8082" if app == "ting" else "http://127.0.0.1:8083",
             "visibility": "private", "availability": "active", "webhook": {
                 "url": "https://fixture.invalid/iam", "secret": secrets.token_hex(24), "scope": ["membership"]},
-            "app_scope": {"iam": fixture.TING_SCOPES if app == "tos>ting" else fixture.HOOK_SCOPES,
-                "external": [{"app_id": "tos>ting", "endpoint_id": endpoint} for endpoint in ENDPOINTS] if app == "tos>hook" else []},
+            "app_scope": {"iam": fixture.TING_SCOPES if app == "ting" else fixture.HOOK_SCOPES,
+                "external": [{"app_id": "ting", "endpoint_id": endpoint} for endpoint in ENDPOINTS] if app == "hook" else []},
             "obo_endpoints": [{"endpoint_id": endpoint, "path": path, "metadata": {}, "critical": True, "ttl_seconds": 60}
-                for endpoint, path in ENDPOINTS.items()] if app == "tos>ting" else []}
+                for endpoint, path in ENDPOINTS.items()] if app == "ting" else []}
         encoded = urllib.parse.quote(app, safe="")
         if app not in state["source_apps"]:
             source = http(state, state["iam_url"], "GET", "/api/v1/honeycomb/applications/" + encoded,
@@ -250,7 +250,7 @@ def configure(state):
         state["test_apps"][app] = management(state, "PUT", f"/testing-environments/{state['environment_id']}/applications/{encoded}/configuration", body)
         fixture.save(state)
     if not state.get("apps_activated"):
-        lifecycle(state, "activate-apps", app_ids=["tos>ting", "tos>hook"])
+        lifecycle(state, "activate-apps", app_ids=["ting", "hook"])
         state["apps_activated"] = True; fixture.save(state)
     print("TESTING_CONFIG_READY isolated private Hook and Ting application scopes", flush=True)
     verify_protocol(state)
@@ -259,7 +259,7 @@ def configure(state):
 def ting_lifecycle(state, action, generation=None):
     operation = str(uuid.uuid4())
     revision = state.get("ting_revision", 0) + 1
-    body = {"app_id": "tos>ting", "org_id": "tos", "environment_id": state["environment_id"],
+    body = {"app_id": "ting", "org_id": "tos", "environment_id": state["environment_id"],
         "operation_id": operation, "environment_revision": revision,
         "generation": generation or state["generation"], "key_version": state["key_version"],
         "testing_key": state["testing_key"], "action": action}
@@ -272,8 +272,8 @@ def ting_lifecycle(state, action, generation=None):
 
 
 def proof(state, label, endpoint, raw, subject):
-    return cli(state, label, ["app", "obo", "exchange", "tos>ting", endpoint,
-        "--as-app-id", "tos>hook", "--app-secret", state["imports"]["tos>hook"]["app_secret"],
+    return cli(state, label, ["app", "obo", "exchange", "ting", endpoint,
+        "--as-app-id", "hook", "--app-secret", state["imports"]["hook"]["app_secret"],
         "--subject-token", subject, "--org-context", "tos", "--method", "POST", "--body-file", "-"], raw)
 
 
@@ -281,9 +281,9 @@ def downstream(state, label, endpoint, path, body, expected=(200, 201)):
     raw = json.dumps(body, separators=(",", ":")).encode()
     result = proof(state, label, endpoint, raw, state["hook_sessions"][label]["access_token"])
     context = result["testing_context"]
-    if context["app_id"] != "tos>ting" or context["iam_test_key"] != state["testing_key"]:
+    if context["app_id"] != "ting" or context["iam_test_key"] != state["testing_key"]:
         raise RuntimeError("IAM audience testing context mismatch")
-    if context["app_secret"] == state["imports"]["tos>hook"]["app_secret"]:
+    if context["app_secret"] == state["imports"]["hook"]["app_secret"]:
         raise RuntimeError("IAM did not provide a separate Ting audience credential")
     return http(state, state["ting_url"], "POST", path, raw, token=result["access_proof"],
         headers={"IAM_TEST_APP_SECRET": context["app_secret"], "X-Testing-Environment-Key": context["iam_test_key"]}, expected=expected)
@@ -296,20 +296,20 @@ def verify_protocol(state):
     state.setdefault("hook_sessions", {})
     for label in ("test-admin", "test-recipient"):
         if label not in state["hook_sessions"]:
-            slt = cli(state, label, ["login", "--app-id", "tos>hook", "--grant-org", "tos", "--approve-scopes"])["slt"]
-            state["hook_sessions"][label] = cli(state, label, ["app", "token", "exchange", "tos>hook",
-                "--slt", slt, "--app-secret", state["imports"]["tos>hook"]["app_secret"]])
+            slt = cli(state, label, ["login", "--app-id", "hook", "--grant-org", "tos", "--approve-scopes"])["slt"]
+            state["hook_sessions"][label] = cli(state, label, ["app", "token", "exchange", "hook",
+                "--slt", slt, "--app-secret", state["imports"]["hook"]["app_secret"]])
             fixture.save(state)
     state.setdefault("test_grants", {})
     evidence = []
-    for label, actor in (("test-admin", "hook_test_admin"), ("test-recipient", "hook-testing:tos")):
-        grant_body = {"org_id": "tos", "app_id": "tos>hook", "for": actor}
+    for label, actor in (("test-admin", "hook_test_admin"), ("test-recipient", "si:hook-testing")):
+        grant_body = {"org_id": "tos", "app_id": "hook", "for": actor}
         state["test_grants"][label] = downstream(state, label, "subscriptions.register", "/v1/subscriptions", grant_body)[1]
         fixture.save(state)
         body = {**grant_body, "environment_id": state["environment_id"], "generation": state["generation"], "key": str(uuid.uuid4())}
         status, receiver = downstream(state, label, "receivers.bootstrap", "/v1/receivers/bootstrap", body)
         capability = receiver["receiver_token"]
-        if receiver["environment"] != {"kind": "testing", "id": state["environment_id"], "generation": state["generation"]} or receiver["for"] != actor or receiver["app_id"] != "tos>hook":
+        if receiver["environment"] != {"kind": "testing", "id": state["environment_id"], "generation": state["generation"]} or receiver["for"] != actor or receiver["app_id"] != "hook":
             raise RuntimeError("receiver scope mismatch")
         me = http(state, state["ting_url"], "GET", "/v1/receivers/me", token=capability)[1]
         http(state, state["ting_url"], "GET", "/v1/receivers/inbox", token=capability)

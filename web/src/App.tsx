@@ -225,7 +225,7 @@ export default function App() {
           <Field label="SILICON">
             <input
               aria-label="Silicon"
-              placeholder="e.g. cos:tos"
+              placeholder="e.g. si:cos"
               value={ctx().silicon}
               onChange={(e) =>
                 context({ silicon: e.currentTarget.value.trim() })
@@ -969,7 +969,7 @@ function Connections(p: {
           </Show>
           <pre tabIndex={0}>
             {"hook login status --json\nhook --silicon " +
-              (p.ctx.silicon || "cos:tos") +
+              (p.ctx.silicon || "si:cos") +
               " list\nhook docs ting-delivery"}
           </pre>
           <details>

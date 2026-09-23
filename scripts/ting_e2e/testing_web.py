@@ -116,9 +116,9 @@ process.stdout.write(Buffer.concat([d.update(v.subarray(28)),d.final()]));"""
 
 
 def operator(state, label):
-    slt = testing.cli(state, label, ["login", "--app-id", "tos>ting", "--grant-org", "tos", "--approve-scopes"])["slt"]
+    slt = testing.cli(state, label, ["login", "--app-id", "ting", "--grant-org", "tos", "--approve-scopes"])["slt"]
     return testing.http(state, state["ting_url"], "POST", "/v1/session", {"slt": slt}, headers={
-        "IAM_TEST_APP_SECRET": state["imports"]["tos>ting"]["app_secret"],
+        "IAM_TEST_APP_SECRET": state["imports"]["ting"]["app_secret"],
         "X-Testing-Environment-Key": state["testing_key"], "Idempotency-Key": str(uuid.uuid4())}, expected=(200, 201))[1]
 
 
@@ -141,8 +141,8 @@ def verify(directory, node, browser_check=False, playwright="playwright"):
     website, stream, observer, prior_pref, report = None, None, None, None, None
     browser_failed = False
     pref_path = "/v1/orgs/tos/preferences"
-    pref_body = {"app_id": "tos>hook", "type": "tos>hook.webhook.received", "service": None}
-    pref_query = pref_path + "?" + urllib.parse.urlencode({"app_id": "tos>hook", "type": "tos>hook.webhook.received"})
+    pref_body = {"app_id": "hook", "type": "hook.webhook.received", "service": None}
+    pref_query = pref_path + "?" + urllib.parse.urlencode({"app_id": "hook", "type": "hook.webhook.received"})
     try:
         observer = operator(state, "test-admin")
         fixture.private(Path(directory) / "testing-web-cleanup.private.json", {"observer": observer})
@@ -159,15 +159,15 @@ def verify(directory, node, browser_check=False, playwright="playwright"):
         # Ensure the first event exercises ordinary hints; the second proves silent catch-up.
         ting("PUT", pref_path, {**pref_body, "enabled": True})
         website = Website(state, backend, node)
-        attached = website.request("POST", "/console/attach", {"app_secret": state["imports"]["tos>hook"]["app_secret"]})
+        attached = website.request("POST", "/console/attach", {"app_secret": state["imports"]["hook"]["app_secret"]})
         if attached["id"] != state["environment_id"]:
             raise RuntimeError("website selected another testing environment")
-        slt = testing.cli(state, "test-admin", ["login", "--app-id", "tos>hook", "--grant-org", "tos", "--approve-scopes"])["slt"]
+        slt = testing.cli(state, "test-admin", ["login", "--app-id", "hook", "--grant-org", "tos", "--approve-scopes"])["slt"]
         logged_in = website.request("POST", website.path("/console/login"), {"slt": slt})
         public = json.dumps(logged_in)
         if slt in public or any(name in public for name in ("access_token", "refresh_token", "receiver_token")):
             raise RuntimeError("website exposed internal credentials")
-        actor = "hook-testing:tos"
+        actor = "si:hook-testing"
         provider = website.proxy("POST", f"/silicons/{actor}/hooks", {"name": "scoped-web-" + str(uuid.uuid4())[:8]})
         url = website.origin.replace("http://", "ws://") + "/console/stream?" + urllib.parse.urlencode({
             "plane": state["environment_id"], "org": "tos", "silicon_id": actor, "telemetry": "off"})

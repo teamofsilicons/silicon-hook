@@ -35,8 +35,8 @@ def clean(directory):
         fixture.private(archive / "fixture-before-clean.private.json", state)
     # Renew the same dedicated normal-plane Honeycomb app family, whose Carbon
     # identity authorizes only this local fixture's participant management.
-    basic = base64.b64encode(("tos>honeycomb:" + state["app_secrets"]["tos>honeycomb"]).encode()).decode()
-    raw = urllib.parse.urlencode({"app_id": "tos>honeycomb", "refresh_token": state["honeycomb_actor"]["refresh_token"]}).encode()
+    basic = base64.b64encode(("honeycomb:" + state["app_secrets"]["honeycomb"]).encode()).decode()
+    raw = urllib.parse.urlencode({"app_id": "honeycomb", "refresh_token": state["honeycomb_actor"]["refresh_token"]}).encode()
     state["honeycomb_actor"] = testing.http(state, state["iam_url"], "POST", "/api/v1/app-auth/tokens", raw,
         headers={"Content-Type": "application/x-www-form-urlencoded", "Authorization": "Basic " + basic,
                  "Idempotency-Key": str(uuid.uuid4())})[1]
@@ -46,7 +46,7 @@ def clean(directory):
         if status == 401 or not value.get("authenticated"):
             state["hook_sessions"][label] = testing.http(state, backend["url"], "POST", "/api/v2/auth/refresh",
                 {"refresh_token": state["hook_sessions"][label]["refresh_token"]}, headers={
-                    "X-Hook-Test-App-Secret": state["imports"]["tos>hook"]["app_secret"],
+                    "X-Hook-Test-App-Secret": state["imports"]["hook"]["app_secret"],
                     "Silicon-Hook-API-Version": "v2", "Idempotency-Key": str(uuid.uuid4())})[1]
             fixture.save(state)
     current = testing.http(state, state["iam_url"], "GET", "/api/v1/honeycomb/testing-environments/" + state["environment_id"],

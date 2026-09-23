@@ -7,7 +7,7 @@ no daemon, listener, local gateway, or Ting login.
 
 Build with `cargo build -p silicon-hook-cli`; the executable is
 `target/debug/hook`. Honeycomb manages installation and updates:
-`honeycomb install 'tos>hook'`. Maintainers bundle canonical guides with
+`honeycomb install 'hook'`. Maintainers bundle canonical guides with
 `python3 scripts/bundle-cli-docs.py` before publishing; CI rejects stale copies.
 
 ## First session
@@ -18,8 +18,8 @@ Obtain an IAM short-lived token for the selected Hook application, then:
 hook --profile cos iam --json
 hook --profile cos --org tos login <slt>
 hook --profile cos login status --json
-hook --profile cos --silicon cos:tos create GitHub
-hook --profile cos --silicon cos:tos list
+hook --profile cos --silicon si:cos create GitHub
+hook --profile cos --silicon si:cos list
 ```
 
 `hook login <slt>` is the short form. `--slt-file -` reads stdin, and `--slt`
@@ -145,9 +145,9 @@ perform internally. They do not start a transport or configure a destination.
 subscriptions require current IAM visibility of the selected Silicon:
 
 ```sh
-hook --profile reviewer --silicon cos:tos receiving subscribe
-hook --profile reviewer --silicon cos:tos receiving status
-hook --profile reviewer --silicon cos:tos receiving unsubscribe
+hook --profile reviewer --silicon si:cos receiving subscribe
+hook --profile reviewer --silicon si:cos receiving status
+hook --profile reviewer --silicon si:cos receiving unsubscribe
 hook --profile cos event <event-id>
 hook --profile cos publication <event-id>
 ```
@@ -193,8 +193,8 @@ that setup. `webhook`, `unhook`, `daemon`, `listen`, `deliveries`, `--isi`, and
 ## Signatures and provider secrets
 
 ```sh
-hook --silicon cos:tos create GitHub --signature @github-policy.json
-hook --silicon cos:tos create LocalDemo --unsigned
+hook --silicon si:cos create GitHub --signature @github-policy.json
+hook --silicon si:cos create LocalDemo --unsigned
 hook update <hook-id> --patch '{"description":null}'
 hook create Stripe --signature @stripe-policy.json --secret-file provider-secret.txt
 hook set-secret <hook-id> --secret-file encoded-secret.txt --secret-encoding hex

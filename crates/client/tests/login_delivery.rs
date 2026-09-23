@@ -61,7 +61,7 @@ fn tokens(refreshed: bool) -> Value {
     json!({"access_token":if refreshed {"oat_rotated"} else {"oat_test"},
         "refresh_token":if refreshed {"ort_rotated"} else {"ort_test"},
         "token_type":"Bearer","expires_in":1,"scopes":[],
-        "actor":{"type":"silicon","id":"cos:tos"},"org_id":"tos"})
+        "actor":{"type":"silicon","id":"si:cos"},"org_id":"tos"})
 }
 
 async fn handle(State(fixture): State<Fixture>, request: Request<Body>) -> Response {
@@ -94,11 +94,11 @@ async fn handle(State(fixture): State<Fixture>, request: Request<Body>) -> Respo
         "/api/v2/auth/status" if headers.get("authorization").is_some_and(|value| value == "Bearer revoked") => {
             (StatusCode::UNAUTHORIZED, Json(json!({"error":{"code":"unauthenticated","message":"revoked"}}))).into_response()
         }
-        "/api/v2/auth/status" => Json(json!({"authenticated":true,"actor":{"type":"silicon","id":"cos:tos"},"org_id":"tos"})).into_response(),
-        "/api/v2/auth/iam" => Json(json!({"app_id":"tos>hook","iam_url":"https://iam.example.test",
+        "/api/v2/auth/status" => Json(json!({"authenticated":true,"actor":{"type":"silicon","id":"si:cos"},"org_id":"tos"})).into_response(),
+        "/api/v2/auth/iam" => Json(json!({"app_id":"hook","iam_url":"https://iam.example.test",
             "testing":headers.contains_key("x-hook-test-key") || headers.contains_key("x-hook-test-app-secret"),
             "login_method":"short_lived_token"})).into_response(),
-        "/api/v2/silicons/cos:tos/hooks" => Json(json!({"items":[]})).into_response(),
+        "/api/v2/silicons/si:cos/hooks" => Json(json!({"items":[]})).into_response(),
         _ => (StatusCode::NOT_FOUND, Json(json!({"error":{"code":"unexpected_request","message":"fixture rejected path"}}))).into_response(),
     }
 }
@@ -121,7 +121,7 @@ async fn login_and_refresh_return_tokens_without_delivery_or_background_requests
         .with_token(tokens.access_token.expose())
         .with_organization("tos");
     assert!(client.login_status().await?.authenticated);
-    assert!(client.list_hooks("cos:tos", false).await?.items.is_empty());
+    assert!(client.list_hooks("si:cos", false).await?.items.is_empty());
     // A near-expiry token starts no automatic refresh, relay, subscription,
     // listener registration, downstream callback, or telemetry request.
     tokio::task::yield_now().await;
@@ -135,7 +135,7 @@ async fn login_and_refresh_return_tokens_without_delivery_or_background_requests
             "/api/version",
             "/api/v2/auth/login",
             "/api/v2/auth/status",
-            "/api/v2/silicons/cos:tos/hooks"
+            "/api/v2/silicons/si:cos/hooks"
         ]
     );
     assert_eq!(recorded[1].body, json!({"slt":"opaque-slt"}));
@@ -257,7 +257,7 @@ async fn revoked_status_and_invalid_identifiers_do_not_start_receiving_or_retry(
         .with_organization("tos");
     assert!(!client.login_status().await?.authenticated);
     assert!(matches!(
-        client.list_hooks("../cos:tos", false).await,
+        client.list_hooks("../si:cos", false).await,
         Err(Error::Invalid(_))
     ));
     assert_eq!(

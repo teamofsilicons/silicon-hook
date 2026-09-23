@@ -477,7 +477,7 @@ mod tests {
     ) -> Result<CapturedRequestParts, url::ParseError> {
         Ok(CapturedRequestParts {
             method: "post".to_owned(),
-            url: Url::parse("https://hook.example.test:8443/silicon/cos:tos/A1B2C3?b=2&a=1")?,
+            url: Url::parse("https://hook.example.test:8443/silicon/si:cos/A1B2C3?b=2&a=1")?,
             headers: headers
                 .into_iter()
                 .map(|(name, value)| (name.to_owned(), value.to_owned()))
@@ -506,7 +506,7 @@ mod tests {
         assert_eq!(request.authority(), "hook.example.test:8443");
         assert_eq!(request.hostname(), "hook.example.test");
         assert_eq!(request.port(), Some(8443));
-        assert_eq!(request.path(), "/silicon/cos:tos/A1B2C3");
+        assert_eq!(request.path(), "/silicon/si:cos/A1B2C3");
         assert_eq!(request.query_string(), "b=2&a=1");
         assert_eq!(request.header("X-DUP").as_deref(), Some("one, two"));
         assert_eq!(request.header("missing"), None);

@@ -72,7 +72,7 @@ def setup(directory):
     if cli(state, ["--version"]).get("version") != "0.1.2":
         raise RuntimeError("unexpected native Ting version")
     cli(state, ["config", "set", "telemetry.enabled", "false"])
-    login = cli(state, ["login", "--token-stdin"], (fixture.slt(upstream, "recipient", "tos>ting") + "\n").encode())
+    login = cli(state, ["login", "--token-stdin"], (fixture.slt(upstream, "recipient", "ting") + "\n").encode())
     if not login.get("authenticated") or login.get("id") != upstream["actor_id"]:
         raise RuntimeError("native Ting recipient login failed")
     print("NATIVE_READY isolated published Ting CLI and daemon", flush=True)
@@ -116,7 +116,7 @@ def verify(directory):
                     # Native Ting deliberately omits the WS-only `for` field.
                     # This local destination belongs to our configured actor;
                     # authoritative Hook hydration enforces that binding.
-                    if item.get("type") != "tos>hook.webhook.received" or data.get("type") != "new_event":
+                    if item.get("type") != "hook.webhook.received" or data.get("type") != "new_event":
                         raise RuntimeError("unexpected native callback notification")
                     metadata = data.get("data", {}).get("metadata", {})
                     if data.get("data", {}).get("sender") == "fixture" and metadata.get("run", "").startswith("fixture-"):

@@ -54,7 +54,7 @@ and Docker contexts. Never put server secrets in `VITE_*` variables.
   bundle contract. `HOOK_IAM_BUNDLE_ID` selects an existing bundle containing
   exactly Hook and Ting; the gateway still checks the exact returned app pair.
 - Token entry/file sign-in is available only for attached testing environments,
-  using an SLT issued for `tos>hook` in the linked IAM test world.
+  using an SLT issued for `hook` in the linked IAM test world.
 - The organization picker loads the organizations shared with Hook from IAM
   through the private browser gateway. A single organization is selected
   automatically; with several, choose the workspace in the sidebar. Organization

@@ -17,7 +17,7 @@ for line in (Path.home()/'.silicon-hook/iam-webhook.env').read_text().splitlines
     if line.strip() and not line.lstrip().startswith('#'):
         key, value = line.split('=', 1)
         iam[key] = shlex.split(value)[0]
-assert iam['HOOK_IAM_APP_ID'] == 'tos>hook'
+assert iam['HOOK_IAM_APP_ID'] == 'hook'
 (stage/'iam.json').write_text(json.dumps(iam))
 shutil.copy(repo/'deploy/aws/install.py', stage/'install.py')
 shutil.copy(repo/'deploy/aws/backup.sh', stage/'backup.sh')

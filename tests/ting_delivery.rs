@@ -285,7 +285,7 @@ async fn signature_rejection_never_queues_and_outbox_failure_rolls_back_acceptan
     let (envelope, reference) = reference(&claim)?;
     assert_eq!(reference.id, event.id());
     assert_eq!(envelope["for"], SILICON);
-    assert_eq!(envelope["type"], "tos>hook.webhook.received");
+    assert_eq!(envelope["type"], "hook.webhook.received");
     assert_eq!(claim.event_id, event.id().as_uuid());
     Ok(())
 }

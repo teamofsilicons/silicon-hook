@@ -60,7 +60,7 @@ impl Server {
                     if status != StatusCode::OK {
                         return (status, Json(json!({"error":{"code":"forbidden","message":"Carbon owner/admin required"}}))).into_response();
                     }
-                    Json(json!({"org_id":"tos","actor_id":"hook-publisher:tos","expires_at":"2026-09-24T00:00:00Z",
+                    Json(json!({"org_id":"tos","actor_id":"si:hook-publisher","expires_at":"2026-09-24T00:00:00Z",
                         "access_token":"unexpected-server-secret"})).into_response()
                 }),
             )
@@ -131,7 +131,7 @@ fn assert_safe_metadata(output: &Output) {
     );
     assert_eq!(
         serde_json::from_slice::<Value>(&output.stdout).unwrap(),
-        json!({"org_id":"tos","actor_id":"hook-publisher:tos","expires_at":"2026-09-24T00:00:00Z"})
+        json!({"org_id":"tos","actor_id":"si:hook-publisher","expires_at":"2026-09-24T00:00:00Z"})
     );
     for secret in [
         SLT,

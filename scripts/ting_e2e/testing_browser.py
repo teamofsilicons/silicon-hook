@@ -24,8 +24,8 @@ def verify(directory, node, playwright):
     testing_hook.prepare_delivery(state, backend)
     observer = testing_web.operator(state, "test-admin")
     pref_path = "/v1/orgs/tos/preferences"
-    preference = {"app_id": "tos>hook", "type": "tos>hook.webhook.received", "service": None}
-    query = pref_path + "?" + urllib.parse.urlencode({"app_id": "tos>hook", "type": preference["type"]})
+    preference = {"app_id": "hook", "type": "hook.webhook.received", "service": None}
+    query = pref_path + "?" + urllib.parse.urlencode({"app_id": "hook", "type": preference["type"]})
     prior = None
     website = None
     try:
@@ -39,7 +39,7 @@ def verify(directory, node, playwright):
         server_hash = hashlib.sha256(website.server.read_bytes()).hexdigest()
         # A frontend-only build may change separately; record both actual phase
         # hashes instead of silently claiming that HTTP was repeated.
-        cfg = {"origin": website.origin, "hook": backend["url"], "org": "tos", "actor": "hook-testing:tos",
+        cfg = {"origin": website.origin, "hook": backend["url"], "org": "tos", "actor": "si:hook-testing",
             "plane": state["environment_id"], "generation": state["generation"], "directory": str(directory),
             "python": sys.executable, "scripts": str(Path(__file__).parent.resolve()), "output": str(website.folder / "browser"),
             "playwright": playwright, "session_folder": website.env["HOOK_SESSION_DIR"],

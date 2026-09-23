@@ -3,7 +3,7 @@
 ```sh
 hook env use --app-secret-file ./iam-test-app-secret
 hook env current
-hook login 'cos:tos'
+hook login 'si:cos'
 hook login status --json
 hook create Demo --unsigned
 hook list
@@ -25,7 +25,7 @@ revoked selectors fail without changing the saved selection.
 The CLI manages and inspects testing through API v2. The test application's
 internal Ting receiver owns delivery; login starts no Hook daemon or local
 gateway. Operators can register a test actor with `hook receiving register`.
-An authorized Carbon may use `hook --silicon cos:tos receiving subscribe`,
+An authorized Carbon may use `hook --silicon si:cos receiving subscribe`,
 `receiving status`, or `receiving unsubscribe` in the selected sandbox. These
 commands configure only registration or interest, not a receiver or Ting login.
 For native receiving, the application uses its paired Ting test credentials and

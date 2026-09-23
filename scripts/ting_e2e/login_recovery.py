@@ -65,7 +65,7 @@ def verify(directory, expectation=None):
             "access_token": direct["access_token"], "refresh_token": direct["refresh_token"],
             "expires_at": expiry, "actor_type": "silicon", "actor_id": actor}}})
         logged_in = True
-        body = json.dumps({"slt": fixture.slt(state, "actor", "tos>ting")}, separators=(",", ":")).encode()
+        body = json.dumps({"slt": fixture.slt(state, "actor", "ting")}, separators=(",", ":")).encode()
         key = str(uuid.uuid4())
         initial_status, initial = call("POST", "/v1/session", body, key)
         if initial_status not in (200, 201) or not initial.get("session_token"):

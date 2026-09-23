@@ -78,7 +78,7 @@ async fn publish(
             .into_response();
     }
     Json(
-        json!({"org_id":"tos","actor_id":"hook-publisher:tos","expires_at":"2026-09-24T00:00:00Z",
+        json!({"org_id":"tos","actor_id":"si:hook-publisher","expires_at":"2026-09-24T00:00:00Z",
         "access_token":"unexpected-server-secret"}),
     )
     .into_response()
@@ -98,7 +98,7 @@ async fn provision_retries_same_slt_and_operation_under_admin_authority() -> Tes
     let result = server.client.provision_publisher(&slt, &mutation).await?;
     assert_eq!(
         serde_json::to_value(&result)?,
-        json!({"org_id":"tos","actor_id":"hook-publisher:tos","expires_at":"2026-09-24T00:00:00Z"})
+        json!({"org_id":"tos","actor_id":"si:hook-publisher","expires_at":"2026-09-24T00:00:00Z"})
     );
     assert!(!format!("{result:?}").contains("unexpected-server-secret"));
     let calls = server.fixture.calls.lock().await;

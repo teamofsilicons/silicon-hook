@@ -62,8 +62,8 @@ def setup(directory):
     env.update({"HOOK_ENVIRONMENT":"development", "HOOK_LOG_FILTER":"warn", "HOOK_TELEMETRY":"off",
         "HOOK_BIND_ADDR":f"127.0.0.1:{port}", "HOOK_PUBLIC_BASE_URL":origin,
         "HOOK_MIGRATOR_DATABASE_URL":f"postgres://postgres:{password}@127.0.0.1:{db_port}/hook",
-        "HOOK_IAM_BASE_URL":upstream["iam_url"], "HOOK_IAM_APP_ID":"tos>hook",
-        "HOOK_IAM_APP_SECRET":upstream["app_secrets"]["tos>hook"], "HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP":"true",
+        "HOOK_IAM_BASE_URL":upstream["iam_url"], "HOOK_IAM_APP_ID":"hook",
+        "HOOK_IAM_APP_SECRET":upstream["app_secrets"]["hook"], "HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP":"true",
         "HOOK_ALLOW_LOCAL_AUTH":"false", "HOOK_TING_BASE_URL":upstream["ting_url"],
         "HOOK_TING_POLL_MILLISECONDS":"100", "HOOK_ENCRYPTION_KEYS":"1:"+b64(secrets.token_bytes(32)),
         "HOOK_ENCRYPTION_CURRENT_VERSION":"1", "HOOK_CURSOR_SIGNING_KEY":b64(secrets.token_bytes(32)),
@@ -147,7 +147,7 @@ def verify(directory):
     event_id = accepted["receipt_id"]
     matched, drained = None, []
     def hydrate(item):
-        if item.get("for") != actor or item.get("type") != "tos>hook.webhook.received":
+        if item.get("for") != actor or item.get("type") != "hook.webhook.received":
             raise RuntimeError("unexpected fixture notification recipient or type")
         envelope = item.get("data", {})
         reference = envelope.get("data", {}).get("metadata", {})
@@ -175,7 +175,7 @@ def verify(directory):
                 # earlier controlled-fixture events so they cannot hide this run.
                 if item.get("data", {}).get("data", {}).get("sender") == "fixture":
                     run = item.get("data", {}).get("data", {}).get("metadata", {}).get("run", "")
-                    if (item.get("for") != actor or item.get("type") != "tos>hook.webhook.received"
+                    if (item.get("for") != actor or item.get("type") != "hook.webhook.received"
                             or item.get("data", {}).get("type") != "new_event" or not run.startswith("fixture-")):
                         raise RuntimeError("unexpected retained fixture notification")
                 else:

@@ -3,7 +3,7 @@
 ## One-command technical setup
 
 ```sh
-honeycomb install 'tos>hook'
+honeycomb install 'hook'
 ```
 
 Honeycomb installs a prebuilt executable for Linux, Windows or macOS on x86_64 or aarch64. No Rust compiler is needed. Then run `hook login <slt>` for internal management. The enclosing app handles Ting receiving separately from this management CLI, without an extra end-user setup flow.

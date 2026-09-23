@@ -54,8 +54,8 @@ use wiremock::{
 };
 
 const ORG: &str = "tos";
-const SILICON: &str = "cos:tos";
-const CARBON: &str = "alice";
+const SILICON: &str = "si:cos";
+const CARBON: &str = "c:alice";
 const ACCESS: &str = "oat_carbon_fixture_token_abcdefghijklmnopqrstuvwxyz";
 const RENEWED_ACCESS: &str = "oat_carbon_fixture_token_renewed_abcdefghijklmnopqrstuvwxyz";
 const PUBLISHER_ACCESS: &str = "oat_observer_publisher_fixture_abcdefghijklmnopqrstuvwxyz";
@@ -144,7 +144,7 @@ impl Database {
             "INSERT INTO hook_control.environments
             (id,org_id,creator_kind,creator_id,name,key_hash,iam_key_hash,
              creation_request_hash,creation_input_hash,encrypted_credentials,honeycomb_state)
-            VALUES ($1,$2,'carbon','alice','Observers',$3,$4,$5,$6,'{}'::jsonb,'ready')",
+            VALUES ($1,$2,'carbon','c:alice','Observers',$3,$4,$5,$6,'{}'::jsonb,'ready')",
         )
         .bind(id)
         .bind(ORG)
@@ -216,7 +216,7 @@ async fn create(app: &HookApplication) -> Result<Hook> {
 async fn accept(store: &PostgresStore, hook: &Hook) -> Result<EventRecord> {
     Ok(store
         .accept_event(AcceptEvent {
-            delivery_app_id: "tos>hook".to_owned(),
+            delivery_app_id: "hook".to_owned(),
             event_id: Uuid::now_v7().into(),
             hook: hook.clone(),
             request: CapturedRequest::new(CapturedRequestParts {
@@ -261,7 +261,7 @@ async fn observers_start_at_bind_and_unsubscribe_only_cancels_their_own_sends() 
         binding.id
     );
     assert!(
-        subscriptions::get(&db.store, &carbon("bob", true)?, &target)
+        subscriptions::get(&db.store, &carbon("c:bob", true)?, &target)
             .await?
             .is_none()
     );
@@ -318,7 +318,7 @@ async fn observers_start_at_bind_and_unsubscribe_only_cancels_their_own_sends() 
         Err(SubscriptionError::CarbonRequired)
     ));
 
-    subscriptions::unsubscribe(&db.store, &carbon("bob", false)?, &target).await?;
+    subscriptions::unsubscribe(&db.store, &carbon("c:bob", false)?, &target).await?;
     assert!(db.store.ting_claim_is_current(observer).await?);
     subscriptions::unsubscribe(&db.store, &carbon(CARBON, false)?, &target).await?;
     subscriptions::unsubscribe(&db.store, &carbon(CARBON, false)?, &target).await?;
@@ -506,14 +506,14 @@ impl Remote {
                 if token == ACCESS && !active.load(Ordering::SeqCst) {
                     return ResponseTemplate::new(200).set_body_json(json!({"active":false}));
                 }
-                let (actor, kind) = if token == PUBLISHER_ACCESS { ("publisher:tos", "silicon") } else { (CARBON, "carbon") };
+                let (actor, kind) = if token == PUBLISHER_ACCESS { ("si:publisher", "silicon") } else { (CARBON, "carbon") };
                 let now = OffsetDateTime::now_utc().unix_timestamp();
                 ResponseTemplate::new(200).set_body_json(json!({
-                    "active":true,"public_id":actor,"actor_type":kind,"client_id":"tos>hook","org_id":ORG,
+                    "active":true,"public_id":actor,"actor_type":kind,"client_id":"hook","org_id":ORG,
                     "membership_id":Uuid::now_v7(),"session_id":Uuid::now_v7(),"scope":"profile roles.read memberships.read",
-                    "audience":"tos>hook","issued_at":now,"expires_at":now+1800,"authorization_epoch":1,
+                    "audience":"hook","issued_at":now,"expires_at":now+1800,"authorization_epoch":1,
                     "authorization":{"actor_type":kind,"public_id":actor,"organization_id":Uuid::now_v7(),"org_id":ORG,
-                        "membership_id":format!("{actor}[{ORG}]"),"membership_version":1,"authorization_epoch":1,"audience":"tos>hook",
+                        "membership_id":format!("{actor}[{ORG}]"),"membership_version":1,"authorization_epoch":1,"audience":"hook",
                         "testing_environment_id":null,"scopes":["profile","roles.read","memberships.read"],"org_role":"member","tags":[]}
                 }))
             }).mount(&iam_server).await;
@@ -521,7 +521,7 @@ impl Remote {
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({
                 "access_token":PUBLISHER_ACCESS,"refresh_token":"ort_observer_publisher_family_abcdefghijklmnopqrstuvwxyz",
                 "token_type":"Bearer","expires_in":1800,"scope":"profile roles.read memberships.read","org_id":ORG,
-                "actor":{"principal_id":Uuid::now_v7(),"type":"silicon","public_id":"publisher:tos"}
+                "actor":{"principal_id":Uuid::now_v7(),"type":"silicon","public_id":"si:publisher"}
             }))).mount(&iam_server).await;
         let visible = Arc::new(AtomicBool::new(true));
         let visibility = Arc::clone(&visible);
@@ -530,8 +530,8 @@ impl Remote {
                 "items": if visibility.load(Ordering::SeqCst) { vec![json!({"id":SILICON,"org":{"id":ORG,"name":"Team"}})] } else { vec![] },
                 "page":{"has_more":false,"next_cursor":null}
             }))).mount(&iam_server).await;
-        Mock::given(method("GET")).and(path("/api/v1/obo-access/applications/tos%3Eting/endpoints"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"tos>ting","org_id":ORG},
+        Mock::given(method("GET")).and(path("/api/v1/obo-access/applications/ting/endpoints"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"ting","org_id":ORG},
                 "endpoints":[{"endpoint_id":"subscriptions.register","path":"/v1/subscriptions","metadata":{},"critical":true,"ttl_seconds":60},
                 {"endpoint_id":"tings.send","path":"/v1/tings","metadata":{},"critical":true,"ttl_seconds":60}]})))
             .mount(&iam_server).await;
@@ -557,7 +557,7 @@ impl Remote {
                 let status = grant.load(Ordering::SeqCst);
                 let body: Value = serde_json::from_slice(&request.body).unwrap_or(Value::Null);
                 ResponseTemplate::new(status).set_body_json(if status == 200 {
-                    json!({"id":"sub_fixture","app_id":"tos>hook","for":body["for"],"active":true})
+                    json!({"id":"sub_fixture","app_id":"hook","for":body["for"],"active":true})
                 } else {
                     json!({"error":{"code":"consent_required","message":"consent required"}})
                 })
@@ -566,7 +566,7 @@ impl Remote {
             .await;
         let iam = IamClient::connect(&IamSettings {
             base_url: Url::parse(&iam_server.uri())?,
-            app_id: Some("tos>hook".to_owned()),
+            app_id: Some("hook".to_owned()),
             app_secret: Some(SecretString::from("ask_observer_fixture")),
             connect_timeout: Duration::from_secs(2),
             request_timeout: Duration::from_secs(2),
@@ -663,7 +663,7 @@ async fn api_binds_only_the_live_caller_after_ting_consent_and_rechecks_visibili
     assert!(headers["cache-control"].to_str()?.contains("no-store"));
     assert_eq!(body, json!({"receiving":false,"subscription":null}));
     assert_eq!(
-        call(&api, Method::POST, r#"{"for":"bob"}"#).await?.0,
+        call(&api, Method::POST, r#"{"for":"c:bob"}"#).await?.0,
         StatusCode::BAD_REQUEST
     );
     remote.grant_status.store(403, Ordering::SeqCst);
@@ -690,7 +690,7 @@ async fn api_binds_only_the_live_caller_after_ting_consent_and_rechecks_visibili
         .context("Ting requests")?
     {
         let body: Value = serde_json::from_slice(&request.body)?;
-        assert_eq!(body, json!({"org_id":ORG,"app_id":"tos>hook","for":CARBON}));
+        assert_eq!(body, json!({"org_id":ORG,"app_id":"hook","for":CARBON}));
         assert!(
             !request
                 .body

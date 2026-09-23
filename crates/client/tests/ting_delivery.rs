@@ -37,9 +37,9 @@ const SUMMARY: &str = "stripe triggered at 10:00:00 22-09-2026 UTC";
 
 fn context() -> DeliveryContext {
     DeliveryContext {
-        app_id: "tos>hook".into(),
+        app_id: "hook".into(),
         org_id: "tos".into(),
-        recipient_id: "cos:tos".into(),
+        recipient_id: "si:cos".into(),
         environment_id: Uuid::nil(),
     }
 }
@@ -53,10 +53,7 @@ fn callback_authorization() -> String {
 }
 
 fn producer_key(event_id: &str) -> String {
-    format!(
-        "hook:{event_id}:{}",
-        hex::encode(Sha256::digest(b"cos:tos"))
-    )
+    format!("hook:{event_id}:{}", hex::encode(Sha256::digest(b"si:cos")))
 }
 
 /// Native Ting callback items intentionally have no `for` field.
@@ -64,7 +61,7 @@ fn notification_value(event_id: &str, ting_id: &str, sequence: i64) -> Value {
     json!({
         "id": ting_id,
         "created_at": "2026-09-22T10:00:01Z",
-        "type": "tos>hook.webhook.received",
+        "type": "hook.webhook.received",
         "data": {
             "type": "new_event",
             "data": {
@@ -72,7 +69,7 @@ fn notification_value(event_id: &str, ting_id: &str, sequence: i64) -> Value {
                 "metadata": {
                     "id": event_id,
                     "org_id": "tos",
-                    "silicon_id": "cos:tos",
+                    "silicon_id": "si:cos",
                     "hook_id": HOOK_ID,
                     "delivery_sequence": sequence,
                     "received_at": RECEIVED_AT,
@@ -91,7 +88,7 @@ fn event_value(event_id: &str, sequence: i64, body: &str) -> Value {
     json!({
         "id": event_id,
         "org_id": "tos",
-        "silicon_id": "cos:tos",
+        "silicon_id": "si:cos",
         "hook_id": HOOK_ID,
         "provider": "stripe",
         "delivery_sequence": sequence,
@@ -99,8 +96,8 @@ fn event_value(event_id: &str, sequence: i64, body: &str) -> Value {
         "summary": SUMMARY,
         "request": {
             "method": "POST",
-            "url": "https://hook.example.test/silicon/cos:tos/ABCDEFGH?a=one%20two&a=three",
-            "path": "/silicon/cos:tos/ABCDEFGH",
+            "url": "https://hook.example.test/silicon/si:cos/ABCDEFGH?a=one%20two&a=three",
+            "path": "/silicon/si:cos/ABCDEFGH",
             "query_string": "a=one%20two&a=three",
             "headers": [["X-Provider-Value", "first"], ["X-Provider-Value", "second"]],
             "content_type": "application/json; charset=utf-8",
@@ -211,7 +208,7 @@ async fn handle(State(state): State<Arc<FixtureState>>, request: Request<Body>) 
         )
             .into_response();
     }
-    if method == "GET" && path.starts_with("/api/v2/silicons/cos:tos/events/") {
+    if method == "GET" && path.starts_with("/api/v2/silicons/si:cos/events/") {
         let event_id = path.rsplit('/').next().unwrap();
         if let Some((status, body)) = state.responses.lock().unwrap().get(event_id).cloned() {
             return (status, Json(body)).into_response();
@@ -249,7 +246,7 @@ fn native_callback_requires_both_destination_authentication_and_correct_webhook(
             .is_err()
     );
     let mut addressed = native.clone();
-    addressed["for"] = json!("cos:tos");
+    addressed["for"] = json!("si:cos");
     assert_eq!(
         receiving
             .decode(&callback_authorization(), WEBHOOK_ID, &batch(&[addressed])?)?
@@ -257,7 +254,7 @@ fn native_callback_requires_both_destination_authentication_and_correct_webhook(
         1
     );
     let mut foreign = native;
-    foreign["for"] = json!("another:tos");
+    foreign["for"] = json!("si:another");
     assert!(
         receiving
             .decode(&callback_authorization(), WEBHOOK_ID, &batch(&[foreign])?)
@@ -361,7 +358,7 @@ async fn hydration_fetches_original_large_request_and_summary_using_v2_without_a
         .expect("original event fetch");
     assert_eq!(
         fetched.path,
-        format!("/api/v2/silicons/cos:tos/events/{EVENT_ID}")
+        format!("/api/v2/silicons/si:cos/events/{EVENT_ID}")
     );
     assert_eq!(fetched.headers["silicon-hook-api-version"], "v2");
     assert_eq!(
@@ -442,7 +439,7 @@ async fn foreign_reference_authority_or_ting_identity_is_rejected_before_http() 
     let fixture = Fixture::start().await?;
     let valid = notification_value(EVENT_ID, TING_ID, 42);
     let changes = [
-        ("/type", json!("other>hook.webhook.received")),
+        ("/type", json!("hook.webhook.received")),
         ("/data/type", json!("another_event")),
         ("/data/data/metadata/org_id", json!("foreign-org")),
         ("/data/data/metadata/environment_id", json!(ENVIRONMENT_ID)),
@@ -466,7 +463,7 @@ async fn foreign_reference_authority_or_ting_identity_is_rejected_before_http() 
         );
     }
     let mut foreign_recipient = valid;
-    foreign_recipient["for"] = json!("another:tos");
+    foreign_recipient["for"] = json!("si:another");
     let notification: TingNotification = serde_json::from_value(foreign_recipient)?;
     assert!(
         fixture
@@ -476,7 +473,7 @@ async fn foreign_reference_authority_or_ting_identity_is_rejected_before_http() 
             .is_err()
     );
     let mut foreign_context = context();
-    foreign_context.recipient_id = "another:tos".into();
+    foreign_context.recipient_id = "si:another".into();
     let native: TingNotification =
         serde_json::from_value(notification_value(EVENT_ID, TING_ID, 42))?;
     assert!(
@@ -622,11 +619,11 @@ async fn resolution_never_terminally_accepts_authority_protocol_or_service_failu
 async fn an_observer_hydrates_the_visible_silicon_without_changing_event_ownership() -> TestResult {
     let fixture = Fixture::start().await?;
     let mut observer = context();
-    observer.recipient_id = "alice".into();
+    observer.recipient_id = "c:alice".into();
     let mut notification = notification_value(EVENT_ID, TING_ID, 42);
     notification["key"] = json!(format!(
         "hook:{EVENT_ID}:{}",
-        hex::encode(Sha256::digest(b"alice"))
+        hex::encode(Sha256::digest(b"c:alice"))
     ));
     let original = event_value(EVENT_ID, 42, "shared with an authorized observer");
     fixture.respond(EVENT_ID, StatusCode::OK, original.clone());
@@ -639,7 +636,7 @@ async fn an_observer_hydrates_the_visible_silicon_without_changing_event_ownersh
     let received = receiving.hydrate(&fixture.client, &decoded).await?;
     assert_eq!(received.len(), 1);
     assert_eq!(serde_json::to_value(&received[0].event)?, original);
-    assert_eq!(received[0].event.silicon_id, "cos:tos");
+    assert_eq!(received[0].event.silicon_id, "si:cos");
     fixture.assert_no_acknowledgment();
     Ok(())
 }
@@ -675,7 +672,7 @@ async fn hydration_rejects_original_details_that_do_not_match_the_reference() ->
     let changes = [
         ("id", json!(SECOND_EVENT_ID)),
         ("org_id", json!("another-org")),
-        ("silicon_id", json!("another:tos")),
+        ("silicon_id", json!("si:another")),
         ("hook_id", json!(OTHER_ID)),
         ("provider", json!("different-provider")),
         ("delivery_sequence", json!(43)),

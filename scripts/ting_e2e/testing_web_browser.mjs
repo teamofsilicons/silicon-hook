@@ -49,13 +49,13 @@ try {
   await page.getByRole("link", { name: "Connections & setup", exact: false }).click();
   await page.getByRole("button", { name: "Select test environment", exact: true }).click();
   const fixture = JSON.parse(await fs.readFile(join(cfg.directory, "fixture.private.json"), "utf8"));
-  await page.getByLabel(/^IAM test app_secret/).fill(fixture.imports["tos>hook"].app_secret);
+  await page.getByLabel(/^IAM test app_secret/).fill(fixture.imports["hook"].app_secret);
   await page.getByRole("button", { name: "Attach environment", exact: true }).click();
   await page.getByRole("dialog").waitFor({ state: "hidden" });
   const tokensFile = join(output, "hook-slt.private.json");
   const tokenScript = ["import sys", "from pathlib import Path", "sys.path.insert(0,sys.argv[1])",
     "import fixture,testing", "state=fixture.load(Path(sys.argv[2]))",
-    "value=testing.cli(state,'test-admin',['login','--app-id','tos>hook','--grant-org','tos','--approve-scopes'])",
+    "value=testing.cli(state,'test-admin',['login','--app-id','hook','--grant-org','tos','--approve-scopes'])",
     "fixture.private(Path(sys.argv[3]),value)"].join("\n");
   await run(cfg.python, ["-c", tokenScript, cfg.scripts, cfg.directory, tokensFile], { timeout: 60000 });
   const slt = JSON.parse(await fs.readFile(tokensFile, "utf8")).slt;
@@ -67,7 +67,7 @@ try {
   const session = await request("/console/session");
   const identity = session.planes.find(item => item.id === cfg.plane);
   if (!identity?.authenticated || identity.actor?.type !== "carbon") throw new Error("Actual UI Hook-only test login failed");
-  if (page.url().includes(slt) || page.url().includes(fixture.imports["tos>hook"].app_secret)) throw new Error("Browser URL exposed credentials");
+  if (page.url().includes(slt) || page.url().includes(fixture.imports["hook"].app_secret)) throw new Error("Browser URL exposed credentials");
   console.log("SCOPED_BROWSER_STAGE actual UI attached Hook selector and consumed Hook-only SLT");
   async function capability() {
     const id = (await context.cookies()).find(cookie => /^[a-f0-9]{64}$/.test(cookie.value))?.value;

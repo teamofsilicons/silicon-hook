@@ -47,8 +47,8 @@ use wiremock::{
 };
 
 const ORG: &str = "tos";
-const SILICON: &str = "cos:tos";
-const PUBLISHER: &str = "publisher:tos";
+const SILICON: &str = "si:cos";
+const PUBLISHER: &str = "si:publisher";
 const ACCESS_V1: &str = "oat_publisher_fixture_access_token_aaaaaaaaaaaa";
 const ACCESS_V2: &str = "oat_publisher_fixture_access_token_bbbbbbbbbbbb";
 const REFRESH_V1: &str = "ort_publisher_fixture_refresh_token_aaaaaaaaaaaa";
@@ -264,14 +264,14 @@ fn token_response(refreshed: bool) -> Value {
 fn introspection() -> Value {
     let now = OffsetDateTime::now_utc().unix_timestamp();
     json!({
-        "active":true, "public_id":PUBLISHER, "actor_type":"silicon", "client_id":"tos>hook",
+        "active":true, "public_id":PUBLISHER, "actor_type":"silicon", "client_id":"hook",
         "org_id":ORG, "membership_id":Uuid::now_v7(), "session_id":Uuid::now_v7(),
-        "scope":"profile roles.read memberships.read", "audience":"tos>hook",
+        "scope":"profile roles.read memberships.read", "audience":"hook",
         "issued_at":now, "expires_at":now+1800, "authorization_epoch":1,
         "authorization":{
             "actor_type":"silicon", "public_id":PUBLISHER, "organization_id":Uuid::now_v7(),
-            "org_id":ORG, "membership_id":"publisher:tos[tos]", "membership_version":1,
-            "authorization_epoch":1, "audience":"tos>hook", "testing_environment_id":null,
+            "org_id":ORG, "membership_id":"si:publisher[tos]", "membership_version":1,
+            "authorization_epoch":1, "audience":"hook", "testing_environment_id":null,
             "scopes":["profile", "roles.read", "memberships.read"], "org_role":"member", "tags":[]
         }
     })
@@ -315,9 +315,9 @@ async fn iam_fixture(reject_first_subject: bool) -> Result<(MockServer, IamClien
         .mount(&server)
         .await;
     Mock::given(method("GET"))
-        .and(path("/api/v1/obo-access/applications/tos%3Eting/endpoints"))
+        .and(path("/api/v1/obo-access/applications/ting/endpoints"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "application":{"app_id":"tos>ting", "org_id":ORG},
+            "application":{"app_id":"ting", "org_id":ORG},
             "endpoints":[{"endpoint_id":"tings.send", "path":"/v1/tings", "metadata":{},
                 "critical":true, "ttl_seconds":60},
                 {"endpoint_id":"sent.query","path":"/v1/sent/query","metadata":{},"critical":true,"ttl_seconds":60}]
@@ -344,7 +344,7 @@ async fn iam_fixture(reject_first_subject: bool) -> Result<(MockServer, IamClien
         .await;
     let iam = IamClient::connect(&IamSettings {
         base_url: Url::parse(&server.uri())?,
-        app_id: Some("tos>hook".to_owned()),
+        app_id: Some("hook".to_owned()),
         app_secret: Some(SecretString::from("ask_fixture_signing_secret")),
         connect_timeout: Duration::from_secs(2),
         request_timeout: Duration::from_secs(2),
@@ -384,7 +384,7 @@ fn assert_proof_binding(exchange: &Request, body: &[u8]) -> Result<()> {
         hex::encode(Sha256::digest(body))
     );
     assert_eq!(value["request"]["method"], "POST");
-    assert_eq!(value["audience"], "tos>ting");
+    assert_eq!(value["audience"], "ting");
     assert_eq!(value["endpoint_id"], "tings.send");
     assert_eq!(value["org_id"], ORG);
     Ok(())
@@ -451,7 +451,7 @@ async fn missing_publisher_stays_pending_then_records_normal_and_silent_acceptan
         assert!(!String::from_utf8_lossy(&send.body).contains("private_provider_payload"));
         let envelope: Value = serde_json::from_slice(&send.body)?;
         assert_eq!(envelope["for"], SILICON);
-        assert_eq!(envelope["type"], "tos>hook.webhook.received");
+        assert_eq!(envelope["type"], "hook.webhook.received");
         assert_eq!(envelope["delivery"], "required");
     }
     Ok(())
@@ -586,7 +586,7 @@ async fn required_send_waits_for_recipient_opt_in_then_accepts_muted_without_dow
     Mock::given(method("POST"))
         .and(path("/v1/sent/query"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id":"msg_publisher_fixture","type":"tos>hook.webhook.received","for":SILICON,
+            "id":"msg_publisher_fixture","type":"hook.webhook.received","for":SILICON,
             "silent":true,"read":false,"delivery":"required","deliveries":[]
         })))
         .mount(&harness.receiver)
@@ -785,7 +785,7 @@ async fn receipt_lookup_refreshes_an_early_rejected_publisher_without_a_pending_
     );
     Mock::given(method("POST")).and(path("/v1/sent/query"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "id":"msg_prior","type":"tos>hook.webhook.received","for":SILICON,"silent":false,"read":false,"delivery":"required",
+            "id":"msg_prior","type":"hook.webhook.received","for":SILICON,"silent":false,"read":false,"delivery":"required",
             "deliveries":[{"webhook_id":"destination_fixture","delivery_acked":true,"read_acked":false}],
             "deliveries_next_cursor":null
         }))).expect(1).mount(&harness.receiver).await;

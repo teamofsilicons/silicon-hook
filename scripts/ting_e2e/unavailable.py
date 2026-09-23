@@ -29,7 +29,7 @@ def verify(directory, binary):
     upstream, backend, daemon = fixture.load(directory), hook.load(directory), native.native_state(directory)
     folder = Path(tempfile.mkdtemp(prefix="unavailable-", dir=directory)).resolve()
     actor, org = upstream["actor_id"], upstream["org_id"]
-    tokens = fixture.exchange(upstream, "recipient", "tos>hook")
+    tokens = fixture.exchange(upstream, "recipient", "hook")
     token = tokens["access_token"]
     secret, destination, process = secrets.token_urlsafe(32), None, None
     output = folder / "receiver"
@@ -101,7 +101,7 @@ def verify(directory, binary):
             new_event, raw = send(provider, "valid event after unavailable payload")
             poll(lambda: publication(new_event).get("state") == "accepted_by_ting", "later Ting publication")
             fixture.private(config, {"hook_url": backend["url"], "hook_token": token,
-                "app_id": "tos>hook", "org_id": org, "recipient_id": actor, "environment_id": str(uuid.UUID(int=0)),
+                "app_id": "hook", "org_id": org, "recipient_id": actor, "environment_id": str(uuid.UUID(int=0)),
                 "webhook_id": destination["id"], "callback_secret": secret, "listen_addr": f"0.0.0.0:{port}",
                 "output": str(output), "ack_gate": None})
         process = subprocess.Popen([str(binary), str(config)], stdout=log, stderr=log)

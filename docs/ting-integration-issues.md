@@ -62,7 +62,7 @@ Evidence: [Ting session contract](https://ting.teamofsilicons.com/docs/api.md#se
 
 ## Type registration requires operator permission
 
-Creating `tos>hook.webhook.received` requires a Ting session with current Honeycomb permission to manage Hook. App send proofs cannot register types. The type must be provisioned in each applicable org/test context before publishing can succeed. Missing types must be reported rather than treated as successful delivery.
+Creating `hook.webhook.received` requires a Ting session with current Honeycomb permission to manage Hook. App send proofs cannot register types. The type must be provisioned in each applicable org/test context before publishing can succeed. Missing types must be reported rather than treated as successful delivery.
 
 Evidence: [Ting type registration](https://ting.teamofsilicons.com/docs/api.md#ting-types).
 

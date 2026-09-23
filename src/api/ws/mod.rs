@@ -101,10 +101,7 @@ mod tests {
     #[test]
     fn repeated_silicon_ids_are_deduplicated_and_bounded() -> Result<(), Box<dyn std::error::Error>>
     {
-        let ids = parse_silicon_ids(
-            "silicon_id=cos:tos&silicon_id=ops:tos&silicon_id=cos:tos",
-            4,
-        )?;
+        let ids = parse_silicon_ids("silicon_id=si:cos&silicon_id=si:ops&silicon_id=si:cos", 4)?;
         assert_eq!(ids.len(), 2);
         assert!(parse_silicon_ids("", 4).is_err());
         assert!(parse_silicon_ids("other=1", 4).is_err());

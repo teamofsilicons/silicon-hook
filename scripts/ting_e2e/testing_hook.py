@@ -23,7 +23,7 @@ import testing
 def control(state, backend, action, generation=None):
     operation = str(uuid.uuid4())
     revision = state.get("hook_revision", 0) + 1
-    body = {"app_id": "tos>hook", "org_id": "tos", "environment_id": state["environment_id"],
+    body = {"app_id": "hook", "org_id": "tos", "environment_id": state["environment_id"],
         "operation_id": operation, "environment_revision": revision,
         "generation": generation or state["generation"], "key_version": state["key_version"],
         "testing_key": state["testing_key"], "action": action}
@@ -38,7 +38,7 @@ def control(state, backend, action, generation=None):
 
 def call(state, backend, label, method, path, body=None, key=None, expected=(200,)):
     headers = {"X-Org-Id": "tos", "Silicon-Hook-API-Version": "v2",
-        "X-Hook-Test-App-Secret": state["imports"]["tos>hook"]["app_secret"]}
+        "X-Hook-Test-App-Secret": state["imports"]["hook"]["app_secret"]}
     if method != "GET":
         headers["Idempotency-Key"] = key or str(uuid.uuid4())
     return testing.http(state, backend["url"], method, "/api/v2" + path, body,
@@ -66,8 +66,8 @@ def prepare_delivery(state, backend):
             with contextlib.closing(sqlite3.connect(Path(state["directory"]) / "ting-data/ting.sqlite")) as db:
                 with db:
                     db.execute("INSERT OR IGNORE INTO types(ctx,org,app,name,description) VALUES(?,?,?,?,?)", (
-                        state["environment_id"], state["test_organization"]["id"], "tos>hook",
-                        "tos>hook.webhook.received", "Isolated Hook testing fixture"))
+                        state["environment_id"], state["test_organization"]["id"], "hook",
+                        "hook.webhook.received", "Isolated Hook testing fixture"))
         finally:
             fixture.command(["docker", "start", state["ting"]])
         fixture.wait_health(state["ting_url"])
@@ -79,17 +79,17 @@ def prepare_delivery(state, backend):
         fixture.save(state)
     if not state.get("publisher_direct"):
         state["publisher_direct"] = testing.iam(state, "POST", "/silicon-auth/token", {
-            "silicon_id": "hook-test-publisher:tos", "silicon_token": state["publisher_identity"]["silicon_token"]})
+            "silicon_id": "si:hook-test-publisher", "silicon_token": state["publisher_identity"]["silicon_token"]})
         fixture.save(state)
-    testing.test_profile(state, "test-publisher", "hook-test-publisher:tos", "silicon", state["publisher_direct"])
+    testing.test_profile(state, "test-publisher", "si:hook-test-publisher", "silicon", state["publisher_direct"])
     if not state.get("publisher_configured"):
-        slt = testing.cli(state, "test-publisher", ["login", "--app-id", "tos>hook", "--grant-org", "tos", "--approve-scopes"])["slt"]
+        slt = testing.cli(state, "test-publisher", ["login", "--app-id", "hook", "--grant-org", "tos", "--approve-scopes"])["slt"]
         call(state, backend, "test-admin", "POST", "/delivery/publisher", {"slt": slt})
         state["publisher_configured"] = True; fixture.save(state)
     if not state.get("recipient_operator"):
-        slt = testing.cli(state, "test-recipient", ["login", "--app-id", "tos>ting", "--grant-org", "tos", "--approve-scopes"])["slt"]
+        slt = testing.cli(state, "test-recipient", ["login", "--app-id", "ting", "--grant-org", "tos", "--approve-scopes"])["slt"]
         state["recipient_operator"] = testing.http(state, state["ting_url"], "POST", "/v1/session", {"slt": slt},
-            headers={"IAM_TEST_APP_SECRET": state["imports"]["tos>ting"]["app_secret"],
+            headers={"IAM_TEST_APP_SECRET": state["imports"]["ting"]["app_secret"],
                 "X-Testing-Environment-Key": state["testing_key"], "Idempotency-Key": str(uuid.uuid4())}, expected=(200, 201))[1]
         fixture.save(state)
     operator = state["recipient_operator"]["session_token"]
@@ -152,7 +152,7 @@ def watch(state, receiver):
 def events(directory, clean=False):
     state, backend = fixture.load(directory), hook.load(directory)
     prepare_delivery(state, backend)
-    actor = "hook-testing:tos"
+    actor = "si:hook-testing"
     call(state, backend, "test-admin", "POST", f"/silicons/{actor}/delivery/subscription")
     provider = call(state, backend, "test-recipient", "POST", f"/silicons/{actor}/hooks",
         {"name": "real scoped receiving"}, expected=(201,))[1]

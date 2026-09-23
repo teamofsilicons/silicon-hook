@@ -7,7 +7,7 @@ validated from their lockfile.
 
 ## Configuration and application
 
-The canonical application ID is `tos>hook`. Configure these server-side values:
+The canonical application ID is `hook`. Configure these server-side values:
 
 | Setting | Purpose |
 |---|---|
@@ -72,7 +72,7 @@ comes from online IAM checks.
 
 ## Test application bootstrap
 
-Create a Honeycomb shared test environment and import `tos>hook`. Pass the returned test application secret to `hook env use --app-secret-file ./hook-test-app-secret`, or the SDK's `with_test_app_secret`. Hook validates the selector online with IAM 1.8, resolves the environment identity, and selects the isolated storage prepared by Honeycomb. Selection does not log in an actor.
+Create a Honeycomb shared test environment and import `hook`. Pass the returned test application secret to `hook env use --app-secret-file ./hook-test-app-secret`, or the SDK's `with_test_app_secret`. Hook validates the selector online with IAM 1.8, resolves the environment identity, and selects the isolated storage prepared by Honeycomb. Selection does not log in an actor.
 
 Sign in with an IAM test SLT or an existing test Carbon/Silicon public ID. Production never accepts this ID shortcut. Normal usage does not require either root key or a manual Hook/IAM pairing. Root administration APIs remain available for existing installations; use [the testing guide](../testing/README.md) for the normal flow.
 

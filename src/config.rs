@@ -1110,7 +1110,7 @@ fn validate_base64url_key(
     Ok(key)
 }
 
-/// Canonical IAM application identifier: organization handle and app handle.
+/// Globally unique, bare IAM application handle.
 fn validate_iam_app_id(app_id: &str) -> Result<(), SettingsError> {
     let valid_handle = |value: &str| {
         (1..=80).contains(&value.len())
@@ -1122,15 +1122,12 @@ fn validate_iam_app_id(app_id: &str) -> Result<(), SettingsError> {
                 byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
             })
     };
-    if app_id
-        .split_once('>')
-        .is_some_and(|(org, app)| valid_handle(org) && valid_handle(app))
-    {
+    if valid_handle(app_id) {
         Ok(())
     } else {
         Err(invalid(
             "HOOK_IAM_APP_ID",
-            "must be the canonical IAM application ID: organization>app",
+            "must be a bare IAM application handle, such as hook",
         ))
     }
 }
@@ -1256,7 +1253,7 @@ mod tests {
                 "HOOK_IAM_BASE_URL",
                 "https://backend.iam.teamofsilicons.com".to_owned(),
             ),
-            ("HOOK_IAM_APP_ID", "tos>hook".to_owned()),
+            ("HOOK_IAM_APP_ID", "hook".to_owned()),
             ("HOOK_IAM_APP_SECRET", format!("ask_{}", "A".repeat(43))),
         ]);
         TestEnvironment(values)

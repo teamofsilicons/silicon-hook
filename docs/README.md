@@ -5,7 +5,7 @@ Hook is an internal service for receiving signed provider webhooks. It verifies 
 ## Install
 
 ```sh
-honeycomb install 'tos>hook'
+honeycomb install 'hook'
 ```
 
 Honeycomb installs the prebuilt CLI and manages its updates. Next, log in as shown below. See [installation and configuration](configuration.md) for details.
@@ -16,7 +16,7 @@ Honeycomb installs the prebuilt CLI and manages its updates. Next, log in as sho
 hook iam --json
 # Generate an SLT for the returned app_id using the official IAM CLI or website.
 hook login '<short-lived-token>' --org tos
-hook --silicon cos:tos create GitHub
+hook --silicon si:cos create GitHub
 hook login status --json
 ```
 

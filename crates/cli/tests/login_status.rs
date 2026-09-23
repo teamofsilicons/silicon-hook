@@ -56,7 +56,7 @@ async fn status(State(requests): State<Requests>, headers: HeaderMap) -> axum::r
         )
             .into_response();
     }
-    Json(json!({"authenticated":true,"actor":{"type":"silicon","id":"testsi:tos"},"org_id":org}))
+    Json(json!({"authenticated":true,"actor":{"type":"silicon","id":"si:testsi"},"org_id":org}))
         .into_response()
 }
 
@@ -100,34 +100,34 @@ async fn run_details(
                 assert_eq!(headers["silicon-hook-api-version"], "v2");
                 assert_eq!(body, json!({"slt":"fixture-slt"}));
                 requests.lock().unwrap().push(("login".into(), None, None));
-                Json(session("testsi:tos", "silicon", Some("tos"), "oat_login")["tokens"].clone())
+                Json(session("si:testsi", "silicon", Some("tos"), "oat_login")["tokens"].clone())
             }))
             .route("/api/v2/delivery/recipient", post(|State(requests): State<Requests>, body: axum::body::Bytes| async move {
                 assert!(body.is_empty());
                 requests.lock().unwrap().push(("register".into(), Some("tos".into()), None));
-                Json(json!({"id":"sub_recipient", "app_id":"tos>hook", "for":"testsi:tos", "active":true,"required_delivery":false}))
+                Json(json!({"id":"sub_recipient", "app_id":"hook", "for":"si:testsi", "active":true,"required_delivery":false}))
             }))
-            .route("/api/v2/silicons/testsi:tos/delivery/subscription", get(|State(requests): State<Requests>| async move {
+            .route("/api/v2/silicons/si:testsi/delivery/subscription", get(|State(requests): State<Requests>| async move {
                 requests.lock().unwrap().push(("receiving_status".into(), Some("tos".into()), None));
                 Json(json!({"receiving":false,"subscription":null}))
             }).post(|State(requests): State<Requests>, body: axum::body::Bytes| async move {
                 assert!(body.is_empty());
                 requests.lock().unwrap().push(("subscribe".into(), Some("tos".into()), None));
-                Json(json!({"receiving":true,"subscription":{"id":ENVIRONMENT,"org_id":"tos","silicon_id":"testsi:tos","recipient_id":"alice","created_at":"2026-09-22T12:00:00Z"}}))
+                Json(json!({"receiving":true,"subscription":{"id":ENVIRONMENT,"org_id":"tos","silicon_id":"si:testsi","recipient_id":"c:alice","created_at":"2026-09-22T12:00:00Z"}}))
             }).delete(|State(requests): State<Requests>, body: axum::body::Bytes| async move {
                 assert!(body.is_empty());
                 requests.lock().unwrap().push(("unsubscribe".into(), Some("tos".into()), None));
                 StatusCode::NO_CONTENT
             }))
-            .route("/api/v2/silicons/testsi:tos/events/{id}", get(|State(requests): State<Requests>, axum::extract::Path(id): axum::extract::Path<String>| async move {
+            .route("/api/v2/silicons/si:testsi/events/{id}", get(|State(requests): State<Requests>, axum::extract::Path(id): axum::extract::Path<String>| async move {
                 requests.lock().unwrap().push(("event".into(), Some("tos".into()), None));
-                Json(json!({"id":id,"org_id":"tos","silicon_id":"testsi:tos","hook_id":ENVIRONMENT,"provider":"Provider","summary":"Provider triggered","delivery_sequence":4,"received_at":"2026-09-22T12:00:00Z","request":{"method":"POST","url":"https://hook.example.test/provider","path":"/provider","query_string":"","headers":[],"content_type":"application/json","body":"original body","body_base64":null,"remote_ip":"127.0.0.1"}}))
+                Json(json!({"id":id,"org_id":"tos","silicon_id":"si:testsi","hook_id":ENVIRONMENT,"provider":"Provider","summary":"Provider triggered","delivery_sequence":4,"received_at":"2026-09-22T12:00:00Z","request":{"method":"POST","url":"https://hook.example.test/provider","path":"/provider","query_string":"","headers":[],"content_type":"application/json","body":"original body","body_base64":null,"remote_ip":"127.0.0.1"}}))
             }))
-            .route("/api/v2/silicons/testsi:tos/events/{id}/publication", get(|State(requests): State<Requests>, axum::extract::Path(id): axum::extract::Path<String>| async move {
+            .route("/api/v2/silicons/si:testsi/events/{id}/publication", get(|State(requests): State<Requests>, axum::extract::Path(id): axum::extract::Path<String>| async move {
                 requests.lock().unwrap().push(("publication".into(), Some("tos".into()), None));
-                Json(json!({"event_id":id,"recipient_id":"testsi:tos","state":"accepted_by_ting","delivery":"required","silent":false,"attempts":2,"ting_id":"msg_fixture","last_error_code":null,"accepted_at":"2026-09-22T12:00:00Z","next_attempt_at":"2026-09-22T12:00:00Z","expires_at":"2026-10-06T12:00:00Z","recipient_receipt":{"id":"msg_fixture","read":true,"silent":false,"delivery":"required","deliveries":[{"webhook_id":"receiver","delivery_acked":true,"read_acked":true}],"more_destinations":false},"recipient_status_error":null}))
+                Json(json!({"event_id":id,"recipient_id":"si:testsi","state":"accepted_by_ting","delivery":"required","silent":false,"attempts":2,"ting_id":"msg_fixture","last_error_code":null,"accepted_at":"2026-09-22T12:00:00Z","next_attempt_at":"2026-09-22T12:00:00Z","expires_at":"2026-10-06T12:00:00Z","recipient_receipt":{"id":"msg_fixture","read":true,"silent":false,"delivery":"required","deliveries":[{"webhook_id":"receiver","delivery_acked":true,"read_acked":true}],"more_destinations":false},"recipient_status_error":null}))
             }))
-            .route("/api/v2/silicons/testsi:tos/hooks", get(|State(requests): State<Requests>, headers: HeaderMap| async move {
+            .route("/api/v2/silicons/si:testsi/hooks", get(|State(requests): State<Requests>, headers: HeaderMap| async move {
                 assert_eq!(headers["authorization"], "Bearer oat_refreshed");
                 requests.lock().unwrap().push(("list".into(), Some("tos".into()), None));
                 Json(json!({"items":[]}))
@@ -150,7 +150,7 @@ async fn run_details(
                             return (StatusCode::UNAUTHORIZED, Json(json!({"error":{"code":"invalid_token","message":"family revoked"}}))).into_response();
                         }
                         let mut tokens =
-                            session("testsi:tos", "silicon", None, "oat_refreshed")["tokens"]
+                            session("si:testsi", "silicon", None, "oat_refreshed")["tokens"]
                                 .clone();
                         if body["refresh_token"] == "repeat-refresh" { tokens["access_token"] = json!("repeat"); }
                         tokens["refresh_token"] =
@@ -207,7 +207,7 @@ fn authenticated(output: &Output, expected: bool) {
 
 #[tokio::test]
 async fn unscoped_silicon_status_resolves_its_organization_and_checks_online() {
-    let profile = json!({"session":session("testsi:tos","silicon",None,"oat_fixture")});
+    let profile = json!({"session":session("si:testsi","silicon",None,"oat_fixture")});
     let (output, requests) = run(profile.clone(), &[]).await;
     authenticated(&output, true);
     assert_eq!(requests, vec![("status".into(), Some("tos".into()), None)]);
@@ -218,7 +218,7 @@ async fn unscoped_silicon_status_resolves_its_organization_and_checks_online() {
 
 #[tokio::test]
 async fn token_org_and_profile_selection_take_precedence_over_identity() {
-    let profile = json!({"session":session("alice","carbon",Some("token-org"),"oat_fixture")});
+    let profile = json!({"session":session("c:alice","carbon",Some("token-org"),"oat_fixture")});
     let (output, requests) = run(profile.clone(), &[]).await;
     authenticated(&output, true);
     assert_eq!(requests[0].1.as_deref(), Some("token-org"));
@@ -248,7 +248,7 @@ async fn test_status_uses_only_the_selected_test_sessions_context() {
 
 #[tokio::test]
 async fn refresh_keeps_the_inferred_organization_for_the_following_status() {
-    let mut saved = session("testsi:tos", "silicon", None, "oat_expired");
+    let mut saved = session("si:testsi", "silicon", None, "oat_expired");
     saved["expires_at"] = json!(0);
     let (output, requests) = run(json!({"session":saved}), &[]).await;
     authenticated(&output, true);
@@ -264,7 +264,7 @@ async fn refresh_keeps_the_inferred_organization_for_the_following_status() {
 #[tokio::test]
 async fn old_or_delayed_pending_refresh_is_replayed_then_renewed_before_status() {
     for started in [Value::Null, json!(1)] {
-        let mut saved = session("testsi:tos", "silicon", None, "oat_expired");
+        let mut saved = session("si:testsi", "silicon", None, "oat_expired");
         saved["expires_at"] = json!(0);
         saved["pending_refresh_key"] = json!("original-refresh-attempt");
         saved["refresh_started_at"] = started;
@@ -286,7 +286,7 @@ async fn absent_and_revoked_sessions_are_false_but_permission_and_service_errors
     authenticated(&output, false);
     assert!(requests.is_empty());
     let (output, requests) = run(
-        json!({"session":session("testsi:tos","silicon",None,"revoked")}),
+        json!({"session":session("si:testsi","silicon",None,"revoked")}),
         &[],
     )
     .await;
@@ -294,7 +294,7 @@ async fn absent_and_revoked_sessions_are_false_but_permission_and_service_errors
     assert_eq!(requests.len(), 2);
     for token in ["forbidden", "unavailable"] {
         let (output, requests) = run(
-            json!({"session":session("testsi:tos","silicon",None,token)}),
+            json!({"session":session("si:testsi","silicon",None,token)}),
             &[],
         )
         .await;
@@ -307,7 +307,7 @@ async fn absent_and_revoked_sessions_are_false_but_permission_and_service_errors
 #[tokio::test]
 async fn early_access_rejection_renews_the_still_active_family_once() {
     let (output, requests) = run(
-        json!({"session":session("testsi:tos","silicon",None,"early")}),
+        json!({"session":session("si:testsi","silicon",None,"early")}),
         &[],
     )
     .await;
@@ -322,7 +322,7 @@ async fn early_access_rejection_renews_the_still_active_family_once() {
 #[tokio::test]
 async fn ordinary_reads_recover_before_dispatch_and_repeated_rejection_is_bounded() {
     let (output, requests) = run_command(
-        json!({"session":session("testsi:tos","silicon",None,"early")}),
+        json!({"session":session("si:testsi","silicon",None,"early")}),
         &["list", "--json"],
     )
     .await;
@@ -336,7 +336,7 @@ async fn ordinary_reads_recover_before_dispatch_and_repeated_rejection_is_bounde
         ["status", "refresh", "status", "list"]
     );
     let (output, requests) = run(
-        json!({"session":session("testsi:tos","silicon",None,"repeat")}),
+        json!({"session":session("si:testsi","silicon",None,"repeat")}),
         &[],
     )
     .await;
@@ -351,7 +351,7 @@ async fn ordinary_reads_recover_before_dispatch_and_repeated_rejection_is_bounde
 async fn login_saves_only_session_state_and_never_creates_a_relay() {
     let (output, requests, state, files) = run_details(
         json!({}),
-        &["--silicon", "chosen:tos", "login", "fixture-slt", "--json"],
+        &["--silicon", "si:chosen", "login", "fixture-slt", "--json"],
     )
     .await;
     authenticated(&output, true);
@@ -365,7 +365,7 @@ async fn login_saves_only_session_state_and_never_creates_a_relay() {
             .collect::<Vec<_>>(),
         ["login"]
     );
-    assert_eq!(state["profiles"]["default"]["silicon"], "chosen:tos");
+    assert_eq!(state["profiles"]["default"]["silicon"], "si:chosen");
     let session = &state["profiles"]["default"]["session"];
     assert_eq!(session["tokens"]["access_token"], "oat_login");
     for field in [
@@ -388,13 +388,13 @@ async fn login_saves_only_session_state_and_never_creates_a_relay() {
 
 #[tokio::test]
 async fn saving_legacy_state_drops_transport_fields_but_preserves_both_session_planes() {
-    let mut old = session("testsi:tos", "silicon", Some("tos"), "production-access");
+    let mut old = session("si:testsi", "silicon", Some("tos"), "production-access");
     for (key, value) in [
         ("webhook_url", json!("http://127.0.0.1/retired")),
         ("webhook_secret", json!("old-secret")),
         ("relay_token", json!("old-local-token")),
         ("isi", json!("old-isi")),
-        ("silicons", json!(["testsi:tos"])),
+        ("silicons", json!(["si:testsi"])),
         ("test_destination", json!(true)),
     ] {
         old[key] = value;
@@ -439,7 +439,7 @@ async fn saving_legacy_state_drops_transport_fields_but_preserves_both_session_p
 
 #[tokio::test]
 async fn internal_receiving_commands_use_stateless_sdk_operations() {
-    let profile = json!({"session":session("alice","carbon",Some("tos"),"oat_fixture")});
+    let profile = json!({"session":session("c:alice","carbon",Some("tos"),"oat_fixture")});
     for (action, recorded) in [
         ("register", "register"),
         ("status", "receiving_status"),
@@ -448,7 +448,7 @@ async fn internal_receiving_commands_use_stateless_sdk_operations() {
     ] {
         let (output, requests, _, files) = run_details(
             profile.clone(),
-            &["--silicon", "testsi:tos", "receiving", action, "--json"],
+            &["--silicon", "si:testsi", "receiving", action, "--json"],
         )
         .await;
         assert!(
@@ -466,7 +466,7 @@ async fn internal_receiving_commands_use_stateless_sdk_operations() {
         let body: Value = serde_json::from_slice(&output.stdout).unwrap();
         match action {
             "register" => assert_eq!(body["active"], true),
-            "subscribe" => assert_eq!(body["recipient_id"], "alice"),
+            "subscribe" => assert_eq!(body["recipient_id"], "c:alice"),
             _ => assert_eq!(body["receiving"], false),
         }
         assert!(!files.iter().any(|name| name.starts_with("relay")));
@@ -475,7 +475,7 @@ async fn internal_receiving_commands_use_stateless_sdk_operations() {
 
 #[tokio::test]
 async fn event_and_publication_inspection_preserve_original_data_and_receipt_levels() {
-    let profile = json!({"session":session("testsi:tos","silicon",Some("tos"),"oat_fixture")});
+    let profile = json!({"session":session("si:testsi","silicon",Some("tos"),"oat_fixture")});
     for command in ["event", "publication"] {
         let (output, requests) =
             run_command(profile.clone(), &[command, ENVIRONMENT, "--json"]).await;

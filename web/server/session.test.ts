@@ -137,7 +137,7 @@ test("gateway does not expose ingress, IAM receivers, arbitrary auth or unsuppor
     "/api/v2/auth/login",
     "/api/v2/auth/refresh",
     "/api/v2/iam/events",
-    "/silicon/cos:tos/ABC12345",
+    "/silicon/si:cos/ABC12345",
     "https://example.com/",
     "//example.com/",
   ])
