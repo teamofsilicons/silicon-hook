@@ -307,8 +307,11 @@ pub async fn refresh_if_needed(
         // The lock and durable write span the request: another CLI process
         // must never rotate the same refresh token with a different key.
         store.save()?;
-        let tokens = client.refresh(session.tokens.refresh_token.expose(), &mutation)
+        let mut tokens = client.refresh(session.tokens.refresh_token.expose(), &mutation)
         .await.context("Session refresh failed; retry the command, or sign in again with hook login --slt-file <file>")?;
+        // Refresh may omit unchanged organization metadata. Keep the session's
+        // authoritative selection instead of trying to recover it from actor IDs.
+        tokens.org_id = tokens.org_id.or_else(|| session.tokens.org_id.clone());
         session.expires_at = started_at.saturating_add(tokens.expires_in);
         session.tokens = tokens;
         session.pending_refresh_key = None;

@@ -206,11 +206,11 @@ fn authenticated(output: &Output, expected: bool) {
 }
 
 #[tokio::test]
-async fn unscoped_silicon_status_resolves_its_organization_and_checks_online() {
+async fn unscoped_silicon_status_requires_explicit_organization() {
     let profile = json!({"session":session("si:testsi","silicon",None,"oat_fixture")});
     let (output, requests) = run(profile.clone(), &[]).await;
-    authenticated(&output, true);
-    assert_eq!(requests, vec![("status".into(), Some("tos".into()), None)]);
+    assert!(!output.status.success());
+    assert_eq!(requests, vec![("status".into(), None, None)]);
     let (output, requests) = run(profile, &["--org", "chosen"]).await;
     authenticated(&output, true);
     assert_eq!(requests[0].1.as_deref(), Some("chosen"));
@@ -231,9 +231,9 @@ async fn token_org_and_profile_selection_take_precedence_over_identity() {
 
 #[tokio::test]
 async fn test_status_uses_only_the_selected_test_sessions_context() {
-    let profile = json!({"org":"production-org","session":session("live:production-org","silicon",None,"oat_production"),
+    let profile = json!({"org":"production-org","session":session("si:live","silicon",Some("production-org"),"oat_production"),
         "selected_test":ENVIRONMENT,"test_keys":{ENVIRONMENT:"ABCDEFGHIJKLMNOPQRSTUVWXYZ123456"},
-        "test_sessions":{ENVIRONMENT:session("testsi:testing-org","silicon",None,"oat_test")}});
+        "test_sessions":{ENVIRONMENT:session("si:testsi","silicon",Some("testing-org"),"oat_test")}});
     let (output, requests) = run(profile, &[]).await;
     authenticated(&output, true);
     assert_eq!(
@@ -247,8 +247,8 @@ async fn test_status_uses_only_the_selected_test_sessions_context() {
 }
 
 #[tokio::test]
-async fn refresh_keeps_the_inferred_organization_for_the_following_status() {
-    let mut saved = session("si:testsi", "silicon", None, "oat_expired");
+async fn refresh_keeps_the_session_organization_for_the_following_status() {
+    let mut saved = session("si:testsi", "silicon", Some("tos"), "oat_expired");
     saved["expires_at"] = json!(0);
     let (output, requests) = run(json!({"session":saved}), &[]).await;
     authenticated(&output, true);
@@ -264,7 +264,7 @@ async fn refresh_keeps_the_inferred_organization_for_the_following_status() {
 #[tokio::test]
 async fn old_or_delayed_pending_refresh_is_replayed_then_renewed_before_status() {
     for started in [Value::Null, json!(1)] {
-        let mut saved = session("si:testsi", "silicon", None, "oat_expired");
+        let mut saved = session("si:testsi", "silicon", Some("tos"), "oat_expired");
         saved["expires_at"] = json!(0);
         saved["pending_refresh_key"] = json!("original-refresh-attempt");
         saved["refresh_started_at"] = started;
@@ -286,7 +286,7 @@ async fn absent_and_revoked_sessions_are_false_but_permission_and_service_errors
     authenticated(&output, false);
     assert!(requests.is_empty());
     let (output, requests) = run(
-        json!({"session":session("si:testsi","silicon",None,"revoked")}),
+        json!({"session":session("si:testsi","silicon",Some("tos"),"revoked")}),
         &[],
     )
     .await;
@@ -294,7 +294,7 @@ async fn absent_and_revoked_sessions_are_false_but_permission_and_service_errors
     assert_eq!(requests.len(), 2);
     for token in ["forbidden", "unavailable"] {
         let (output, requests) = run(
-            json!({"session":session("si:testsi","silicon",None,token)}),
+            json!({"session":session("si:testsi","silicon",Some("tos"),token)}),
             &[],
         )
         .await;
@@ -307,7 +307,7 @@ async fn absent_and_revoked_sessions_are_false_but_permission_and_service_errors
 #[tokio::test]
 async fn early_access_rejection_renews_the_still_active_family_once() {
     let (output, requests) = run(
-        json!({"session":session("si:testsi","silicon",None,"early")}),
+        json!({"session":session("si:testsi","silicon",Some("tos"),"early")}),
         &[],
     )
     .await;
@@ -322,7 +322,7 @@ async fn early_access_rejection_renews_the_still_active_family_once() {
 #[tokio::test]
 async fn ordinary_reads_recover_before_dispatch_and_repeated_rejection_is_bounded() {
     let (output, requests) = run_command(
-        json!({"session":session("si:testsi","silicon",None,"early")}),
+        json!({"session":session("si:testsi","silicon",Some("tos"),"early")}),
         &["list", "--json"],
     )
     .await;
@@ -336,7 +336,7 @@ async fn ordinary_reads_recover_before_dispatch_and_repeated_rejection_is_bounde
         ["status", "refresh", "status", "list"]
     );
     let (output, requests) = run(
-        json!({"session":session("si:testsi","silicon",None,"repeat")}),
+        json!({"session":session("si:testsi","silicon",Some("tos"),"repeat")}),
         &[],
     )
     .await;
