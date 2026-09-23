@@ -361,7 +361,7 @@ async fn migrations_apply_and_readiness_proves_the_schema_contract() -> Result<(
     let applied = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _sqlx_migrations")
         .fetch_one(pool)
         .await?;
-    assert_eq!(applied, 16);
+    assert_eq!(applied, 17);
 
     let mut absent_environment = pool.begin().await?;
     sqlx::query("SELECT set_config('hook.environment_id', $1, true)")
