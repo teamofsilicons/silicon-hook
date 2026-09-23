@@ -45,6 +45,8 @@ Locally staged executables can also live at the paths declared by the root manif
 
 ## 0.8.0: internal Ting delivery
 
+Published and deployed on September 23, 2026. See the [production verification](verification/ting-live-0.8.0.md).
+
 API v2 publishes verified events through Ting 0.1.4. Applications fetch the full
 original from Hook using current authorization; the CLI and stateless Rust SDK
 provide management and receiving helpers. The website handles its paired normal

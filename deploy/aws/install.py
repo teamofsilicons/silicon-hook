@@ -143,7 +143,7 @@ run('docker', 'run', '-d', '--name', 'hook-gateway', '--restart', 'unless-stoppe
     '--env-file', str(root/'gateway.env'), '-v', f'{sessions}:/var/lib/hook-web/sessions', 'silicon-hook-gateway:production')
 (root/'Caddyfile').write_text('''backend.hook.teamofsilicons.com {
     header Strict-Transport-Security "max-age=31536000"
-    @console path /console/* /auth/callback
+    @console path /console/* /auth/callback /auth/callback/*
     handle @console {
         reverse_proxy 127.0.0.1:4317
     }

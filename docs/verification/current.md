@@ -1,6 +1,6 @@
 # Understanding update verification
 
-The in-progress Ting/API v2 migration has a separate [September 23 verification record](ting-e2e-2026-09-23.md). It is local source verification, not a new deployment or published release. The release history below predates that migration.
+Hook 0.8.0 is deployed and published. The [September 23 production record](ting-live-0.8.0.md) covers the native backend, gateway, website, docs, six-platform package and real production delivery. The separate [local integration record](ting-e2e-2026-09-23.md) retains its original test scope. The release history below predates this migration.
 
 The September 16 changes are deployed: Honeycomb lifecycle participation, migration 9, final-send delivery fences, durable activity reporting and CLI release packaging. The API and worker were deployed as native systemd services on September 17, including migration 9 in both databases. The Honeycomb 0.6.0 archive contains all six native builds for `tos>hook` and is publicly available. The September 17 CLI 0.6.1 patch is also published. See [the lifecycle contract](../testing/honeycomb.md) and [release build](../releases.md). The earlier verification below describes the September 13 release, including its superseded source installer.
 

@@ -1,0 +1,65 @@
+{
+  "complete": true,
+  "source_revision": "ab28cf575af0bfed6fc0724d197838a41b5efd9a",
+  "event_id": "01a0cd83-724c-74d3-8c12-b577b9986c3e",
+  "ting_id": "msg_63f451b8c94446c684913a026a53358b",
+  "payload_bytes": 300068,
+  "payload_sha256": "4c84939c94c087745b0ce7037701909fa84bb0d3e1eb318dc4782a5f8cc46581",
+  "cli_version": "0.8.0",
+  "checks": [
+    "production IAM login via official CLI",
+    "dedicated backend publisher family",
+    "explicit own-recipient required delivery opt-in",
+    "signed provider ingress",
+    "production Ting WebSocket delivery",
+    "compact event reference metadata",
+    "exact 300KB body hydration via released CLI",
+    "accepted_by_ting publication state",
+    "delivery ACK leaves unread",
+    "read ACK marks read"
+  ],
+  "date": "2026-09-23",
+  "backend_release": "ab28cf575af0",
+  "backend_archive_sha256": "c94cf2f6ed38ab933163a19f537ed3d9e0b3f066714755265a382ec4c2b31abf",
+  "gateway_image": "sha256:dded9095cb6f1f856c9779e752aeef7b95f3962387118bd4627a7f49f5401b1e",
+  "honeycomb_archive_sha256": "2b6c10df55f01ca7b1c0d0558d6661f25616e72436d3d60cd5b4a0381d3b4079",
+  "ci_runs": {
+    "checks": 35839273192,
+    "six_platform_release": 35839344847,
+    "deployment": 35839677470
+  },
+  "migrations": {
+    "production": 16,
+    "shared_test": 16
+  },
+  "browser": {
+    "complete": true,
+    "checks": [
+      "production same-browser login state binding",
+      "official IAM atomic Hook and Ting SLT batch",
+      "paired session exchange",
+      "production organization intersection",
+      "own pair logout"
+    ]
+  },
+  "cleanup": {
+    "complete": true,
+    "checks": [
+      "owned provider soft-deleted",
+      "owned Ting websocket removed",
+      "owned recipient grant revoked, clearing opt-in",
+      "owned Ting recipient/operator sessions revoked",
+      "owned Hook management sessions revoked",
+      "backend publisher family retained",
+      "service identity stored privately outside temporary workspace"
+    ]
+  },
+  "platforms": {
+    "macos-aarch64": "bb9c26bddca3c34ab55b7a7fbd499642587bf6bf9a0fc73eebe6a6210532a4e0",
+    "linux-x86_64": "65b9ddbf05f05d1da717a212822b06960a52c8d720febd0007805f3b251e7eeb",
+    "linux-aarch64": "688968bcfc758cb275515385e85371279936082c0c7b00dd36497d2ac4f12097",
+    "windows-aarch64": "81d01b6555021db2131ba98a651278e0634bc4caedab834439ba921803e73ffe",
+    "macos-x86_64": "8f787a310ed536ff6e318555300232e5412d0fa1bcfb499e0f5fdff08d1270e7",
+    "windows-x86_64": "05a8a806594818dea97648f3cf4c7cceafc5e887976fa8a53d8ebc7778e5ec5d"
+  }
+}
