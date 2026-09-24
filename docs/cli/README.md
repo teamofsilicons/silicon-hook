@@ -59,7 +59,10 @@ Global flags may appear before or after a command:
 | `--json` | Structured output without next-step prose |
 | `--idempotency-key <key>` | Reuse the key for one logical mutation |
 
-`SILICON_HOOK_URL` and `SILICON_HOOK_ORG` provide defaults. A profile containing
+`SILICON_HOOK_URL` and `SILICON_HOOK_ORG` provide defaults. Without `--org` or
+`SILICON_HOOK_ORG`, the shared `SILICON_ORG` selects the organization, as Silicon
+runtimes set it. A login keeps the saved organization when its token names none,
+which is always the case for a Silicon. A profile containing
 credentials or test selectors stays bound to its original backend; use another
 profile for a different origin. A signed-in Silicon is the default target.
 Carbons normally use `--silicon`; supplying it during login saves the target for

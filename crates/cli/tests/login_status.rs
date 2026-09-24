@@ -78,8 +78,21 @@ async fn run_command(
 }
 
 async fn run_details(
+    profile: Value,
+    args: &[&str],
+) -> (
+    Output,
+    Vec<(String, Option<String>, Option<String>)>,
+    Value,
+    Vec<String>,
+) {
+    run_details_env(profile, args, &[]).await
+}
+
+async fn run_details_env(
     mut profile: Value,
     args: &[&str],
+    environment: &[(&str, &str)],
 ) -> (
     Output,
     Vec<(String, Option<String>, Option<String>)>,
@@ -98,9 +111,14 @@ async fn run_details(
             .route("/api/v2/auth/status", get(status))
             .route("/api/v2/auth/login", post(|State(requests): State<Requests>, headers: HeaderMap, Json(body): Json<Value>| async move {
                 assert_eq!(headers["silicon-hook-api-version"], "v2");
-                assert_eq!(body, json!({"slt":"fixture-slt"}));
+                let org = match body["slt"].as_str() {
+                    Some("fixture-slt") => Some("tos"),
+                    // A Silicon's IAM login token carries no organization.
+                    Some("silicon-slt") => None,
+                    other => panic!("unexpected SLT {other:?}"),
+                };
                 requests.lock().unwrap().push(("login".into(), None, None));
-                Json(session("si:testsi", "silicon", Some("tos"), "oat_login")["tokens"].clone())
+                Json(session("si:testsi", "silicon", org, "oat_login")["tokens"].clone())
             }))
             .route("/api/v2/delivery/recipient", post(|State(requests): State<Requests>, body: axum::body::Bytes| async move {
                 assert!(body.is_empty());
@@ -177,6 +195,8 @@ async fn run_details(
         .env_remove("SILICON_HOOK_HOME")
         .env_remove("SILICON_HOOK_URL")
         .env_remove("SILICON_HOOK_ORG")
+        .env_remove("SILICON_ORG")
+        .envs(environment.iter().copied())
         .env("SILICON_HOOK_TELEMETRY", "off")
         .args(args)
         .output()
@@ -504,4 +524,44 @@ async fn event_and_publication_inspection_preserve_original_data_and_receipt_lev
             );
         }
     }
+}
+
+#[tokio::test]
+async fn silicon_runtimes_select_the_organization_through_silicon_org() {
+    let profile = json!({"session":session("si:testsi", "silicon", None, "oat_fixture")});
+    let (output, requests, _, _) = run_details_env(
+        profile.clone(),
+        &["login", "status", "--json"],
+        &[("SILICON_ORG", "bricks")],
+    )
+    .await;
+    authenticated(&output, true);
+    assert_eq!(requests[0].1.as_deref(), Some("bricks"));
+    // The Hook-specific variable still takes precedence over the shared one.
+    let (output, requests, _, _) = run_details_env(
+        profile,
+        &["login", "status", "--json"],
+        &[("SILICON_ORG", "bricks"), ("SILICON_HOOK_ORG", "tos")],
+    )
+    .await;
+    authenticated(&output, true);
+    assert_eq!(requests[0].1.as_deref(), Some("tos"));
+}
+
+#[tokio::test]
+async fn a_silicon_login_keeps_its_organization() {
+    // Runtime login: the token has no organization, SILICON_ORG supplies it.
+    let (output, _, saved, _) = run_details_env(
+        json!({}),
+        &["login", "silicon-slt", "--json"],
+        &[("SILICON_ORG", "bricks")],
+    )
+    .await;
+    authenticated(&output, true);
+    assert_eq!(saved["profiles"]["default"]["org"], "bricks");
+    // Without any organization input, a new login keeps the saved one.
+    let (output, _, saved, _) =
+        run_details(json!({"org":"bricks"}), &["login", "silicon-slt", "--json"]).await;
+    authenticated(&output, true);
+    assert_eq!(saved["profiles"]["default"]["org"], "bricks");
 }
