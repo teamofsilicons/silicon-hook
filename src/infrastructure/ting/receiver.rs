@@ -181,8 +181,8 @@ mod tests {
 
     fn scope() -> ReceiverScope {
         ReceiverScope {
-            app_id: "tos>hook".into(),
-            recipient: "worker:tos".into(),
+            app_id: "hook".into(),
+            recipient: "si:worker".into(),
             kind: "silicon".into(),
             org_id: Uuid::new_v4(),
             hook_org_id: "tos".into(),
@@ -218,22 +218,22 @@ mod tests {
         Mock::given(method("POST")).and(path("/api/v1/oauth/introspect"))
             .respond_with(ResponseTemplate::new(200).set_body_json(json!({"active":true,"authorization":{
                 "actor_type":"silicon","public_id":scope.recipient,"organization_id":scope.org_id,"org_id":"tos",
-                "membership_id":"worker:tos[tos]","membership_version":1,"authorization_epoch":1,"audience":"tos>hook",
+                "membership_id":"si:worker[tos]","membership_version":1,"authorization_epoch":1,"audience":"hook",
                 "testing_environment_id":scope.environment.id,"scopes":[],"org_role":null,"tags":null}})))
             .mount(&server).await;
-        Mock::given(method("GET")).and(path("/api/v1/obo-access/applications/tos%3Eting/endpoints"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"tos>ting","org_id":"tos"},
+        Mock::given(method("GET")).and(path("/api/v1/obo-access/applications/ting/endpoints"))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"ting","org_id":"tos"},
                 "endpoints":[{"endpoint_id":"receivers.bootstrap","path":"/v1/receivers/bootstrap","metadata":{},"critical":true,"ttl_seconds":30}]})))
             .mount(&server).await;
         Mock::given(method("POST")).and(path("/api/v1/obo-access/exchanges"))
             .respond_with(|_: &wiremock::Request| ResponseTemplate::new(200).set_body_json(json!({
                 "access_proof":format!("proof_{}",Uuid::new_v4()),"proof_id":Uuid::new_v4(),"expires_in":30,
                 "expires_at":(OffsetDateTime::now_utc()+time::Duration::seconds(30)).format(&Rfc3339).unwrap_or_default(),
-                "testing_context":{"app_id":"tos>ting","app_secret":"ask_ting_audience_secret","iam_test_key":TING_KEY}})))
+                "testing_context":{"app_id":"ting","app_secret":"ask_ting_audience_secret","iam_test_key":TING_KEY}})))
             .mount(&server).await;
         let iam = IamClient::connect(&IamSettings {
             base_url: Url::parse(&server.uri())?,
-            app_id: Some("tos>hook".into()),
+            app_id: Some("hook".into()),
             app_secret: Some(SecretString::from("ask_hook_source_secret")),
             connect_timeout: Duration::from_secs(2),
             request_timeout: Duration::from_secs(2),
@@ -246,7 +246,7 @@ mod tests {
         let testing = iam
             .for_environment(
                 HOOK_KEY,
-                "tos>hook",
+                "hook",
                 "ask_hook_source_secret",
                 &IamWebhookSettings {
                     secret: SecretString::from("whs_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB"),
@@ -342,7 +342,7 @@ mod tests {
         let (_, iam, production) = fixture(&scope).await?;
         let token = SecretString::from(SUBJECT);
         let org = OrganizationId::new("tos")?;
-        let actor = ActorRef::new(ActorKind::Silicon, ActorId::new("worker:tos")?);
+        let actor = ActorRef::new(ActorKind::Silicon, ActorId::new("si:worker")?);
         assert_eq!(
             iam.ting_receiver_organization(&token, &org, &actor, scope.environment.id)
                 .await?,
@@ -350,11 +350,11 @@ mod tests {
         );
         for (actor, environment) in [
             (
-                ActorRef::new(ActorKind::Carbon, ActorId::new("worker:tos")?),
+                ActorRef::new(ActorKind::Carbon, ActorId::new("si:worker")?),
                 scope.environment.id,
             ),
             (
-                ActorRef::new(ActorKind::Silicon, ActorId::new("other:tos")?),
+                ActorRef::new(ActorKind::Silicon, ActorId::new("si:other")?),
                 scope.environment.id,
             ),
             (actor, Uuid::new_v4()),
@@ -393,9 +393,9 @@ mod tests {
         let now = OffsetDateTime::now_utc();
         let value = response(&scope, now + time::Duration::seconds(20))?;
         for (field, bad) in [
-            ("for", json!("other:tos")),
+            ("for", json!("si:other")),
             ("kind", json!("carbon")),
-            ("app_id", json!("tos>other")),
+            ("app_id", json!("other")),
             ("org_id", json!(Uuid::new_v4())),
             ("receiver_token", json!("opaque_general_session")),
             (

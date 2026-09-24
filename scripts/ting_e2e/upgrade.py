@@ -174,7 +174,7 @@ def upgrade(directory, version="0.1.3", resume=None):
     def login_call(args, raw=None):
         return json.loads(fixture.command(login_base + args, stdin=raw,
             log=folder / "native-fresh-login.private.log", timeout=40))
-    login = login_call(["login", "--token-stdin"], (fixture.slt(state, "recipient", "tos>ting") + "\n").encode())
+    login = login_call(["login", "--token-stdin"], (fixture.slt(state, "recipient", "ting") + "\n").encode())
     if not login.get("authenticated") or login.get("id") != state["actor_id"]:
         raise RuntimeError("fresh native login identity mismatch")
     if not login_call(["login", "status"]).get("authenticated"):

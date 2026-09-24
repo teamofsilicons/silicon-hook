@@ -398,7 +398,7 @@ mod tests {
 
     const HOOK: HookContext<'static> = HookContext {
         id: "018eb4ce-e57a-7d2c-8f9f-a35928ef91e1",
-        url: "https://hook.example.test/silicon/cos:tos/A1B2C3",
+        url: "https://hook.example.test/silicon/si:cos/A1B2C3",
     };
 
     fn request(
@@ -407,7 +407,7 @@ mod tests {
     ) -> Result<CapturedRequest, Box<dyn std::error::Error>> {
         Ok(CapturedRequest::new(CapturedRequestParts {
             method: "POST".to_owned(),
-            url: Url::parse("https://hook.example.test/silicon/cos:tos/A1B2C3")?,
+            url: Url::parse("https://hook.example.test/silicon/si:cos/A1B2C3")?,
             headers: headers
                 .iter()
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
@@ -530,7 +530,7 @@ mod tests {
         let stripe_tag = hex::encode(hmac_sha256(secret.as_bytes(), stripe_payload.as_bytes()));
         let mut parts = CapturedRequestParts {
             method: "POST".to_owned(),
-            url: Url::parse("https://hook.example.test/silicon/cos:tos/A1B2C3?t=1700000000")?,
+            url: Url::parse("https://hook.example.test/silicon/si:cos/A1B2C3?t=1700000000")?,
             headers: vec![(
                 "Stripe-Signature".to_owned(),
                 format!("t=1700000000,v1={stripe_tag},v0=deadbeef"),
@@ -576,7 +576,7 @@ mod tests {
         let request = CapturedRequest::new(CapturedRequestParts {
             method: "POST".to_owned(),
             url: Url::parse(&format!(
-                "https://hook.example.test/silicon/cos:tos/A1B2C3?sig={digest}"
+                "https://hook.example.test/silicon/si:cos/A1B2C3?sig={digest}"
             ))?,
             headers: Vec::new(),
             body: Bytes::from_static(body),
@@ -721,7 +721,7 @@ mod tests {
         let huge = format!(r#"{{"sig":"{}"}}"#, "a".repeat(9_000));
         let huge_request = CapturedRequest::new(CapturedRequestParts {
             method: "POST".to_owned(),
-            url: Url::parse("https://hook.example.test/silicon/cos:tos/A1B2C3")?,
+            url: Url::parse("https://hook.example.test/silicon/si:cos/A1B2C3")?,
             headers: Vec::new(),
             body: Bytes::from(huge),
             remote_ip: IpAddr::V4(Ipv4Addr::LOCALHOST),

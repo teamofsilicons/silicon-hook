@@ -117,7 +117,7 @@ mod tests {
         let pong: ClientFrame = serde_json::from_str(r#"{"type":"pong","ping_id":"p-1"}"#)?;
         assert!(matches!(pong, ClientFrame::Pong { ping_id } if ping_id == "p-1"));
         let ack: ClientFrame =
-            serde_json::from_str(r#"{"type":"ack","silicon_id":"cos:tos","through_sequence":7}"#)?;
+            serde_json::from_str(r#"{"type":"ack","silicon_id":"si:cos","through_sequence":7}"#)?;
         assert!(matches!(
             ack,
             ClientFrame::Ack {

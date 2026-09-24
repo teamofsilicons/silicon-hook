@@ -46,13 +46,13 @@ try {
   await page.getByRole("button", { name: "Sign in", exact: true }).waitFor();
   const started = await request("/console/login/start", "POST", {});
   const authorize = new URL(started.authorize_url);
-  if (authorize.searchParams.get("app_ids") !== "tos>hook,tos>ting") throw new Error("Browser login did not request the expected IAM batch");
+  if (authorize.searchParams.get("app_ids") !== "hook,ting") throw new Error("Browser login did not request the expected IAM batch");
   const callback = new URL(authorize.searchParams.get("redirect_uri"));
   const tokensFile = join(output, "batch.private.json");
   const tokenScript = [
     "import sys", "from pathlib import Path", "sys.path.insert(0,sys.argv[1])", "import fixture",
     "state=fixture.load(Path(sys.argv[2]))",
-    "result=fixture.cli(state,'admin',['batch-login','--app-id','tos>hook,tos>ting','--grant-org',state['org_id'],'--approve-scopes'])",
+    "result=fixture.cli(state,'admin',['batch-login','--app-id','hook,ting','--grant-org',state['org_id'],'--approve-scopes'])",
     "fixture.private(Path(sys.argv[3]),result)",
   ].join("\n");
   await run(cfg.python, ["-c", tokenScript, cfg.scripts, cfg.directory, tokensFile], { timeout: 60000 });

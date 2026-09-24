@@ -12,8 +12,8 @@ import {
 } from "./receiver.ts";
 import { GatewayError } from "./errors.ts";
 const scope: ReceiverScope = {
-  app_id: "tos>hook",
-  for: "test:tos",
+  app_id: "hook",
+  for: "si:test",
   kind: "silicon",
   org_id: "11111111-1111-4111-8111-111111111111",
   hook_org_id: "tos",

@@ -23,7 +23,7 @@ const ORGANIZATION: &str = "01900000-0000-7000-8000-000000000002";
 type CapturedRequest = (String, HeaderMap, Vec<u8>);
 
 fn scope() -> Value {
-    json!({"app_id":"tos>hook","for":"worker:tos","kind":"silicon","org_id":ORGANIZATION,"hook_org_id":"tos","environment":{"kind":"testing","id":ENVIRONMENT,"generation":7}})
+    json!({"app_id":"hook","for":"si:worker","kind":"silicon","org_id":ORGANIZATION,"hook_org_id":"tos","environment":{"kind":"testing","id":ENVIRONMENT,"generation":7}})
 }
 fn token() -> String {
     format!("ting_recv_{}", "a".repeat(64))
@@ -60,7 +60,7 @@ impl Server {
         let task = tokio::spawn(async move { axum::serve(listener, app).await });
         let home = std::env::temp_dir().join(format!("hook-receiving-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(home.join(".silicon-hook")).unwrap();
-        let session = json!({"tokens":{"access_token":"test-actor-access","refresh_token":"test-actor-refresh","token_type":"Bearer","expires_in":3600,"scopes":[],"actor":{"type":"silicon","id":"worker:tos"},"org_id":"tos"},"expires_at":4_000_000_000u64});
+        let session = json!({"tokens":{"access_token":"test-actor-access","refresh_token":"test-actor-refresh","token_type":"Bearer","expires_in":3600,"scopes":[],"actor":{"type":"silicon","id":"si:worker"},"org_id":"tos"},"expires_at":4_000_000_000u64});
         std::fs::write(home.join(".silicon-hook/state.json"),json!({"profiles":{"default":{"url":url,"telemetry":false,"selected_test":ENVIRONMENT,
             "test_app_secrets":{ENVIRONMENT:format!("ask_{}","b".repeat(43))},"test_orgs":{ENVIRONMENT:"tos"},"test_names":{ENVIRONMENT:"Receiver sandbox"},
             "test_sessions":{ENVIRONMENT:session}}}}).to_string()).unwrap();
@@ -131,13 +131,13 @@ async fn handle(State(fixture): State<Fixture>, request: Request) -> Response {
     let value = match (parts.method.as_str(), path) {
         ("GET", "/api/version") => json!({"service":"silicon-hook","selected_api_version":"v2"}),
         ("GET", "/api/v2/auth/status") => {
-            json!({"authenticated":true,"actor":{"type":"silicon","id":"worker:tos"},"org_id":"tos"})
+            json!({"authenticated":true,"actor":{"type":"silicon","id":"si:worker"},"org_id":"tos"})
         }
         ("POST", "/api/v2/auth/login") => {
-            json!({"access_token":"test-actor-access","refresh_token":"test-actor-refresh","token_type":"Bearer","expires_in":3600,"scopes":[],"actor":{"type":"silicon","id":"worker:tos"},"org_id":"tos"})
+            json!({"access_token":"test-actor-access","refresh_token":"test-actor-refresh","token_type":"Bearer","expires_in":3600,"scopes":[],"actor":{"type":"silicon","id":"si:worker"},"org_id":"tos"})
         }
         ("GET", "/api/v2/auth/iam") => {
-            json!({"app_id":"tos>hook","iam_url":"https://iam.example","testing":true,"login_method":"slt"})
+            json!({"app_id":"hook","iam_url":"https://iam.example","testing":true,"login_method":"slt"})
         }
         ("GET", "/api/v2/testing-session") => {
             json!({"id":ENVIRONMENT,"org_id":"tos","name":"Receiver sandbox","creator_kind":"carbon","creator_id":"admin","description":null,"generation":99,"created_at":"2026-09-22T10:00:00Z","last_activity_at":"2026-09-22T10:00:00Z","deleted_at":null})

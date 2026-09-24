@@ -26,14 +26,14 @@ import urllib.error
 import urllib.request
 import uuid
 
-IAM_IMAGE = "sha256:8587c08daf65ba6552796395b5b8d72954e12041ad96e11041e0337548188529"
+IAM_IMAGE = os.environ.get("HOOK_E2E_IAM_IMAGE", "silicon-iam:id-schema")
 TING_COMMIT = "a86971a08089bd212810b2df49f3f13bd41e83ac"
 TING_SHA256 = "2f4b0c8fb06fceebae344fcf330aa2665bbe0fac67f474b75f4f01089021e58b"
 TING_ARCHIVE = f"ting-server-{TING_COMMIT}.tar.gz"
 ORG_UUID = "a044c552-2e3f-4012-9672-72d1b1518401"
-ACTORS = {"admin": ("ting_e2e_admin", "carbon", "owner"),
-          "recipient": ("ting-e2e:tos", "silicon", "member"),
-          "publisher": ("ting-publisher:tos", "silicon", "member")}
+ACTORS = {"admin": ("c:ting_e2e_admin", "carbon", "owner"),
+          "recipient": ("si:ting-e2e", "silicon", "member"),
+          "publisher": ("si:ting-publisher", "silicon", "member")}
 HOOK_SCOPES = ["self.identity.read", "self.profile.read", "self.organizations.read",
                "self.membership.read", "self.silicon_access.read", "directory.silicons.read"]
 TING_SCOPES = ["self.identity.read", "self.organizations.read", "self.membership.read"]
@@ -127,7 +127,7 @@ def cli(state, actor, args, raw=None):
     return json.loads(result)
 
 
-def slt(state, actor, app="tos>hook"):
+def slt(state, actor, app="hook"):
     result = cli(state, actor, ["login", "--app-id", app, "--grant-org", "tos", "--approve-scopes"])
     return result["slt"]
 
@@ -138,8 +138,8 @@ def exchange(state, actor, app):
 
 
 def proof(state, endpoint, raw, subject=None):
-    return cli(state, "recipient", ["app", "obo", "exchange", "tos>ting", endpoint,
-        "--as-app-id", "tos>hook", "--app-secret", state["app_secrets"]["tos>hook"],
+    return cli(state, "recipient", ["app", "obo", "exchange", "ting", endpoint,
+        "--as-app-id", "hook", "--app-secret", state["app_secrets"]["hook"],
         "--subject-token", subject or state["hook_recipient"]["access_token"],
         "--org-context", "tos", "--method", "POST", "--body-file", "-"], raw)["access_proof"]
 
@@ -162,23 +162,23 @@ def seed(state, pepper):
         state["direct"][label] = {"access_token": direct, "membership_id": membership, "session_id": session}
         parts.append(f"INSERT INTO iam.organization_memberships(id,organization_id,principal_id,principal_kind,org_role) VALUES('{membership}','{ORG_UUID}',{q(actor)},{q(kind)},{q(role)});")
         if kind == "silicon":
-            parts.append(f"INSERT INTO iam.silicons(id,organization_id,membership_id,organization_handle,silicon_handle,display_name,provisioning_status) VALUES({q(actor)},'{ORG_UUID}','{membership}','tos',{q(actor.split(':')[0])},{q(label)},'active');")
+            parts.append(f"INSERT INTO iam.silicons(id,organization_id,membership_id,organization_handle,silicon_handle,display_name,provisioning_status) VALUES({q(actor)},'{ORG_UUID}','{membership}','tos',{q(actor.removeprefix('si:'))},{q(label)},'active');")
         parts.append(f"INSERT INTO iam.authentication_sessions(id,subject_principal_id,subject_kind,authentication_method,subject_auth_epoch,idle_expires_at,absolute_expires_at) VALUES('{session}',{q(actor)},{q(kind)},{q('email_otp' if kind == 'carbon' else 'silicon_credential')},1,now()+interval '1 day',now()+interval '2 days');")
         parts.append(f"INSERT INTO iam.access_tokens(id,token_class,token_digest,digest_key_version,token_prefix,authentication_session_id,subject_principal_id,subject_kind,audience,subject_auth_epoch,expires_at) VALUES('{access_id}',{q(kind+'_access')},decode('{digest(pepper, kind+'-access-token', direct)}','hex'),1,{q(direct[:12])},'{session}',{q(actor)},{q(kind)},'silicon-iam',1,now()+interval '1 day');")
         parts.append(f"INSERT INTO iam.access_token_scopes(access_token_id,scope) VALUES('{access_id}','iam.self');")
     for app, secret in state["app_secrets"].items():
         parts.append(f"INSERT INTO iam.principals(id,kind,status,activated_at) VALUES({q(app)},'application','active',now());")
-        iam_scopes = HOOK_SCOPES if app == "tos>hook" else TING_SCOPES
-        external = [{"app_id": "tos>ting", "endpoint_id": e} for e in ENDPOINTS] if app == "tos>hook" else []
+        iam_scopes = HOOK_SCOPES if app == "hook" else TING_SCOPES
+        external = [{"app_id": "ting", "endpoint_id": e} for e in ENDPOINTS] if app == "hook" else []
         parts.append(f"INSERT INTO iam.applications(id,app_id,organization_id,created_by_carbon_id,app_name,review_status,visibility,base_url,app_scope) VALUES({q(app)},{q(app)},'{ORG_UUID}',{q(owner)},{q(app)},'verified','public','https://fixture.invalid',{q(json.dumps({'iam':iam_scopes,'external':external}))}::jsonb);")
         parts.append(f"INSERT INTO iam.application_secrets(id,application_id,secret_version,secret_prefix,secret_digest,pepper_key_version,created_by_carbon_id) VALUES('{uuid.uuid4()}',{q(app)},1,{q(secret[:12])},decode('{digest(pepper,'application-secret',secret)}','hex'),1,{q(owner)});")
-        scopes = iam_scopes + [f"obo:tos>ting:{e}" for e in ENDPOINTS] if app == "tos>hook" else iam_scopes
+        scopes = iam_scopes + [f"obo:ting:{e}" for e in ENDPOINTS] if app == "hook" else iam_scopes
         for scope in scopes:
             parts += [f"INSERT INTO iam.oauth_scope_catalog(scope,description,sensitive) VALUES({q(scope)},'Isolated integration fixture',false) ON CONFLICT DO NOTHING;",
                       f"INSERT INTO iam.application_requested_scopes(application_id,scope) VALUES({q(app)},{q(scope)});",
                       f"INSERT INTO iam.application_approved_scopes(application_id,scope,approved_by_carbon_id) VALUES({q(app)},{q(scope)},{q(owner)});"]
     for endpoint, path in ENDPOINTS.items():
-        parts.append(f"INSERT INTO iam.application_obo_endpoints(organization_id,application_id,endpoint_id,path,metadata_definition,critical,ttl_seconds) VALUES('{ORG_UUID}','tos>ting',{q(endpoint)},{q(path)},'{{}}',true,60);")
+        parts.append(f"INSERT INTO iam.application_obo_endpoints(organization_id,application_id,endpoint_id,path,metadata_definition,critical,ttl_seconds) VALUES('{ORG_UUID}','ting',{q(endpoint)},{q(path)},'{{}}',true,60);")
     parts.append("COMMIT;")
     psql(state, "\n".join(parts))
     expiry = (datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=12)).isoformat().replace("+00:00", "Z")
@@ -218,7 +218,7 @@ def setup(args):
              "containers":[], "iam_cli":args.iam_cli, "iam_image":args.iam_image,
              "ting_commit":TING_COMMIT, "org_id":"tos", "org_uuid":ORG_UUID,
              "actor_id":ACTORS["recipient"][0],"direct":{},
-             "app_secrets":{"tos>hook":token("ask_"),"tos>ting":token("ask_")},
+             "app_secrets":{"hook":token("ask_"),"ting":token("ask_")},
              "coverage":{"identity_setup":"synthetic rows in disposable IAM only", "type_management_bootstrap":False,
                          "real_iam_testing_plane":False, "external_service_mutations":False}}
     save(state)
@@ -257,7 +257,7 @@ def setup(args):
     wait_health(state["iam_url"])
     print("Real IAM running with isolated synthetic identities.",flush=True)
     for actor in ("admin","recipient"):
-        state["hook_"+actor]=exchange(state,actor,"tos>hook")
+        state["hook_"+actor]=exchange(state,actor,"hook")
     save(state)
     archive=directory/TING_ARCHIVE
     urllib.request.urlretrieve(f"https://github.com/teamofsilicons/silicon-ting/releases/download/server-{TING_COMMIT}/{TING_ARCHIVE}",archive)
@@ -277,7 +277,7 @@ def setup(args):
     store=directory/"ting-data";store.mkdir(mode=0o700)
     tenv={"TING_BIND":"0.0.0.0:8082","TING_PUBLIC_ORIGIN":"http://127.0.0.1:8082",
           "TING_DATABASE_PATH":"/data/ting.sqlite","TING_ENCRYPTION_KEY":secrets.token_hex(32),
-          "TING_IAM_URL":"http://127.0.0.1:8080","TING_IAM_APP_SECRET":state["app_secrets"]["tos>ting"],
+          "TING_IAM_URL":"http://127.0.0.1:8080","TING_IAM_APP_SECRET":state["app_secrets"]["ting"],
           "TING_HONEYCOMB_URL":"http://127.0.0.1:1","TING_SPACESTATION_URL":"http://127.0.0.1:1",
           "TING_SPACESTATION_KEY":"table-fixture-"+secrets.token_hex(16),"TING_SPACESTATION_TABLE":"fixture",
           "TING_DOCS_URL":"http://127.0.0.1:8080/docs","RUST_LOG":"error"}
@@ -293,10 +293,10 @@ def setup(args):
     with contextlib.closing(sqlite3.connect(store/"ting.sqlite")) as db:
         with db:
             db.execute("INSERT INTO types(ctx,org,app,name,description) VALUES(?,?,?,?,?)",
-                       ("production",ORG_UUID,"tos>hook","tos>hook.webhook.received","Isolated Hook integration fixture"))
+                       ("production",ORG_UUID,"hook","hook.webhook.received","Isolated Hook integration fixture"))
     command(["docker", "start", state["ting"]])
     wait_health(state["ting_url"])
-    state["ting_session"]=request(state["ting_url"],"POST","/v1/session",{"slt":slt(state,"recipient","tos>ting")},
+    state["ting_session"]=request(state["ting_url"],"POST","/v1/session",{"slt":slt(state,"recipient","ting")},
                                     headers={"Idempotency-Key":str(uuid.uuid4())},expected=(200,201))["session_token"]
     save(state)
     verify(state)
@@ -308,7 +308,7 @@ def verify(state):
     health = request(state["ting_url"], "GET", "/healthz")
     if health.get("version") != state.get("ting_version", "0.1.2"):
         raise RuntimeError("fixture requires its pinned Ting server version")
-    raw=json.dumps({"org_id":"tos","app_id":"tos>hook","for":state["actor_id"]},separators=(",",":")).encode()
+    raw=json.dumps({"org_id":"tos","app_id":"hook","for":state["actor_id"]},separators=(",",":")).encode()
     grant=request(state["ting_url"],"POST","/v1/subscriptions",raw,
                   token=proof(state,"subscriptions.register",raw),expected=(200,201))
     if grant["for"]!=state["actor_id"] or not grant["active"]:
@@ -332,7 +332,7 @@ def verify(state):
     hook=request(state["ting_url"],"POST",endpoint,{"receiver_id":receiver},token=state["ting_session"],
                  headers={"Idempotency-Key":str(uuid.uuid4())},expected=(200,201))
     key="fixture-"+str(uuid.uuid4())
-    body={"org_id":"tos","type":"tos>hook.webhook.received","for":state["actor_id"],"key":key,
+    body={"org_id":"tos","type":"hook.webhook.received","for":state["actor_id"],"key":key,
           "data":{"type":"new_event","data":{"sender":"fixture","metadata":{"run":key}}},"metadata":{}}
     raw=json.dumps(body,separators=(",",":")).encode()
     accepted=request(state["ting_url"],"POST","/v1/tings",raw,token=proof(state,"tings.send",raw),expected=(202,))
@@ -382,7 +382,7 @@ def main():
     for operation in ("verify","cleanup","slt"):
         p=sub.add_parser(operation);p.add_argument("directory",type=Path)
         if operation=="slt":
-            p.add_argument("--actor",choices=ACTORS,default="publisher");p.add_argument("--app",default="tos>hook");p.add_argument("--output",required=True,type=Path)
+            p.add_argument("--actor",choices=ACTORS,default="publisher");p.add_argument("--app",default="hook");p.add_argument("--output",required=True,type=Path)
     args=parser.parse_args()
     if args.operation=="setup":setup(args)
     else:

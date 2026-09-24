@@ -57,19 +57,19 @@ def verify(directory, binary):
         return value
 
     selector = folder / "hook-selector.private"
-    fixture.private(selector, state["imports"]["tos>hook"]["app_secret"] + "\n")
+    fixture.private(selector, state["imports"]["hook"]["app_secret"] + "\n")
     selected = run(["env", "use", "--app-secret-file", str(selector)])
     selector.unlink()
     if selected["id"] != state["environment_id"]:
         raise RuntimeError("CLI selected another testing environment")
     slt_file = folder / "login.private.slt"
-    fixture.private(slt_file, testing.cli(state, "test-recipient", ["login", "--app-id", "tos>hook",
+    fixture.private(slt_file, testing.cli(state, "test-recipient", ["login", "--app-id", "hook",
         "--grant-org", "tos", "--approve-scopes"])["slt"] + "\n")
     signed_in, report = False, None
     try:
         login = run(["login", "--slt-file", str(slt_file)])
         signed_in = True; slt_file.unlink()
-        if not login["authenticated"] or login["actor"]["id"] != "hook-testing:tos":
+        if not login["authenticated"] or login["actor"]["id"] != "si:hook-testing":
             raise RuntimeError("CLI test SLT login did not match the synthetic Silicon")
         scope = run(["receiving", "scope"])
         if scope["environment"] != {"kind": "testing", "id": state["environment_id"], "generation": state["generation"]}:

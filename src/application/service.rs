@@ -81,7 +81,7 @@ impl HookApplication {
             clock,
             public_base_url,
             environment: None,
-            delivery_app_id: "tos>hook".to_owned(),
+            delivery_app_id: "hook".to_owned(),
         }
     }
 
@@ -351,12 +351,12 @@ mod tests {
     fn endpoint_urls_follow_the_public_layout() -> Result<(), Box<dyn std::error::Error>> {
         let url = endpoint_url(
             &url::Url::parse("https://hook.teamofsilicons.com/")?,
-            &SiliconId::new("cos:tos")?,
+            &SiliconId::new("si:cos")?,
             &EndpointKey::parse("402e2j2u")?,
         )?;
         assert_eq!(
             url.as_str(),
-            "https://hook.teamofsilicons.com/silicon/cos:tos/402E2J2U"
+            "https://hook.teamofsilicons.com/silicon/si:cos/402E2J2U"
         );
         Ok(())
     }

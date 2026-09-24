@@ -4822,7 +4822,7 @@ components:
       properties:
         app_id:
           type: string
-          description: Canonical test application ID, e.g. tos>hook.
+          description: Canonical test application ID, e.g. hook.
         app_secret:
           type: string
           writeOnly: true

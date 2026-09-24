@@ -101,17 +101,17 @@ def verify(directory, node, server, browser_check=False, playwright="playwright"
         started = request("POST", "/console/login/start")
         authorize = urllib.parse.urlsplit(started["authorize_url"])
         query = urllib.parse.parse_qs(authorize.query)
-        if set(query.get("app_ids", [""])[0].split(",")) != {"tos>hook", "tos>ting"}:
+        if set(query.get("app_ids", [""])[0].split(",")) != {"hook", "ting"}:
             raise RuntimeError("website login did not request one combined IAM batch")
         callback = urllib.parse.urlsplit(query["redirect_uri"][0])
         state = urllib.parse.parse_qs(callback.query)["state"][0]
         callback_html, callback_headers = request("GET", callback.path + "?" + callback.query, raw=True)
         if b"script" not in callback_html or callback_headers.get_content_type() != "text/html":
             raise RuntimeError("website callback did not serve its browser bridge")
-        batch = fixture.cli(upstream, "admin", ["batch-login", "--app-id", "tos>hook,tos>ting",
+        batch = fixture.cli(upstream, "admin", ["batch-login", "--app-id", "hook,ting",
             "--grant-org", org, "--approve-scopes"])
         items = batch["items"]
-        if {item["app_id"] for item in items} != {"tos>hook", "tos>ting"}:
+        if {item["app_id"] for item in items} != {"hook", "ting"}:
             raise RuntimeError("real IAM batch issuance did not return both applications")
         completed = request("POST", "/auth/callback/complete", {"state": state, "slts": items})
         redirect = urllib.parse.urlsplit(completed.get("redirect_url", ""))
@@ -227,7 +227,7 @@ process.stdout.write(Buffer.concat([d.update(sealed.subarray(28)),d.final()]));"
         # Independent same-actor session observes receipt state; it never
         # subscribes a delivery destination or acknowledges the browser event.
         observer = fixture.request(upstream["ting_url"], "POST", "/v1/session",
-            {"slt": fixture.slt(upstream, "admin", "tos>ting")},
+            {"slt": fixture.slt(upstream, "admin", "ting")},
             headers={"Idempotency-Key": str(uuid.uuid4())}, expected=(200, 201))
         receipt = fixture.request(upstream["ting_url"], "GET", f"/v1/orgs/{org}/inbox/{ting_id}",
             token=observer["session_token"])

@@ -410,7 +410,7 @@ mod tests {
         );
         for (token, actor) in [
             ("local:carbon:owner:alice", "carbon"),
-            ("local:silicon:member:cos:tos", "silicon"),
+            ("local:silicon:member:si:cos", "silicon"),
         ] {
             let response = app
                 .clone()
@@ -549,7 +549,7 @@ mod tests {
     #[tokio::test]
     async fn ingress_bodies_are_bounded_before_handler_work()
     -> Result<(), Box<dyn std::error::Error>> {
-        let mut request = Request::post("/silicon/cos:tos/ABC123")
+        let mut request = Request::post("/silicon/si:cos/ABC123")
             .header("content-type", "application/json")
             .body(Body::from(vec![b'x'; 17]))?;
         request.extensions_mut().insert(ConnectInfo(SocketAddr::new(
@@ -570,7 +570,7 @@ mod tests {
         // credential and Silicon checks are covered end to end over a listener.
         let plain = test_router()
             .await?
-            .oneshot(Request::get("/api/v1/ws?silicon_id=cos:tos").body(Body::empty())?)
+            .oneshot(Request::get("/api/v1/ws?silicon_id=si:cos").body(Body::empty())?)
             .await?;
         assert!(plain.status().is_client_error());
         let body: Value = serde_json::from_slice(&to_bytes(plain.into_body(), 4096).await?)?;

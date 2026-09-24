@@ -803,32 +803,39 @@ fn sdk_error(error: silicon_iam_client::Error) -> IamError {
     }
 }
 
-/// A directory ID with an organization suffix is a global Silicon ID; any
-/// other ID is a public Carbon ID. IAM never issues a Silicon ID whose suffix
-/// differs from the organization it was read from.
-fn validate_target(target: &SiliconId, org: &OrganizationId) -> Result<(), IamError> {
-    let Some((handle, organization)) = target.as_str().split_once(':') else {
-        return Err(IamError::InvalidInput("silicon_id"));
-    };
-    if handle.is_empty() || organization.contains(':') {
-        return Err(IamError::InvalidInput("silicon_id"));
+/// Public IDs carry their actor kind. Organization authorization comes from the
+/// selected IAM directory/snapshot and the per-target Silicon lookup above.
+fn validate_target(target: &SiliconId, _org: &OrganizationId) -> Result<(), IamError> {
+    if target
+        .as_str()
+        .strip_prefix("si:")
+        .is_some_and(valid_public_handle)
+    {
+        Ok(())
+    } else {
+        Err(IamError::InvalidInput("silicon_id"))
     }
-    if organization != org.as_str() {
-        return Err(IamError::Forbidden);
-    }
-    Ok(())
 }
 
-fn actor_from_directory(id: &str, organization_id: &OrganizationId) -> Result<ActorRef, IamError> {
-    match id.rsplit_once(':') {
-        Some((handle, suffix)) => {
-            if handle.is_empty() || suffix != organization_id.as_str() {
-                return Err(IamError::InvalidResponse);
-            }
-            ActorRef::try_new(ActorKind::Silicon, id).map_err(|_| IamError::InvalidResponse)
-        }
-        None => ActorRef::try_new(ActorKind::Carbon, id).map_err(|_| IamError::InvalidResponse),
-    }
+fn valid_public_handle(handle: &str) -> bool {
+    (3..=50).contains(&handle.len())
+        && handle.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'-' | b'_')
+        })
+}
+
+fn actor_from_directory(id: &str, _organization_id: &OrganizationId) -> Result<ActorRef, IamError> {
+    let kind = if id.strip_prefix("si:").is_some_and(valid_public_handle) {
+        ActorKind::Silicon
+    } else if id
+        .strip_prefix("c:")
+        .is_some_and(|handle| handle.len() <= 30 && valid_public_handle(handle))
+    {
+        ActorKind::Carbon
+    } else {
+        return Err(IamError::InvalidResponse);
+    };
+    ActorRef::try_new(kind, id).map_err(|_| IamError::InvalidResponse)
 }
 
 /// IAM keys idempotent replays on the caller's key. Hook derives a stable
@@ -975,7 +982,7 @@ mod tests {
         error::AppError,
     };
 
-    const APP_ID: &str = "tos>hook";
+    const APP_ID: &str = "hook";
     const APP_SECRET: &str = "ask_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA";
     const WEBHOOK_SECRET: &str = "whs_BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB";
     const ACCESS_TOKEN: &str = "oat_CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC";
@@ -984,8 +991,8 @@ mod tests {
 
     fn silicon_profile() -> serde_json::Value {
         serde_json::json!({
-            "membership_id": "cos:tos[tos]",
-            "silicon_id": "cos:tos", "org_id": "tos", "display_name": "COS", "timezone": "UTC",
+            "membership_id": "si:cos[tos]",
+            "silicon_id": "si:cos", "org_id": "tos", "display_name": "COS", "timezone": "UTC",
             "profile_photo": "https://example.test/cos.png", "job_description": "engineer", "tags": [],
             "hierarchy_level": 1, "webhook_configured": false, "status": "active", "version": 1,
             "created_at": "2026-09-02T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z"
@@ -1000,7 +1007,7 @@ mod tests {
 
     fn webhook_record(secret_version: i64, version: i64) -> serde_json::Value {
         serde_json::json!({
-            "silicon_id": "cos:tos", "url": "https://hook.example.test/silicon/cos:tos/A1B2C3D4",
+            "silicon_id": "si:cos", "url": "https://hook.example.test/silicon/si:cos/A1B2C3D4",
             "status": "active", "secret_version": secret_version, "version": version,
             "created_at": "2026-09-02T10:00:00Z", "updated_at": "2026-09-02T10:00:00Z"
         })
@@ -1062,7 +1069,7 @@ mod tests {
     fn introspection(actor_type: &str) -> serde_json::Value {
         serde_json::json!({
             "active": true,
-            "public_id": "alice",
+            "public_id": "c:alice",
             "actor_type": actor_type,
             "client_id": APP_ID,
             "org_id": "tos",
@@ -1074,8 +1081,8 @@ mod tests {
             "expires_at": 1_700_001_800,
             "authorization_epoch": 4,
             "authorization": {
-                "actor_type": actor_type, "public_id": "alice",
-                "organization_id": Uuid::now_v7(), "org_id": "tos", "membership_id": "alice[tos]",
+                "actor_type": actor_type, "public_id": "c:alice",
+                "organization_id": Uuid::now_v7(), "org_id": "tos", "membership_id": "c:alice[tos]",
                 "membership_version": 1, "authorization_epoch": 4, "audience": APP_ID,
                 "testing_environment_id": null, "scopes": ["roles.read", "memberships.read"],
                 "org_role": "member", "tags": []
@@ -1124,7 +1131,7 @@ mod tests {
                 format!("Bearer {ACCESS_TOKEN}").as_str(),
             ))
             .and(header("silicon-iam-api-version", "v1"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(directory("alice", "member")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(directory("c:alice", "member")))
             .expect(0)
             .mount(&server)
             .await;
@@ -1142,7 +1149,7 @@ mod tests {
             .and(path("/api/v1/organizations/tos/directory/members"))
             .and(query_param("cursor", "next-page"))
             .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({
-                "items": [{"id": "cos:tos", "org": {"id": "tos", "name": "Team of Silicons"}}],
+                "items": [{"id": "si:cos", "org": {"id": "tos", "name": "Team of Silicons"}}],
                 "page": {"has_more": false, "next_cursor": null}
             })))
             .with_priority(1)
@@ -1152,14 +1159,14 @@ mod tests {
 
         let client = IamClient::connect(&settings(&server)?).await?;
         let context = client
-            .authorize(&request(ACCESS_TOKEN, &["cos:tos", "hidden:tos"])?)
+            .authorize(&request(ACCESS_TOKEN, &["si:cos", "si:hidden"])?)
             .await?;
 
         assert_eq!(context.actor().kind(), ActorKind::Carbon);
-        assert_eq!(context.actor().id().as_str(), "alice");
+        assert_eq!(context.actor().id().as_str(), "c:alice");
         assert_eq!(context.organization_role(), OrganizationRole::Member);
-        assert!(context.has_silicon_visibility(&SiliconId::new("cos:tos")?));
-        assert!(!context.has_silicon_visibility(&SiliconId::new("hidden:tos")?));
+        assert!(context.has_silicon_visibility(&SiliconId::new("si:cos")?));
+        assert!(!context.has_silicon_visibility(&SiliconId::new("si:hidden")?));
         Ok(())
     }
 
@@ -1179,19 +1186,19 @@ mod tests {
                 "authorization",
                 format!("Bearer {SILICON_TOKEN}").as_str(),
             ))
-            .respond_with(ResponseTemplate::new(200).set_body_json(directory("cos:tos", "member")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(directory("si:cos", "member")))
             .mount(&server)
             .await;
 
         let client = IamClient::connect(&settings(&server)?).await?;
         let context = client
-            .authorize(&request(SILICON_TOKEN, &["cos:tos", "other:tos"])?)
+            .authorize(&request(SILICON_TOKEN, &["si:cos", "si:other"])?)
             .await?;
 
         assert_eq!(context.actor().kind(), ActorKind::Silicon);
-        assert_eq!(context.actor().id().as_str(), "cos:tos");
-        assert!(context.has_silicon_visibility(&SiliconId::new("cos:tos")?));
-        assert!(!context.has_silicon_visibility(&SiliconId::new("other:tos")?));
+        assert_eq!(context.actor().id().as_str(), "si:cos");
+        assert!(context.has_silicon_visibility(&SiliconId::new("si:cos")?));
+        assert!(!context.has_silicon_visibility(&SiliconId::new("si:other")?));
         Ok(())
     }
 
@@ -1201,17 +1208,17 @@ mod tests {
         let server = iam_server().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/organizations/tos/directory/self"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(directory("bob", "admin")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(directory("c:bob", "admin")))
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/api/v1/organizations/tos/silicons/cos:tos"))
+            .and(path("/api/v1/organizations/tos/silicons/si:cos"))
             .respond_with(ResponseTemplate::new(200).set_body_json(silicon_profile()))
             .expect(1)
             .mount(&server)
             .await;
         Mock::given(method("GET"))
-            .and(path("/api/v1/organizations/tos/silicons/missing:tos"))
+            .and(path("/api/v1/organizations/tos/silicons/si:missing"))
             .respond_with(iam_failure(404))
             .expect(1)
             .mount(&server)
@@ -1219,11 +1226,11 @@ mod tests {
 
         let client = IamClient::connect(&settings(&server)?).await?;
         let context = client
-            .authorize(&request(CARBON_TOKEN, &["cos:tos", "missing:tos"])?)
+            .authorize(&request(CARBON_TOKEN, &["si:cos", "si:missing"])?)
             .await?;
         assert_eq!(context.organization_role(), OrganizationRole::Admin);
-        assert!(context.has_silicon_visibility(&SiliconId::new("cos:tos")?));
-        assert!(!context.has_silicon_visibility(&SiliconId::new("missing:tos")?));
+        assert!(context.has_silicon_visibility(&SiliconId::new("si:cos")?));
+        assert!(!context.has_silicon_visibility(&SiliconId::new("si:missing")?));
         Ok(())
     }
 
@@ -1256,25 +1263,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn silicon_ids_from_another_organization_are_rejected()
+    async fn directory_members_from_another_organization_are_rejected()
     -> Result<(), Box<dyn std::error::Error>> {
         let server = iam_server().await;
         Mock::given(method("GET"))
             .and(path("/api/v1/organizations/tos/directory/self"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(directory("cos:acme", "member")))
+            .respond_with(ResponseTemplate::new(200).set_body_json({
+                let mut member = directory("si:cos", "member");
+                member["org"]["id"] = serde_json::json!("acme");
+                member
+            }))
             .mount(&server)
             .await;
 
         let client = IamClient::connect(&settings(&server)?).await?;
         assert!(matches!(
             client.authorize(&request(SILICON_TOKEN, &[])?).await,
-            Err(IamError::InvalidResponse)
+            Err(IamError::InvalidCredential)
         ));
         let organization = OrganizationId::new("tos")?;
-        assert!(actor_from_directory("cos:tos", &organization).is_ok());
+        assert!(actor_from_directory("si:cos", &organization).is_ok());
         assert!(actor_from_directory(":tos", &organization).is_err());
         assert_eq!(
-            actor_from_directory("alice", &organization)?.kind(),
+            actor_from_directory("c:alice", &organization)?.kind(),
             ActorKind::Carbon
         );
         Ok(())
@@ -1285,11 +1296,11 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let server = iam_server().await;
         let organization = OrganizationId::new("tos")?;
-        let silicon = SiliconId::new("cos:tos")?;
-        let endpoint = Url::parse("https://hook.example.test/silicon/cos:tos/A1B2C3D4")?;
+        let silicon = SiliconId::new("si:cos")?;
+        let endpoint = Url::parse("https://hook.example.test/silicon/si:cos/A1B2C3D4")?;
         let expected_key = iam_idempotency_key(&organization, &silicon, "connect-0001");
         Mock::given(method("GET"))
-            .and(path("/api/v1/organizations/tos/silicons/cos:tos/webhook"))
+            .and(path("/api/v1/organizations/tos/silicons/si:cos/webhook"))
             .respond_with(
                 ResponseTemplate::new(200)
                     .insert_header("etag", "\"7\"")
@@ -1298,7 +1309,7 @@ mod tests {
             .mount(&server)
             .await;
         Mock::given(method("PUT"))
-            .and(path("/api/v1/organizations/tos/silicons/cos:tos/webhook"))
+            .and(path("/api/v1/organizations/tos/silicons/si:cos/webhook"))
             .and(header("if-match", "\"7\""))
             .and(header(
                 "idempotency-key",
@@ -1391,14 +1402,14 @@ mod tests {
                 "refresh_token": "ort_example",
                 "token_type": "Bearer", "expires_in": 1800,
                 "scope": "profile roles.read memberships.read", "org_id": "tos",
-                "actor": {"principal_id": Uuid::now_v7(), "type": "carbon", "public_id": "alice"}
+                "actor": {"principal_id": Uuid::now_v7(), "type": "carbon", "public_id": "c:alice"}
             })))
             .expect(1)
             .mount(&server)
             .await;
         let client = IamClient::connect(&settings(&server)?).await?;
         let tokens = client.login("slt_example", "login-contract-0001").await?;
-        assert_eq!(tokens.actor.id().as_str(), "alice");
+        assert_eq!(tokens.actor.id().as_str(), "c:alice");
         assert_eq!(tokens.access_token.as_str(), ACCESS_TOKEN);
         assert!(matches!(
             client.login("invalid\nvalue", "login-contract-0002").await,
@@ -1413,24 +1424,24 @@ mod tests {
         let client = IamClient::connect(&local_settings()?).await?;
         let context = client
             .authorize(&request(
-                "local:silicon:member:cos:tos",
-                &["cos:tos", "other:tos"],
+                "local:silicon:member:si:cos",
+                &["si:cos", "si:other"],
             )?)
             .await?;
         assert_eq!(context.actor().kind(), ActorKind::Silicon);
-        assert!(context.has_silicon_visibility(&SiliconId::new("cos:tos")?));
-        assert!(!context.has_silicon_visibility(&SiliconId::new("other:tos")?));
+        assert!(context.has_silicon_visibility(&SiliconId::new("si:cos")?));
+        assert!(!context.has_silicon_visibility(&SiliconId::new("si:other")?));
 
         let carbon = client
-            .authorize(&request("local:carbon:owner:alice", &["cos:tos"])?)
+            .authorize(&request("local:carbon:owner:c:alice", &["si:cos"])?)
             .await?;
         assert_eq!(carbon.organization_role(), OrganizationRole::Owner);
-        assert!(carbon.has_silicon_visibility(&SiliconId::new("cos:tos")?));
+        assert!(carbon.has_silicon_visibility(&SiliconId::new("si:cos")?));
 
         let organization = OrganizationId::new("tos")?;
-        let silicon = SiliconId::new("cos:tos")?;
-        let endpoint = Url::parse("https://hook.example.test/silicon/cos:tos/A1B2C3D4")?;
-        let token = SecretString::from("local:silicon:member:cos:tos");
+        let silicon = SiliconId::new("si:cos")?;
+        let endpoint = Url::parse("https://hook.example.test/silicon/si:cos/A1B2C3D4")?;
+        let token = SecretString::from("local:silicon:member:si:cos");
         let first = client
             .register_silicon_webhook(&token, &organization, &silicon, &endpoint, "k")
             .await?;

@@ -31,6 +31,11 @@ async fn main() {
         }
     };
     let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
+    // Silicon runtimes select the organization through the shared SILICON_ORG
+    // variable. --org and SILICON_HOOK_ORG still take precedence.
+    if cli.org.is_none() {
+        cli.org = shared_org(std::env::var("SILICON_ORG").ok());
+    }
     if !cli.production && cli.test.is_none() {
         cli.test = LockedStore::open()
             .ok()
@@ -378,7 +383,10 @@ async fn run(cli: &Cli) -> Result<()> {
                 }
             } else {
                 p.session = Some(session);
-                p.org = org;
+                // A Silicon login token carries no organization; keep the saved one.
+                if org.is_some() {
+                    p.org = org;
+                }
                 if let Some(silicon) = &cli.silicon {
                     p.silicon = Some(silicon.clone());
                 }
@@ -863,6 +871,13 @@ fn docs(topic: &str) -> Result<()> {
     };
     println!("{text}");
     Ok(())
+}
+
+/// A usable organization from the shared SILICON_ORG variable.
+fn shared_org(value: Option<String>) -> Option<String> {
+    value
+        .map(|org| org.trim().to_owned())
+        .filter(|org| !org.is_empty())
 }
 
 #[cfg(test)]

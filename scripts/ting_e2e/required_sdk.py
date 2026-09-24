@@ -19,7 +19,7 @@ def verify(directory, binary):
     if upstream.get("ting_commit") != "3253ea193c9fc244e6ef7e5fd818240ae0ad4782":
         raise RuntimeError("this regression requires the pinned Ting 0.1.4 fixture")
     actor, org = upstream["actor_id"], upstream["org_id"]
-    app, event_type = "tos>hook", "tos>hook.webhook.received"
+    app, event_type = "hook", "hook.webhook.received"
     key = upstream.setdefault("required_sdk_refresh_key", str(uuid.uuid4()))
     fixture.save(upstream)
     refreshed = fixture.request(backend["url"], "POST", "/api/v2/auth/refresh",

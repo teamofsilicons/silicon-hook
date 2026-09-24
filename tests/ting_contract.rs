@@ -144,12 +144,12 @@ async fn v2_is_preferred_and_shares_auth_management_and_test_selection() -> Resu
     for path in [
         "/api/v2/auth/iam",
         "/api/v2/auth/status",
-        "/api/v2/silicons/cos:tos/hooks",
+        "/api/v2/silicons/si:cos/hooks",
     ] {
         let (status, headers, _) = fixture
             .request(
                 Request::get(path)
-                    .header("authorization", "Bearer local:silicon:member:cos:tos")
+                    .header("authorization", "Bearer local:silicon:member:si:cos")
                     .header("x-org-id", "tos")
                     .header("silicon-hook-api-version", "v2")
                     .body(Body::empty())?,
@@ -184,10 +184,10 @@ async fn v2_is_preferred_and_shares_auth_management_and_test_selection() -> Resu
 async fn v2_refuses_every_legacy_delivery_surface_and_pins_the_requested_major() -> Result<()> {
     let fixture = Fixture::start().await?;
     for suffix in [
-        "/silicons/cos:tos/deliveries",
-        "/silicons/cos:tos/deliveries/pull",
-        "/silicons/cos:tos/deliveries/ack",
-        "/silicons/cos:tos/deliveries/cursor",
+        "/silicons/si:cos/deliveries",
+        "/silicons/si:cos/deliveries/pull",
+        "/silicons/si:cos/deliveries/ack",
+        "/silicons/si:cos/deliveries/cursor",
         "/ws",
         "/relay/ws",
     ] {
@@ -204,8 +204,8 @@ async fn v2_refuses_every_legacy_delivery_surface_and_pins_the_requested_major()
     }
     let (status, headers, _) = fixture
         .request(
-            Request::get("/api/v1/silicons/cos:tos/deliveries")
-                .header("authorization", "Bearer local:silicon:member:cos:tos")
+            Request::get("/api/v1/silicons/si:cos/deliveries")
+                .header("authorization", "Bearer local:silicon:member:si:cos")
                 .header("x-org-id", "tos")
                 .body(Body::empty())?,
         )
@@ -235,7 +235,7 @@ async fn scoped_receiver_is_v2_only_and_rejects_production() -> Result<()> {
     let (status, _, body) = fixture
         .request(
             Request::post("/api/v2/delivery/receiver")
-                .header("authorization", "Bearer local:silicon:member:cos:tos")
+                .header("authorization", "Bearer local:silicon:member:si:cos")
                 .header("x-org-id", "tos")
                 .header("content-type", "application/json")
                 .header("idempotency-key", "receiver-production-denied")

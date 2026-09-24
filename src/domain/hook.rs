@@ -1026,13 +1026,13 @@ mod tests {
         Ok(Hook::create(NewHook {
             id: HookId::new(),
             organization_id: OrganizationId::new("org:test")?,
-            silicon_id: SiliconId::new("silicon:test")?,
+            silicon_id: SiliconId::new("si:test")?,
             name: HookName::new("GitHub")?,
             description: HookDescription::optional(Some("Source events".to_owned()))?,
             endpoint_key: EndpointKey::parse("A0B1C2D3")?,
             signing: policy(1)?,
             time_zone: HookTimeZone::default(),
-            created_by: ActorRef::new(ActorKind::Carbon, ActorId::new("carbon:test")?),
+            created_by: ActorRef::new(ActorKind::Carbon, ActorId::new("c:test")?),
             created_at: datetime!(2026-01-01 0:00 UTC),
         }))
     }

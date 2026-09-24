@@ -465,7 +465,7 @@ export function Live(p: { ctx: Context }) {
             value={ids()}
             disabled={state() !== "Disconnected"}
             onInput={(e) => setIds(e.currentTarget.value)}
-            placeholder="cos:tos, ops:tos"
+            placeholder="si:cos, si:ops"
           />
         </Field>
         <div class="actions">

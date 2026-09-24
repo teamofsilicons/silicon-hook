@@ -40,8 +40,8 @@ async fn byos_creation_and_replacement_keep_test_routing_and_policy_fields()
             "/api/version",
             get(|| async { Json(json!({"service":"silicon-hook", "selected_api_version":"v2"})) }),
         )
-        .route("/api/v2/silicons/cos:tos/hooks", post(record))
-        .route("/api/v2/silicons/cos:tos/hooks/{id}", patch(record))
+        .route("/api/v2/silicons/si:cos/hooks", post(record))
+        .route("/api/v2/silicons/si:cos/hooks/{id}", patch(record))
         .with_state(calls.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let client = Client::new(&format!("http://{}", listener.local_addr()?))?
@@ -61,14 +61,14 @@ async fn byos_creation_and_replacement_keep_test_routing_and_policy_fields()
     assert!(!format!("{creation:?}").contains("first secret"));
     assert!(
         client
-            .create_hook("cos:tos", &creation, &Mutation::default())
+            .create_hook("si:cos", &creation, &Mutation::default())
             .await
             .is_err()
     );
     assert!(
         client
             .set_secret(
-                "cos:tos",
+                "si:cos",
                 uuid::Uuid::new_v4(),
                 Secret::new("736563726574"),
                 Some("hex".into()),

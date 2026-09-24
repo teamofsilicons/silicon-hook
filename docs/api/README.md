@@ -233,7 +233,7 @@ The event payload carried by Ting is:
     "metadata": {
       "id": "0198c21a-6330-7000-8000-000000000001",
       "org_id": "tos",
-      "silicon_id": "cos:tos",
+      "silicon_id": "si:cos",
       "hook_id": "0198c21a-6330-7000-8000-000000000002",
       "delivery_sequence": 42,
       "received_at": "2026-09-22T10:00:00Z",
@@ -300,8 +300,8 @@ GET and POST return `200`:
   "subscription": {
     "id": "0198c21a-6330-7000-8000-000000000003",
     "org_id": "tos",
-    "silicon_id": "cos:tos",
-    "recipient_id": "alice",
+    "silicon_id": "si:cos",
+    "recipient_id": "c:alice",
     "created_at": "2026-09-22T10:00:00Z"
   }
 }
@@ -350,11 +350,11 @@ WebSocket delivery. Authenticate the upgrade request like a management call (`Au
 Server frames:
 
 ```json
-{"type":"ready","protocol_version":1,"connection_id":"...","silicon_ids":["cos:tos"],
- "acknowledged_through":{"cos:tos":41},"heartbeat_interval_seconds":30,"heartbeat_timeout_seconds":120}
+{"type":"ready","protocol_version":1,"connection_id":"...","silicon_ids":["si:cos"],
+ "acknowledged_through":{"si:cos":41},"heartbeat_interval_seconds":30,"heartbeat_timeout_seconds":120}
 {"type":"ping","ping_id":"..."}
 {"type":"new_event","data":{"sender":"stripe","metadata":{...Event...}}}
-{"type":"ack_recorded","silicon_id":"cos:tos","acknowledged_through":42}
+{"type":"ack_recorded","silicon_id":"si:cos","acknowledged_through":42}
 {"type":"error","code":"invalid_frame","message":"...","recoverable":true}
 ```
 
@@ -362,8 +362,8 @@ Client frames:
 
 ```json
 {"type":"pong","ping_id":"..."}
-{"type":"ack","silicon_id":"cos:tos","through_sequence":42}
-{"type":"resume","silicon_id":"cos:tos","after_sequence":40}
+{"type":"ack","silicon_id":"si:cos","through_sequence":42}
+{"type":"resume","silicon_id":"si:cos","after_sequence":40}
 ```
 
 Hook event deliveries contain exactly `type` and `data` at the top level.
@@ -395,7 +395,7 @@ Reads the consumer's acknowledged position.
 ## Sign-in
 
 Both Carbons and Silicons sign in with a short-lived token issued by IAM for
-`tos>hook`. Tokens are opaque. Do not infer their validity from a prefix.
+`hook`. Tokens are opaque. Do not infer their validity from a prefix.
 There is no password, OTP, redirect or callback endpoint in Hook.
 
 ### `POST /auth/login`

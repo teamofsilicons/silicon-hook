@@ -5,7 +5,7 @@ import type { TingSession } from "./session.ts";
 import type { ReceiverCapability } from "./receiver.ts";
 
 export const PRODUCTION = "00000000-0000-0000-0000-000000000000";
-export const TING_APP = "tos>ting";
+export const TING_APP = "ting";
 export interface DeliveryContext {
   appId: string;
   org: string;

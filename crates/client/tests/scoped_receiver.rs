@@ -26,7 +26,7 @@ const ENV: &str = "0198c21a-6330-7000-8000-000000000001";
 const ORG: &str = "0198c21a-6330-7000-8000-000000000002";
 
 fn scope_json() -> Value {
-    json!({"app_id":"tos>hook","for":"worker:tos","kind":"silicon","org_id":ORG,"hook_org_id":"tos",
+    json!({"app_id":"hook","for":"si:worker","kind":"silicon","org_id":ORG,"hook_org_id":"tos",
         "environment":{"kind":"testing","id":ENV,"generation":7}})
 }
 
@@ -96,10 +96,10 @@ async fn handle(State(fixture): State<Fixture>, request: Request) -> Response {
     let response = match (parts.method.as_str(), path) {
         ("GET", "/api/version") => json!({"service":"silicon-hook","selected_api_version":"v2"}),
         ("GET", "/api/v2/auth/iam") => {
-            json!({"app_id":"tos>hook","iam_url":"https://iam.example","testing":true,"login_method":"slt"})
+            json!({"app_id":"hook","iam_url":"https://iam.example","testing":true,"login_method":"slt"})
         }
         ("GET", "/api/v2/auth/status") => {
-            json!({"authenticated":true,"actor":{"id":"worker:tos","type":"silicon"},"org_id":"tos"})
+            json!({"authenticated":true,"actor":{"id":"si:worker","type":"silicon"},"org_id":"tos"})
         }
         ("GET", "/api/v2/testing-session") => {
             json!({"id":ENV,"org_id":"tos","creator_kind":"carbon","creator_id":"owner:tos","name":"fixture","description":null,"generation":99,"created_at":"2026-09-22T12:00:00Z","last_activity_at":"2026-09-22T12:00:00Z","deleted_at":null})
@@ -183,8 +183,8 @@ async fn capability_requires_exact_scope_token_and_bounded_expiry() -> TestResul
     let mutation = Mutation::with_key("wrong-response")?;
     let valid = capability(OffsetDateTime::now_utc() + time::Duration::seconds(20));
     for (field, value) in [
-        ("app_id", json!("tos>other")),
-        ("for", json!("other:tos")),
+        ("app_id", json!("other")),
+        ("for", json!("si:other")),
         ("kind", json!("carbon")),
         ("kind", json!("unexpected-upstream-secret")),
         ("org_id", json!(Uuid::new_v4())),
@@ -233,8 +233,8 @@ async fn capability_requires_exact_scope_token_and_bounded_expiry() -> TestResul
 async fn scope_attestation_matches_live_actor_app_and_selected_environment() -> TestResult {
     let server = Server::start().await?;
     for (field, value) in [
-        ("app_id", json!("tos>other")),
-        ("for", json!("other:tos")),
+        ("app_id", json!("other")),
+        ("for", json!("si:other")),
         ("kind", json!("carbon")),
         ("org_id", json!(Uuid::nil())),
         ("hook_org_id", json!("other")),
@@ -316,7 +316,7 @@ async fn production_and_unbound_context_fail_before_network_or_mutation() -> Tes
 
 #[test]
 fn publication_models_keep_required_delivery_separate_from_muting_and_receipts() -> TestResult {
-    let mut value = json!({"event_id":Uuid::new_v4(),"recipient_id":"worker:tos","state":"accepted_by_ting","delivery":"required","silent":true,
+    let mut value = json!({"event_id":Uuid::new_v4(),"recipient_id":"si:worker","state":"accepted_by_ting","delivery":"required","silent":true,
         "attempts":1,"ting_id":"ting_fixture","last_error_code":null,"accepted_at":"2026-09-22T12:00:00Z","next_attempt_at":"2026-09-22T12:00:00Z",
         "expires_at":"2026-10-06T12:00:00Z","recipient_receipt":{"id":"ting_fixture","read":false,"silent":true,"delivery":"required","deliveries":[],"more_destinations":false},"recipient_status_error":null});
     let status: PublicationStatus = serde_json::from_value(value.clone())?;
@@ -334,7 +334,7 @@ fn publication_models_keep_required_delivery_separate_from_muting_and_receipts()
         assert!(serde_json::from_value::<PublicationStatus>(value.clone()).is_err());
     }
     let grant: RecipientRegistration = serde_json::from_value(
-        json!({"id":"sub_fixture","app_id":"tos>hook","for":"worker:tos","active":true,"required_delivery":false}),
+        json!({"id":"sub_fixture","app_id":"hook","for":"si:worker","active":true,"required_delivery":false}),
     )?;
     assert!(!grant.required_delivery);
     Ok(())

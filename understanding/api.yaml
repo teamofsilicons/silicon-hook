@@ -190,9 +190,9 @@ paths:
               data:
                 connection_id: 01995b2a-0000-7000-8000-000000000001
                 silicon_ids:
-                  - cos:tos
+                  - si:cos
                 acknowledged_through:
-                  cos:tos: 6
+                  si:cos: 6
           - name: ping
             direction: server → client
             description: Every 30 seconds; answer with ping.success carrying the exact ping_id. Heartbeats are never sequenced or
@@ -229,15 +229,15 @@ paths:
                 metadata:
                   id: 01995b2a-2000-7000-8000-000000000001
                   org_id: tos
-                  silicon_id: cos:tos
+                  silicon_id: si:cos
                   hook_id: 01995b2a-0000-7000-8000-000000000002
                   provider: github
                   delivery_sequence: 7
                   received_at: 2026-09-17T15:30:00Z
                   request:
                     method: POST
-                    url: https://hook.example/silicon/cos:tos/example-key?source=repo
-                    path: /silicon/cos:tos/example-key
+                    url: https://hook.example/silicon/si:cos/example-key?source=repo
+                    path: /silicon/si:cos/example-key
                     query_string: source=repo
                     headers:
                       - - content-type
@@ -255,7 +255,7 @@ paths:
             example:
               type: ack
               data:
-                silicon_id: cos:tos
+                silicon_id: si:cos
                 through_sequence: 7
           - name: ack.success
             direction: server → client
@@ -264,7 +264,7 @@ paths:
             example:
               type: ack.success
               data:
-                silicon_id: cos:tos
+                silicon_id: si:cos
                 through_sequence: 7
           - name: ack.error
             direction: server → client
@@ -275,7 +275,7 @@ paths:
                 code: invalid_ack
                 message: through_sequence exceeds the last emitted sequence.
                 recoverable: true
-                silicon_id: cos:tos
+                silicon_id: si:cos
                 through_sequence: 999
           - name: resume
             direction: client → server
@@ -284,7 +284,7 @@ paths:
             example:
               type: resume
               data:
-                silicon_id: cos:tos
+                silicon_id: si:cos
                 after_sequence: 6
           - name: resume.success
             direction: server → client
@@ -293,7 +293,7 @@ paths:
             example:
               type: resume.success
               data:
-                silicon_id: cos:tos
+                silicon_id: si:cos
                 after_sequence: 6
           - name: resume.error
             direction: server → client
@@ -304,7 +304,7 @@ paths:
                 code: invalid_resume
                 message: after_sequence must not be negative.
                 recoverable: true
-                silicon_id: cos:tos
+                silicon_id: si:cos
                 after_sequence: -1
           - name: connection.error
             direction: server → client
@@ -388,7 +388,7 @@ paths:
                 token: <access_token>
                 org_id: tos
                 silicon_ids:
-                  - cos:tos
+                  - si:cos
           - name: "subscribe: second profile"
             direction: client → server
             description: Another profile on the same socket, with independent credentials and stream selection.
@@ -399,7 +399,7 @@ paths:
                 token: <ops_access_token>
                 org_id: tos
                 silicon_ids:
-                  - ops:tos
+                  - si:ops
           - name: "subscribe: testing"
             direction: client → server
             description: Testing uses a test actor token and app_secret OR test_key. Omit both selectors for production.
@@ -410,7 +410,7 @@ paths:
                 token: <test_access_token>
                 org_id: tos
                 silicon_ids:
-                  - cos:tos
+                  - si:cos
                 app_secret: <test_app_secret>
           - name: "channel: subscribe.success"
             direction: server → client
@@ -424,9 +424,9 @@ paths:
                   data:
                     connection_id: 01995b2a-0000-7000-8000-000000000001
                     silicon_ids:
-                      - cos:tos
+                      - si:cos
                     acknowledged_through:
-                      cos:tos: 6
+                      si:cos: 6
           - name: "channel: subscribe.error"
             direction: server → client
             description: Only this subscription was rejected. The physical connection and other subscriptions remain usable.
@@ -530,15 +530,15 @@ paths:
                     metadata:
                       id: 01995b2a-2000-7000-8000-000000000001
                       org_id: tos
-                      silicon_id: cos:tos
+                      silicon_id: si:cos
                       hook_id: 01995b2a-0000-7000-8000-000000000002
                       provider: github
                       delivery_sequence: 7
                       received_at: 2026-09-17T15:30:00Z
                       request:
                         method: POST
-                        url: https://hook.example/silicon/cos:tos/example-key?source=repo
-                        path: /silicon/cos:tos/example-key
+                        url: https://hook.example/silicon/si:cos/example-key?source=repo
+                        path: /silicon/si:cos/example-key
                         query_string: source=repo
                         headers:
                           - - content-type
@@ -560,7 +560,7 @@ paths:
                 frame:
                   type: ack
                   data:
-                    silicon_id: cos:tos
+                    silicon_id: si:cos
                     through_sequence: 7
           - name: "channel: ack.success"
             direction: server → client
@@ -573,7 +573,7 @@ paths:
                 frame:
                   type: ack.success
                   data:
-                    silicon_id: cos:tos
+                    silicon_id: si:cos
                     through_sequence: 7
           - name: "channel: ack.error"
             direction: server → client
@@ -589,7 +589,7 @@ paths:
                     code: invalid_ack
                     message: through_sequence exceeds the last emitted sequence.
                     recoverable: true
-                    silicon_id: cos:tos
+                    silicon_id: si:cos
                     through_sequence: 999
           - name: "channel: resume"
             direction: client → server
@@ -602,7 +602,7 @@ paths:
                 frame:
                   type: resume
                   data:
-                    silicon_id: cos:tos
+                    silicon_id: si:cos
                     after_sequence: 6
           - name: "channel: resume.success"
             direction: server → client
@@ -615,7 +615,7 @@ paths:
                 frame:
                   type: resume.success
                   data:
-                    silicon_id: cos:tos
+                    silicon_id: si:cos
                     after_sequence: 6
           - name: "channel: resume.error"
             direction: server → client
@@ -630,7 +630,7 @@ paths:
                     code: invalid_resume
                     message: after_sequence must not be negative.
                     recoverable: true
-                    silicon_id: cos:tos
+                    silicon_id: si:cos
                     after_sequence: -1
           - name: "channel: connection.error"
             direction: server → client

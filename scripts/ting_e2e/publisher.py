@@ -106,7 +106,7 @@ def verify(directory, binary):
         if registration.get("for") != recipient or not registration.get("active"):
             raise RuntimeError("secondary recipient was not registered")
         ting_session = fixture.request(state["ting_url"], "POST", "/v1/session",
-            {"slt": fixture.slt(state, "recipient", "tos>ting")},
+            {"slt": fixture.slt(state, "recipient", "ting")},
             headers={"Idempotency-Key": str(uuid.uuid4())}, expected=(200, 201))["session_token"]
         provider = call("recipient", [*target, "create", "publisher-cli-real-delivery"])
         body = json.dumps({"source": "publisher CLI", "run": str(uuid.uuid4())}, separators=(",", ":")).encode()

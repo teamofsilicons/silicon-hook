@@ -7,7 +7,7 @@ use uuid::Uuid;
     version,
     about = "Manage signed provider webhooks and their delivery status.",
     long_about = "Manage Silicon Hook through its official Rust client. Sign in with an IAM short-lived token. Applications handle receiving internally; this CLI does not run a delivery daemon. Use the same commands in a sandbox with --test <environment-id>.",
-    after_help = "Start: hook iam --json; hook login <slt> --org tos\nThen: hook --silicon cos:tos create GitHub\nInspect: hook events; hook publication <event-id>\nExplore: hook commands; hook <command> --help\nDocs: https://docs.hook.teamofsilicons.com · Source: https://github.com/teamofsilicons/silicon-hook\nRust: https://crates.io/crates/silicon-hook-client · Bugs: hook report --help"
+    after_help = "Start: hook iam --json; hook login <slt> --org tos\nThen: hook --silicon si:cos create GitHub\nInspect: hook events; hook publication <event-id>\nExplore: hook commands; hook <command> --help\nDocs: https://docs.hook.teamofsilicons.com · Source: https://github.com/teamofsilicons/silicon-hook\nRust: https://crates.io/crates/silicon-hook-client · Bugs: hook report --help"
 )]
 pub struct Cli {
     #[arg(
@@ -34,7 +34,7 @@ pub struct Cli {
     #[arg(
         long,
         global = true,
-        help = "Target Silicon, e.g. cos:tos; defaults to the signed-in Silicon"
+        help = "Target Silicon, e.g. si:cos; defaults to the signed-in Silicon"
     )]
     pub silicon: Option<String>,
     #[arg(

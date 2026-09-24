@@ -9,7 +9,7 @@ use super::{IamClient, IamError, sdk_error};
 use crate::domain::{ActorKind, ActorRef, OrganizationId};
 use crate::infrastructure::ting::{TingProof, TingTestingCredentials};
 
-const TING_APPLICATION: &str = "tos>ting";
+const TING_APPLICATION: &str = "ting";
 
 impl IamClient {
     /// Resolve Ting's organization UUID from current IAM authority, not response aliases.

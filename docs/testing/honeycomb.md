@@ -7,7 +7,7 @@ Honeycomb creates and manages shared test environments. Hook prepares and cleans
 Apply migration 9 to both Hook databases and reapply `deploy/postgres/grant-runtime.sql`. Configure the API with:
 
 - `HOOK_TEST_DATABASE_URL`: the separate shared-test database.
-- `HOOK_IAM_APP_ID`: Hook's application ID (`tos>hook` for the hosted service).
+- `HOOK_IAM_APP_ID`: Hook's application ID (`hook` for the hosted service).
 - `HOOK_HONEYCOMB_SERVICE_TOKEN`: a dedicated secret of at least 32 visible ASCII characters, provisioned by deployment secret management.
 - `HOOK_HONEYCOMB_URL`: trusted coordinator origin for activity reports; defaults to `https://backend.honeycomb.teamofsilicons.com`. HTTPS is required outside loopback development.
 

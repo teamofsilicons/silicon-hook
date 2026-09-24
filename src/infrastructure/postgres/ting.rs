@@ -597,18 +597,18 @@ mod tests {
 
     #[test]
     fn prepared_requests_cannot_cross_tenants_or_contain_auth_fields() {
-        let valid = br#" { "org_id":"tos", "for":"si_test", "type":"tos>hook.event.received", "key":"event-key", "data":{} } "#;
+        let valid = br#" { "org_id":"tos", "for":"si_test", "type":"hook.event.received", "key":"event-key", "data":{} } "#;
         assert_eq!(
             prepared_key(valid, "tos", "si_test").ok().as_deref(),
             Some("event-key")
         );
         assert!(prepared_key(valid, "another-org", "si_test").is_err());
         assert!(prepared_key(valid, "tos", "another-recipient").is_err());
-        let secret = br#"{"org_id":"tos","for":"si_test","type":"tos>hook.event.received","key":"k","data":{},"proof_token":"secret"}"#;
+        let secret = br#"{"org_id":"tos","for":"si_test","type":"hook.event.received","key":"k","data":{},"proof_token":"secret"}"#;
         let result = prepared_key(secret, "tos", "si_test");
         assert!(result.is_err());
         assert!(!format!("{result:?}").contains("secret"));
-        let duplicate = br#"{"org_id":"foreign","org_id":"tos","for":"si_test","type":"tos>hook.event.received","key":"k","data":{}}"#;
+        let duplicate = br#"{"org_id":"foreign","org_id":"tos","for":"si_test","type":"hook.event.received","key":"k","data":{}}"#;
         assert!(prepared_key(duplicate, "tos", "si_test").is_err());
     }
 
@@ -673,7 +673,7 @@ mod tests {
         .bind(event.expires_at())
         .execute(&mut *transaction)
         .await?;
-        let body = br#" { "org_id":"tos", "for":"si_test", "type":"tos>hook.event.received", "key":"event-key", "data":{} } "#;
+        let body = br#" { "org_id":"tos", "for":"si_test", "type":"hook.event.received", "key":"event-key", "data":{} } "#;
         enqueue_ting(&mut transaction, &event, "si_test", body).await?;
         transaction.rollback().await?;
         assert_eq!(

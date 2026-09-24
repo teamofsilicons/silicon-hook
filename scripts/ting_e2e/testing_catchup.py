@@ -22,13 +22,13 @@ import testing_web
 
 def verify(directory, node):
     state, backend = fixture.load(directory), hook.load(directory)
-    actor = "hook-testing:tos"
+    actor = "si:hook-testing"
     testing_hook.prepare_delivery(state, backend)
     observer, website, stream, report = None, None, None, None
     prior = None
     pref_path = "/v1/orgs/tos/preferences"
-    pref_body = {"app_id": "tos>hook", "service": None, "type": "tos>hook.webhook.received"}
-    pref_query = pref_path + "?" + urllib.parse.urlencode({"app_id": "tos>hook", "type": pref_body["type"]})
+    pref_body = {"app_id": "hook", "service": None, "type": "hook.webhook.received"}
+    pref_query = pref_path + "?" + urllib.parse.urlencode({"app_id": "hook", "type": pref_body["type"]})
     began = time.monotonic()
     try:
         observer = testing_web.operator(state, "test-admin")
@@ -98,8 +98,8 @@ def verify(directory, node):
         for _ in range(2):
             time.sleep(30); print("SCOPED_CATCHUP_SETUP natural rate-window wait", flush=True)
         website = testing_web.Website(state, backend, node)
-        website.request("POST", "/console/attach", {"app_secret": state["imports"]["tos>hook"]["app_secret"]})
-        slt = testing.cli(state, "test-admin", ["login", "--app-id", "tos>hook", "--grant-org", "tos", "--approve-scopes"])["slt"]
+        website.request("POST", "/console/attach", {"app_secret": state["imports"]["hook"]["app_secret"]})
+        slt = testing.cli(state, "test-admin", ["login", "--app-id", "hook", "--grant-org", "tos", "--approve-scopes"])["slt"]
         website.request("POST", website.path("/console/login"), {"slt": slt})
         url = website.origin.replace("http://", "ws://") + "/console/stream?" + urllib.parse.urlencode({"plane": state["environment_id"], "org": "tos", "silicon_id": actor, "telemetry": "off"})
         stream = websocket.create_connection(url, cookie="; ".join(f"{c.name}={c.value}" for c in website.jar), origin=website.origin, timeout=2)

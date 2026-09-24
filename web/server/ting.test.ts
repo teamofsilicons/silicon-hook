@@ -23,7 +23,7 @@ const orgUuid = "a044c552-2e3f-4012-9672-72d1b1518401";
 const eid = "00000000-0000-7000-8000-000000000001",
   hid = "00000000-0000-7000-8000-000000000002";
 const context: DeliveryContext = {
-  appId: "tos>hook",
+  appId: "hook",
   org,
   tingOrg: orgUuid,
   actor,
@@ -48,7 +48,7 @@ function notification(id = eid, tingId = "msg_one"): Notification {
   return {
     id: tingId,
     created_at: "2026-09-23T10:00:01Z",
-    type: "tos>hook.webhook.received",
+    type: "hook.webhook.received",
     for: actor.id,
     key: `hook:${id}:${createHash("sha256").update(actor.id).digest("hex")}`,
     data: {
@@ -127,7 +127,7 @@ async function fixture() {
   const receiverOperations = new Map<string, any>();
   const receiverSockets = new Map<WebSocket, any>();
   const receiverScope = () => ({
-    app_id: "tos>hook",
+    app_id: "hook",
     for: actor.id,
     kind: actor.type,
     hook_org_id: org,
@@ -170,7 +170,7 @@ async function fixture() {
         });
       case "/api/v2/auth/iam":
         return reply({
-          app_id: "tos>hook",
+          app_id: "hook",
           testing: !!(
             req.headers["x-hook-test-key"] ||
             req.headers["x-hook-test-app-secret"]
@@ -178,7 +178,7 @@ async function fixture() {
           iam_url: upstreamOrigin,
         });
       case "/v1/iam":
-        return reply({ app_id: "tos>ting" });
+        return reply({ app_id: "ting" });
       case "/api/v2/auth/login": {
         state.hookLogins++;
         if (body.slt === "invalid-token") return fail(401, "invalid_slt");
@@ -320,15 +320,15 @@ async function fixture() {
         )
           return fail(401, "receiver_expired");
         assert.equal(url.searchParams.get("app_id"), null);
-        assert.equal(url.searchParams.get("type"), "tos>hook.webhook.received");
+        assert.equal(url.searchParams.get("type"), "hook.webhook.received");
         assert.ok(
           String(req.headers.authorization).startsWith("Bearer ting_recv_"),
         );
         return reply({ items: state.inbox.slice(0, 32) });
       }
       case `/v1/orgs/${orgUuid}/inbox`:
-        assert.equal(url.searchParams.get("app_id"), "tos>hook");
-        assert.equal(url.searchParams.get("type"), "tos>hook.webhook.received");
+        assert.equal(url.searchParams.get("app_id"), "hook");
+        assert.equal(url.searchParams.get("type"), "hook.webhook.received");
         return reply({
           items: state.inbox.slice(0, Number(url.searchParams.get("limit"))),
           ...(state.inbox.length > 32
@@ -455,14 +455,14 @@ async function fixture() {
     const result = await call("/console/login/start", "POST");
     assert.equal(result.status, 200);
     const url = new URL(result.data.authorize_url);
-    assert.equal(url.searchParams.get("app_ids"), "tos>hook,tos>ting");
+    assert.equal(url.searchParams.get("app_ids"), "hook,ting");
     return new URL(url.searchParams.get("redirect_uri")!).searchParams.get(
       "state",
     )!;
   };
   const pair = [
-    { app_id: "tos>hook", slt: "private-hook-slt" },
-    { app_id: "tos>ting", slt: "private-ting-slt" },
+    { app_id: "hook", slt: "private-hook-slt" },
+    { app_id: "ting", slt: "private-ting-slt" },
   ];
   const signIn = async () => {
     const state = await start();
@@ -1273,7 +1273,7 @@ test("reference checks reject context and immutable-payload mismatches before hy
       item.key = "wrong";
     },
     (item: any) => {
-      item.type = "tos>other.webhook.received";
+      item.type = "other.webhook.received";
     },
     (item: any) => {
       item.data.type = "wrong";

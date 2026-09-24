@@ -25,7 +25,7 @@ let login = Mutation::new();
 let tokens = base.login(&slt, &login).await?;
 let client = base.with_token(tokens.access_token.expose())
     .with_organization("tos");
-let hooks = client.list_hooks("cos:tos", false).await?;
+let hooks = client.list_hooks("si:cos", false).await?;
 println!("{} hooks", hooks.items.len());
 # Ok(()) }
 ```
@@ -98,10 +98,10 @@ verification. A `Signature` override changes only supplied fields.
 ```rust,no_run
 # async fn example(client: &silicon_hook_client::Client) -> silicon_hook_client::Result<()> {
 use silicon_hook_client::{Mutation, models::{CreateHook, UpdateHook}};
-let created = client.create_hook("cos:tos", &CreateHook {
+let created = client.create_hook("si:cos", &CreateHook {
     name: "GitHub".into(), ..Default::default()
 }, &Mutation::new()).await?;
-client.update_hook("cos:tos", created.hook.id, &UpdateHook {
+client.update_hook("si:cos", created.hook.id, &UpdateHook {
     description: Some(None), ..Default::default()
 }, &Mutation::new()).await?;
 # Ok(()) }
@@ -174,7 +174,7 @@ the environment variables documented in its source.
 ```rust,no_run
 # async fn example(client: &silicon_hook_client::Client) -> silicon_hook_client::Result<()> {
 use silicon_hook_client::{Mutation, Secret, models::{CreateHook, Signature}};
-let created = client.create_hook("cos:tos", &CreateHook {
+let created = client.create_hook("si:cos", &CreateHook {
     name: "Provider".into(),
     signature: Some(Signature {
         secret: Some(Secret::new("provider-secret")),
@@ -183,7 +183,7 @@ let created = client.create_hook("cos:tos", &CreateHook {
     }),
     ..CreateHook::default()
 }, &Mutation::new()).await?;
-client.set_secret("cos:tos", created.hook.id,
+client.set_secret("si:cos", created.hook.id,
     Secret::new("replacement-secret"), None, &Mutation::new()).await?;
 # Ok(()) }
 ```

@@ -610,7 +610,7 @@ mod tests {
     ) -> Result<CapturedRequest, Box<dyn std::error::Error>> {
         Ok(CapturedRequest::new(CapturedRequestParts {
             method: "POST".to_owned(),
-            url: Url::parse("https://hook.example.test/silicon/cos:tos/A1B2C3?z=1&a=2&a=1")?,
+            url: Url::parse("https://hook.example.test/silicon/si:cos/A1B2C3?z=1&a=2&a=1")?,
             headers: headers
                 .iter()
                 .map(|(name, value)| ((*name).to_owned(), (*value).to_owned()))
@@ -625,7 +625,7 @@ mod tests {
         let context = EvalContext {
             request,
             hook_id: "018eb4ce-e57a-7d2c-8f9f-a35928ef91e1",
-            hook_url: "https://hook.example.test/silicon/cos:tos/A1B2C3D4",
+            hook_url: "https://hook.example.test/silicon/si:cos/A1B2C3D4",
             secret: Some(b"shh"),
             public_key: None,
         };
@@ -695,7 +695,7 @@ mod tests {
         assert_eq!(eval("request.port", &json)?, Value::Text("443".to_owned()));
         assert_eq!(
             eval("request.path", &json)?,
-            Value::Text("/silicon/cos:tos/A1B2C3".to_owned())
+            Value::Text("/silicon/si:cos/A1B2C3".to_owned())
         );
         assert_eq!(
             eval("hook.id", &json)?,
@@ -836,7 +836,7 @@ mod tests {
                 r#"join(separator: "\n", request.method, request.path)"#,
                 &request
             )?,
-            Value::Text("POST\n/silicon/cos:tos/A1B2C3".to_owned())
+            Value::Text("POST\n/silicon/si:cos/A1B2C3".to_owned())
         );
         assert_eq!(
             eval(

@@ -277,7 +277,7 @@ async fn build_dependencies(
             Arc::new(SystemClock),
             settings.server.public_base_url.clone(),
         )
-        .with_delivery_application(iam.application_id().unwrap_or("tos>hook")),
+        .with_delivery_application(iam.application_id().unwrap_or("hook")),
         ting: crate::infrastructure::ting::TingClient::new(
             settings.ting.base_url.as_str(),
             settings.ting.request_timeout,

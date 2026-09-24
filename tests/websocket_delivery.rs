@@ -35,7 +35,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream, tungstenite::Message};
 use url::Url;
 
-const SILICON_ID: &str = "cos:tos";
+const SILICON_ID: &str = "si:cos";
 const ORG_ID: &str = "tos";
 const FRAME_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -413,7 +413,7 @@ async fn shared_socket_is_prewarmed_and_keeps_each_identity_authorized() -> Resu
     let (mut socket, _) = tokio_tungstenite::connect_async(&url).await?;
     assert_eq!(next_json(&mut socket).await?["type"], "relay_ready");
     for (id, token) in [
-        ("silicon", "local:silicon:member:cos:tos"),
+        ("silicon", "local:silicon:member:si:cos"),
         ("carbon", "local:carbon:owner:alice"),
         ("denied", "local:silicon:member:other:tos"),
     ] {
@@ -476,7 +476,7 @@ async fn shared_socket_is_prewarmed_and_keeps_each_identity_authorized() -> Resu
         }
     }
     for (token, expected) in [
-        ("local:silicon:member:cos:tos", 1),
+        ("local:silicon:member:si:cos", 1),
         ("local:carbon:owner:alice", 0),
     ] {
         let cursor: Value = harness

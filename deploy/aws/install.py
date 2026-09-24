@@ -86,7 +86,7 @@ common = {
     'HOOK_DATABASE_MAX_CONNECTIONS': '6', 'HOOK_DATABASE_MIN_CONNECTIONS': '1',
     'HOOK_ENCRYPTION_KEYS': '1:' + creds['encryption'], 'HOOK_ENCRYPTION_CURRENT_VERSION': '1',
     'HOOK_CURSOR_SIGNING_KEY': creds['cursor'],
-    'HOOK_IAM_BASE_URL': 'https://backend.iam.teamofsilicons.com', 'HOOK_IAM_APP_ID': 'tos>hook',
+    'HOOK_IAM_BASE_URL': 'https://backend.iam.teamofsilicons.com', 'HOOK_IAM_APP_ID': 'hook',
     **iam,
 }
 telemetry = {}

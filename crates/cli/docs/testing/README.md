@@ -2,7 +2,7 @@
 
 ## Select a sandbox
 
-Create a shared test environment in Honeycomb and import `tos>hook`. Wait for shared readiness. Copy that application's **test app_secret** into a private file. Hook validates it with IAM and automatically finds the correct sandbox; there is no manual pairing or IAM root-key input.
+Create a shared test environment in Honeycomb and import `hook`. Wait for shared readiness. Copy that application's **test app_secret** into a private file. Hook validates it with IAM and automatically finds the correct sandbox; there is no manual pairing or IAM root-key input.
 
 ```sh
 hook env use --app-secret-file ./iam-test-app-secret

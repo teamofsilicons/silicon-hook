@@ -139,11 +139,11 @@ mod tests {
 
     #[test]
     fn actor_reference_matches_the_api_shape() -> Result<(), Box<dyn std::error::Error>> {
-        let actor = ActorRef::try_new(ActorKind::Silicon, "cos:tos")?;
+        let actor = ActorRef::try_new(ActorKind::Silicon, "si:cos")?;
 
         assert_eq!(
             serde_json::to_value(actor)?,
-            json!({"type": "silicon", "id": "cos:tos"})
+            json!({"type": "silicon", "id": "si:cos"})
         );
         Ok(())
     }
