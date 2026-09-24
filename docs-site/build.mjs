@@ -4,6 +4,10 @@ import { fileURLToPath } from "node:url";
 import { marked } from "marked";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const clientManifest = await readFile(path.join(root, "crates/client/Cargo.toml"), "utf8");
+const clientPackage = clientManifest.split(/^\[package\]\s*$/m)[1]?.split(/^\[/m)[0];
+const version = clientPackage?.match(/^version\s*=\s*"([^"]+)"\s*$/m)?.[1];
+if (!version) throw new Error("Missing package.version in crates/client/Cargo.toml");
 const source = path.join(root, "docs"),
   output = path.join(root, "docs-site/dist");
 const origin = "https://docs.hook.teamofsilicons.com";
@@ -85,7 +89,7 @@ for (const file of documents) {
         `<a href="${route(f)}"${f === file ? ' aria-current="page"' : ""}>${escape(titles.get(f))}</a>`,
     )
     .join("");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Hook Docs</title><meta name="description" content="Silicon Hook 0.8 documentation: ${escape(title)}"><link rel="canonical" href="${url}"><meta property="og:title" content="${escape(title)} · Hook Docs"><meta property="og:url" content="${url}"><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/styles.css"><script src="/search.js" defer></script></head><body><a class="skip" href="#main">Skip to content</a><header><a class="brand" href="/"><span>▣</span> Hook <small>Docs</small></a><label class="search-label" for="search">Search docs<input id="search" type="search" placeholder="Search the documentation" autocomplete="off" aria-controls="search-results"></label><a class="app-link" href="https://hook.teamofsilicons.com">Open Hook ↗</a></header><div id="search-results" hidden role="region" aria-label="Search results"></div><div class="layout"><aside><span class="version">VERSION · 0.8.0</span><nav aria-label="Documentation">${nav}</nav><a class="source" href="https://github.com/teamofsilicons/silicon-hook">Source on GitHub ↗</a></aside><main id="main"><div class="eyebrow">SILICON HOOK / DOCUMENTATION</div><article>${body}</article><footer>Silicon Hook · Client 0.8.0 · API v2 · <a href="/contracts/">Version policy</a></footer></main><nav class="toc" aria-label="On this page"><strong>On this page</strong>${headings.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}</nav></div></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Hook Docs</title><meta name="description" content="Silicon Hook ${escape(version)} documentation: ${escape(title)}"><link rel="canonical" href="${url}"><meta property="og:title" content="${escape(title)} · Hook Docs"><meta property="og:url" content="${url}"><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/styles.css"><script src="/search.js" defer></script></head><body><a class="skip" href="#main">Skip to content</a><header><a class="brand" href="/"><span>▣</span> Hook <small>Docs</small></a><label class="search-label" for="search">Search docs<input id="search" type="search" placeholder="Search the documentation" autocomplete="off" aria-controls="search-results"></label><a class="app-link" href="https://hook.teamofsilicons.com">Open Hook ↗</a></header><div id="search-results" hidden role="region" aria-label="Search results"></div><div class="layout"><aside><span class="version">VERSION · ${escape(version)}</span><nav aria-label="Documentation">${nav}</nav><a class="source" href="https://github.com/teamofsilicons/silicon-hook">Source on GitHub ↗</a></aside><main id="main"><div class="eyebrow">SILICON HOOK / DOCUMENTATION</div><article>${body}</article><footer>Silicon Hook · Client ${escape(version)} · API v2 · <a href="/contracts/">Version policy</a></footer></main><nav class="toc" aria-label="On this page"><strong>On this page</strong>${headings.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}</nav></div></body></html>`;
   const directory = path.join(output, route(file));
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, "index.html"), html);
@@ -122,4 +126,3 @@ await writeFile(
   '<!doctype html><html lang="en"><meta charset="utf-8"><title>Page not found · Hook Docs</title><link rel="stylesheet" href="/styles.css"><main><h1>Page not found</h1><a href="/">Return to Hook documentation</a></main></html>',
 );
 console.log(`Built ${documents.length} documentation pages for ${origin}`);
-
