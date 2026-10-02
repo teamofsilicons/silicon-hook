@@ -421,3 +421,25 @@ test("stale access and delayed refresh replies recover without changing mutation
     }
   }
 });
+
+test("gateway allows explicit Ting approval without exposing IAM token routes", () => {
+  assert.equal(allowed("/api/v1/delivery/authorization", "POST"), false);
+  for (const version of ["v2"]) {
+    for (const method of ["GET", "POST"])
+      assert.equal(
+        allowed(`/api/${version}/delivery/authorization`, method),
+        true,
+      );
+    for (const suffix of ["complete", "disconnect"]) {
+      assert.equal(
+        allowed(`/api/${version}/delivery/authorization/${suffix}`, "POST"),
+        true,
+      );
+      assert.equal(
+        allowed(`/api/${version}/delivery/authorization/${suffix}`, "GET"),
+        false,
+      );
+    }
+    assert.equal(allowed(`/api/${version}/obo-access/tokens`, "POST"), false);
+  }
+});

@@ -1,3 +1,5 @@
+> October 2026 cutover: see [separate Ting authorization](ting-delivery.md#separate-ting-authorization). Historical proofs and login consent no longer authorize active calls; dedicated encrypted endpoint grants are required.
+
 # Ting integration issues
 
 Checked on 2026-09-23: the live backend and published release are now **Ting 0.1.4**, with current source [`3fee4fc01e5b112fca42c9d7ca987ffdf40268e4`](https://github.com/teamofsilicons/silicon-ting/commit/3fee4fc01e5b112fca42c9d7ca987ffdf40268e4). This release adds the upstream mechanisms missing in 0.1.3. Historical reproductions below retain their original version and scope; they are not claims that the same bugs remain in 0.1.4.
@@ -44,13 +46,13 @@ The diagnostic is recorded under `testing_rate_limit_diagnostic` in the
 
 ## Background publishing needs actor authority
 
-Ting requires a new request-bound IAM OBO proof for each send. Hook's application secret alone cannot authorize a queued webhook after a user session expires. Sharing a caller's rotating refresh token between the caller and Hook's worker would create refresh races.
+Ting now requires a separately approved reusable OBO access token and verifies it on every send. Hook's application secret alone cannot authorize a queued webhook after a user session expires. Sharing a caller's rotating refresh token between the caller and Hook's worker would create refresh races.
 
 Implemented: a separate, encrypted, server-owned Hook publisher session, refreshed with durable operation keys. Its actor must have the required Ting external scopes and membership in the destination org. Revoked authority leaves sends pending with an actionable status, never bypassing IAM. Real IAM/Ting publication and backend refresh/recovery tests pass.
 
 The real CLI provisioning test also passes file/stdin replay with the same mutation key, refuses replacement of a healthy publisher, and confirms that publisher can still deliver a new event. Its report is included in [the current E2E record](verification/ting-e2e-2026-09-23.md).
 
-Evidence: [Ting app authentication](https://ting.teamofsilicons.com/docs/api.md#proof-bound-app-calls), IAM `OboExchangeRequest.subject_token`, and Hook's existing `/api/v1/auth/refresh` returning the rotated family to its caller.
+Evidence: [Ting app authentication](https://ting.teamofsilicons.com/docs/api.md#proof-bound-app-calls), IAM separate OBO authorization/token APIs, and Hook's existing `/api/v1/auth/refresh` returning the rotated family to its caller.
 
 ## Hook credentials cannot bootstrap a Ting receiver alone
 
@@ -82,11 +84,11 @@ Website receiving therefore requires Ting 0.1.3 or its compatible attestation co
 
 ## A Hook test app secret cannot bootstrap a Ting browser session
 
-**Upstream mechanism added in 0.1.4; Hook backend, SDK and CLI adopted.** `POST /v1/receivers/bootstrap` accepts a fresh request-bound IAM proof for `receivers.bootstrap`, using the audience testing headers issued for that exact request. Its signed body binds the Hook app, represented actor, canonical organization, environment UUID, generation and operation key. It requires an active recipient grant and approved scopes/consent, and rejects production proofs.
+**Upstream mechanism added in 0.1.4; Hook backend, SDK and CLI adopted.** `POST /v1/receivers/bootstrap` accepts a valid independently approved OBO access token for `receivers.bootstrap`, using the audience testing headers issued for that exact request. Its validated body selects the Hook app, represented actor, canonical organization, environment UUID, generation and operation key. It requires an active recipient grant and approved scopes/consent, and rejects production proofs.
 
 The returned secret capability lasts at most 30 seconds. It only reads/watches this app's inbox for that actor and testing generation through `/v1/receivers/{me,inbox,ws}`. It cannot send, acknowledge records, change preferences or attach a native destination. Keep it private, validate its complete context, and hydrate references under current Hook authorization.
 
-An exact retry with a fresh proof returns the original capability and expiry. Renewal requires a new operation key and the original `receiver_id`; it replaces the old token. Reconnect the watch with the renewed capability and reconcile the scoped inbox. Revocation uses `DELETE /v1/receivers/session`, including after expiry or disablement. Clean, rotation and grant loss fail closed.
+An exact retry with a valid OBO access token returns the original capability and expiry. Renewal requires a new operation key and the original `receiver_id`; it replaces the old token. Reconnect the watch with the renewed capability and reconcile the scoped inbox. Revocation uses `DELETE /v1/receivers/session`, including after expiry or disablement. Clean, rotation and grant loss fail closed.
 
 Hook now exposes authenticated testing scope discovery and bootstrap/renewal through `/api/v2/delivery/receiver`. It derives actor/app/organization from current authorization, verifies Ting's organization UUID through IAM, and requires the caller to pin the shared environment generation. Focused backend tests, all 29 SDK tests and all 29 CLI tests pass. Real Carbon and Silicon scoped receivers receive a signed 300,097-byte original through Hook publication, Ting watch/inbox and current-authority hydration; renewal invalidates the old capability and reconnect recovers the unread record. The CLI hands scoped capabilities to the enclosing runtime through a new private output file, with explicit retry identity and renewal. The website now owns private scoped renewal, inbox reconciliation and revocation; all 36 website tests and its build pass. Actual normal/scoped Chrome flows pass, including renewal, silent arrivals, unread observation and logout. General Ting test credentials must not be extracted or reused from a proof for an unrelated SLT login.
 

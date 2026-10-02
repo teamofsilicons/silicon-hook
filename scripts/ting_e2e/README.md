@@ -1,3 +1,5 @@
+> The October 2026 authorization cutover requires an IAM/Ting build with separate endpoint consent and reusable token verification. `fixture.py` and `testing.py` now approve fixture endpoint grants explicitly and reuse the approved access token. Historical pinned Ting release artifacts below predate this contract and must be replaced with the coordinated release before running those packaged fixtures. Their prior live evidence does not verify the new rollout.
+
 # Real IAM + Ting fixture
 
 This starts a fresh Docker PostgreSQL database, real IAM, and the published Ting
@@ -27,7 +29,7 @@ files are mode 0600. Failed runs retain their owned container list and private
 diagnostics for cleanup. Run cleanup on a failed fixture before starting again.
 
 The setup exercises real official IAM SLT issuance and application login,
-recipient OBO registration, request-bound OBO send, fresh-proof idempotent retry,
+recipient OBO registration, separately approved OBO send, reusable-token idempotent retry,
 websocket receipt of the exact event, delivery ACK (still unread), and read ACK.
 `verification.json` contains the non-secret result and limitations. Re-run with:
 
@@ -329,7 +331,7 @@ This starts a separate Docker network, IAM control and testing databases, and
 Ting server. IAM creates the test identities through signup, login and Silicon
 APIs. Authenticated lifecycle participant APIs prepare the environment, import
 the applications and activate private test configuration. Receiving uses only a
-Hook test login and fresh IAM OBO proofs with Ting's audience testing context.
+Hook test login and reusable IAM OBO access tokens with Ting's audience testing context.
 The direct protocol check covers Carbon and Silicon capability replay, scope,
 generation mismatch and revocation. Its sanitized report is
 `testing-prerequisite-verification.json` in the returned private directory.

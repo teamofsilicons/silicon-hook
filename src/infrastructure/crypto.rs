@@ -279,6 +279,71 @@ impl SecretCipher {
         self.encrypt(hook_id, &plaintext)
     }
 
+    /// Seal bounded dedicated credential JSON with a domain-specific context.
+    pub(crate) fn seal_credential(
+        &self,
+        aad: &[u8],
+        value: &serde_json::Value,
+    ) -> Result<serde_json::Value, SecretCipherError> {
+        let plaintext =
+            Zeroizing::new(serde_json::to_vec(value).map_err(|_| SecretCipherError::Encryption)?);
+        if plaintext.len() > 131_072 {
+            return Err(SecretCipherError::Encryption);
+        }
+        let mut nonce = [0_u8; 12];
+        getrandom::fill(&mut nonce).map_err(|_| SecretCipherError::Randomness)?;
+        let key = self.keyring.current_key()?;
+        let cipher =
+            Aes256Gcm::new_from_slice(key.as_bytes()).map_err(|_| SecretCipherError::Encryption)?;
+        let ciphertext = cipher
+            .encrypt(
+                Nonce::from_slice(&nonce),
+                Payload {
+                    msg: &plaintext,
+                    aad,
+                },
+            )
+            .map_err(|_| SecretCipherError::Encryption)?;
+        Ok(
+            serde_json::json!({"key_id":self.keyring.current_key_id().as_str(),"nonce":nonce,"ciphertext":ciphertext}),
+        )
+    }
+
+    pub(crate) fn open_credential(
+        &self,
+        aad: &[u8],
+        value: &serde_json::Value,
+    ) -> Result<serde_json::Value, SecretCipherError> {
+        #[derive(serde::Deserialize)]
+        struct Sealed {
+            key_id: String,
+            nonce: [u8; 12],
+            ciphertext: Vec<u8>,
+        }
+        let sealed: Sealed =
+            serde_json::from_value(value.clone()).map_err(|_| SecretCipherError::Authentication)?;
+        if !(17..=131_088).contains(&sealed.ciphertext.len()) {
+            return Err(SecretCipherError::Authentication);
+        }
+        let id =
+            EncryptionKeyId::new(sealed.key_id).map_err(|_| SecretCipherError::Authentication)?;
+        let key = self.keyring.key(&id)?;
+        let cipher = Aes256Gcm::new_from_slice(key.as_bytes())
+            .map_err(|_| SecretCipherError::Authentication)?;
+        let plain = Zeroizing::new(
+            cipher
+                .decrypt(
+                    Nonce::from_slice(&sealed.nonce),
+                    Payload {
+                        msg: &sealed.ciphertext,
+                        aad,
+                    },
+                )
+                .map_err(|_| SecretCipherError::Authentication)?,
+        );
+        serde_json::from_slice(&plain).map_err(|_| SecretCipherError::Authentication)
+    }
+
     /// Reports whether a stored value uses an older key version.
     #[must_use]
     pub fn needs_reencryption(&self, encrypted: &EncryptedSecret) -> bool {

@@ -66,7 +66,8 @@ pub struct ApiDependencies {
 }
 
 /// Builds the complete HTTP router.
-pub fn router(dependencies: ApiDependencies, server: &ServerSettings) -> axum::Router {
+pub fn router(mut dependencies: ApiDependencies, server: &ServerSettings) -> axum::Router {
+    dependencies.iam = dependencies.application.ting_iam(dependencies.iam);
     routes::router(
         ApiState {
             application: dependencies.application,
@@ -236,7 +237,8 @@ async fn build_dependencies(
     let cipher = Arc::new(build_secret_cipher(&settings.crypto)?);
     let iam = IamClient::connect(&settings.iam)
         .await
-        .context("failed to connect to Silicon IAM")?;
+        .context("failed to connect to Silicon IAM")?
+        .with_ting_grants(store.clone(), cipher.clone());
     let mut environments = if let Some(database) = &settings.test_database {
         Some(
             crate::application::environments::EnvironmentService::connect(

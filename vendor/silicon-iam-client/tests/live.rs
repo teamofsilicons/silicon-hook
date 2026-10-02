@@ -108,8 +108,8 @@ async fn enrol(anonymous: &Client, handle: &str, fixed_code: Option<&str>) -> Cl
         .complete(
             session,
             &models::CarbonSignupComplete {
-                carbon_id: handle.to_owned(),
-                display_name: handle.to_owned(),
+                carbon_id: Some(format!("c:{handle}")),
+                display_name: Some(handle.to_owned()),
                 timezone: None,
                 profile_photo: None,
             },
@@ -168,7 +168,7 @@ async fn the_client_speaks_the_contract_end_to_end() {
     let client = enrol(&anonymous, &handle, None).await;
 
     let me = client.carbons().me().await.expect("the caller's profile");
-    assert_eq!(me.carbon_id, handle);
+    assert_eq!(me.carbon_id, format!("c:{handle}"));
 
     // A profile update, which exercises merge-patch and If-Match together.
     let renamed = client
@@ -246,7 +246,7 @@ async fn the_client_speaks_the_contract_end_to_end() {
     // therefore guards both the public timestamp encoding and the tenant /
     // application RLS context each read needs after an application exists.
     let application_handle = unique("app");
-    let qualified_app_id = format!("{org_id}>{application_handle}");
+    let public_app_id = application_handle.clone();
     let created_application = client
         .applications()
         .create(
@@ -268,7 +268,7 @@ async fn the_client_speaks_the_contract_end_to_end() {
         )
         .await
         .expect("the application is created and its timestamps decode");
-    assert_eq!(created_application.application.app_id, qualified_app_id);
+    assert_eq!(created_application.application.app_id, public_app_id);
     assert!(
         created_application.application.updated_at >= created_application.application.created_at
     );
@@ -284,7 +284,7 @@ async fn the_client_speaks_the_contract_end_to_end() {
     let listed_application = applications
         .items
         .iter()
-        .find(|application| application.app_id == qualified_app_id)
+        .find(|application| application.app_id == public_app_id)
         .expect("the application is present in its owner's list");
     assert_eq!(listed_application.id, created_application.application.id);
 
@@ -313,7 +313,7 @@ async fn the_client_speaks_the_contract_end_to_end() {
 
     let fetched_application = client
         .applications()
-        .get(&qualified_app_id)
+        .get(&public_app_id)
         .await
         .expect("the newly created application reads through RLS");
     assert_eq!(fetched_application.id, created_application.application.id);
@@ -328,13 +328,13 @@ async fn the_client_speaks_the_contract_end_to_end() {
     // semantics, and revocation are all exercised against the real service.
     let consent = client
         .auth()
-        .login_organizations(&qualified_app_id)
+        .login_organizations(&public_app_id)
         .await
         .expect("scope consent");
     let short_lived = client
         .auth()
         .short_lived_token_for_organizations(
-            &qualified_app_id,
+            &public_app_id,
             std::slice::from_ref(&org_id),
             consent.scope_version,
             &consent
@@ -347,19 +347,19 @@ async fn the_client_speaks_the_contract_end_to_end() {
         .await
         .expect("an IAM-issued short-lived token");
     let application_client = anonymous.with_credential(Credential::application(
-        qualified_app_id.clone(),
+        public_app_id.clone(),
         created_application.app_secret.clone(),
     ));
 
     let login_mutation = Mutation::new();
     let application_tokens = application_client
         .oauth()
-        .login(&qualified_app_id, &short_lived.slt, &login_mutation)
+        .login(&public_app_id, &short_lived.slt, &login_mutation)
         .await
         .expect("the Application exchanges an SLT as a form request");
     let replayed_tokens = application_client
         .oauth()
-        .login(&qualified_app_id, &short_lived.slt, &login_mutation)
+        .login(&public_app_id, &short_lived.slt, &login_mutation)
         .await
         .expect("an exact token-exchange retry replays safely");
     assert_eq!(
@@ -373,7 +373,7 @@ async fn the_client_speaks_the_contract_end_to_end() {
 
     let spent_slt = application_client
         .oauth()
-        .login(&qualified_app_id, &short_lived.slt, &Mutation::new())
+        .login(&public_app_id, &short_lived.slt, &Mutation::new())
         .await;
     let Err(error) = spent_slt else {
         panic!("a spent SLT must not start another Application session");
@@ -398,7 +398,7 @@ async fn the_client_speaks_the_contract_end_to_end() {
     assert!(access_introspection.active);
     assert_eq!(
         access_introspection.client_id.as_deref(),
-        Some(qualified_app_id.as_str())
+        Some(public_app_id.as_str())
     );
     assert_eq!(access_introspection.org_id, None);
 
@@ -406,7 +406,7 @@ async fn the_client_speaks_the_contract_end_to_end() {
     let refreshed_tokens = application_client
         .oauth()
         .refresh(
-            &qualified_app_id,
+            &public_app_id,
             &application_tokens.refresh_token,
             &refresh_mutation,
         )
@@ -415,7 +415,7 @@ async fn the_client_speaks_the_contract_end_to_end() {
     let replayed_refresh = application_client
         .oauth()
         .refresh(
-            &qualified_app_id,
+            &public_app_id,
             &application_tokens.refresh_token,
             &refresh_mutation,
         )
@@ -642,7 +642,7 @@ async fn a_testing_environment_is_the_same_api_against_its_own_data() {
         .me()
         .await
         .expect("the environment profile");
-    assert_eq!(inside_me.carbon_id, inside_handle);
+    assert_eq!(inside_me.carbon_id, format!("c:{inside_handle}"));
     let organizations = inside
         .organizations()
         .list(&Paging::new())
@@ -785,7 +785,7 @@ async fn exercise_batch_login(anonymous: &Client, client: &Client) {
                     webhook_scope: None,
                     obo_review_message: None,
                     testing_idle_days: None,
-                    app_id: handle.to_owned(),
+                    app_id: unique(handle),
                     org_id: orgs[0].clone(),
                     app_name: Some(handle.to_owned()),
                     app_logo: None,
@@ -1029,7 +1029,7 @@ async fn application_testing_imports_cycles_and_preserves_obo_authority() {
                     webhook_scope: None,
                     obo_review_message: None,
                     testing_idle_days: Some(60),
-                    app_id: format!("service{index}"),
+                    app_id: unique(&format!("service{index}")),
                     org_id: org.clone(),
                     app_name: Some("Imported application".to_owned()),
                     app_logo: None,
@@ -1037,11 +1037,18 @@ async fn application_testing_imports_cycles_and_preserves_obo_authority() {
                     webhook_secret: "testing-webhook-secret-at-least-32-characters".to_owned(),
                     base_url: "https://testing.example.test".to_owned(),
                     obo_endpoints: Some(vec![models::ApplicationOboEndpoint {
+                        obo_id: None,
+                        name: None,
+                        description: None,
+                        note_to_user: None,
+                        additional_warnings: None,
                         ttl_seconds: Some(900),
                         critical: true,
                         endpoint_id: "operation".to_owned(),
                         path: "/operation".to_owned(),
                         metadata: serde_json::json!({}),
+                        downstream: None,
+                        downstream_ttl_seconds: None,
                     }]),
                 },
                 &Mutation::new(),
@@ -1292,7 +1299,8 @@ async fn application_testing_imports_cycles_and_preserves_obo_authority() {
         choices
             .scopes
             .iter()
-            .any(|scope| scope.scope.starts_with("obo:"))
+            .all(|scope| !scope.scope.starts_with("obo:")),
+        "ordinary login never grants OBO endpoint permissions"
     );
     let slt = user
         .auth()
@@ -1320,7 +1328,7 @@ async fn application_testing_imports_cycles_and_preserves_obo_authority() {
         .me()
         .await
         .expect("identity-only self read");
-    assert_eq!(profile["carbon_id"], handle);
+    assert_eq!(profile["carbon_id"], format!("c:{handle}"));
     for field in ["email", "phone_number", "display_name", "profile_photo"] {
         assert!(profile.get(field).is_none(), "undeclared field {field}");
     }
@@ -1347,39 +1355,76 @@ async fn application_testing_imports_cycles_and_preserves_obo_authority() {
             .await
             .is_err()
     );
-    let digest = silicon_iam_client::api::obo::body_sha256(b"{\"operation\":1}");
-    let exchange = models::OboExchangeRequest {
-        org_id: None,
-        subject_token: tokens.access_token,
-        audience: apps[1].application.app_id.clone(),
-        endpoint_id: "operation".to_owned(),
-        metadata: serde_json::json!({}),
-        request: models::OboExchangeRequestBinding {
-            method: "POST".to_owned(),
-            body_sha256: digest.clone(),
-        },
-    };
-    let proof = caller
+    let authorization = caller
         .obo()
-        .exchange_signed(&exchange, &catalog, &Mutation::new())
+        .authorize(
+            &models::OboAuthorizationRequest {
+                redirect_uri: None,
+                state: None,
+                subject_token: tokens.access_token,
+                org_id: user_org.clone(),
+                endpoints: vec![models::OboAuthorizationEndpoint {
+                    audience: apps[1].application.app_id.clone(),
+                    endpoint_id: "operation".to_owned(),
+                }],
+            },
+            &Mutation::new(),
+        )
         .await
-        .expect("declared and consented cross-org test OBO");
+        .expect("separate OBO authorization request");
+    let shown = user
+        .obo()
+        .consent(authorization.id)
+        .await
+        .expect("direct user reviews OBO");
+    let approved = user
+        .obo()
+        .decide(
+            shown.id,
+            &models::OboConsentDecision {
+                contexts: None,
+                decision: models::OboConsentDecisionDecision::Approve,
+                version: shown.version,
+            },
+            &Mutation::new(),
+        )
+        .await
+        .expect("affirmative OBO consent");
+    let issued = caller
+        .obo()
+        .exchange_code(
+            authorization.id,
+            approved
+                .authorization_code
+                .as_deref()
+                .expect("approval code"),
+            &Mutation::new(),
+        )
+        .await
+        .expect("endpoint-specific OBO token pair");
+    assert_eq!(issued.items.len(), 1);
+    let token = &issued.items[0];
     assert_eq!(
-        proof.expires_in, 900,
+        token.expires_in, 900,
         "test imports preserve provider lifetime"
     );
-    let context = proof.testing_context.expect("audience test credentials");
+    let context = token
+        .testing_context
+        .as_ref()
+        .expect("audience test credentials");
     assert_eq!(context.app_id, apps[1].application.app_id);
     assert_ne!(context.app_secret, apps[1].app_secret);
     assert_eq!(context.iam_test_key, created.iam_test_key);
-    let audience =
-        sandbox.with_credential(Credential::application(context.app_id, context.app_secret));
-    let verification = models::OboVerifyRequest {
-        access_proof: proof.access_proof,
-        request: models::OboVerifyRequestBinding {
+    let audience = sandbox.with_credential(Credential::application(
+        context.app_id.clone(),
+        context.app_secret.clone(),
+    ));
+    let verification = models::OboTokenVerificationRequest {
+        access_token: token.access_token.clone(),
+        endpoint_id: "operation".to_owned(),
+        request: models::OboTokenRequestBinding {
             method: "POST".to_owned(),
             path: "/operation".to_owned(),
-            body_sha256: digest,
         },
     };
     let mut wrong_request = verification.clone();
@@ -1405,13 +1450,35 @@ async fn application_testing_imports_cycles_and_preserves_obo_authority() {
     ));
     assert_eq!(
         verified.authorization.public_id.as_deref(),
-        Some(handle.as_str())
+        Some(format!("c:{handle}").as_str())
     );
     assert!(verified.authorization.org_role.is_none());
     assert!(verified.authorization.tags.is_none());
     assert!(
+        audience.obo().verify(&verification).await.is_ok(),
+        "endpoint token is reusable"
+    );
+    let refreshed = caller
+        .obo()
+        .refresh(&token.refresh_token, &Mutation::new())
+        .await
+        .expect("rotate OBO refresh");
+    assert_ne!(refreshed.items[0].refresh_token, token.refresh_token);
+    user.obo()
+        .revoke(token.grant_id, &Mutation::new())
+        .await
+        .expect("user revokes OBO grant");
+    assert!(
         audience.obo().verify(&verification).await.is_err(),
-        "proof is single use"
+        "revocation ends issued access"
+    );
+    assert!(
+        caller
+            .obo()
+            .refresh(&refreshed.items[0].refresh_token, &Mutation::new())
+            .await
+            .is_err(),
+        "revocation ends refresh"
     );
 
     // Human imports reuse the same graph implementation. Re-importing after

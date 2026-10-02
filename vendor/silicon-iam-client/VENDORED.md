@@ -1,9 +1,10 @@
-# Vendored local SDK snapshot
+# IAM client 5.0.0
 
-This is the normalized `cargo package --allow-dirty --no-verify` archive of `silicon-iam-client` from the coordinated public identifier schema cutover. It is a local working snapshot, not a published crates.io release. See `.cargo_vcs_info.json` for base revision and dirty state.
+Normalized cargo package of `teamofsilicons/silicon-iam` commit
+`52dd5ea7d48571e29e3b79371dfc27405644fbd9` (`release/iam-5.0.0`).
 
-Archive SHA-256: `9060e3ec524f7e249ff28fb12def8b85a480d753230bd3713eaab852b9eb70c4`.
+Archive SHA-256: `0ea91b222ca40cb7b1181c9365bab69bcdc870d82c30724d29c4bf3f4b1b6ea8`.
 
-The normalized package manifest resolves all workspace inheritance. Keep its complete source, tests and license together. Refresh from the owning repository's package output; do not edit this snapshot independently. The parent application uses this copy so standalone checkout and Docker builds use the matching schema without sibling repositories.
-
-Coordinated documentation-only update from IAM commit `05f9e36`: the two Membership description lines in `src/models.rs` now use canonical examples in code spans so warning-free rustdoc succeeds. This patch is mirrored from the owning repository; runtime code is unchanged. The base archive checksum above identifies the original package. Updated `src/models.rs` SHA-256: `07e18b70fbc566230e43bf6990d02455fa289332750e0f1b4dc39fc229142225`.
+Created with `cargo package -p silicon-iam-client --locked --no-verify --offline`.
+The package manifest resolves workspace inheritance; source and tests match that
+commit. Refresh from the owning repository; do not edit vendored sources.

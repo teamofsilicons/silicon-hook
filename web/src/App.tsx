@@ -1,3 +1,4 @@
+import { TingAuthorization } from "./TingAuthorization";
 import {
   createSignal,
   createMemo,
@@ -944,6 +945,7 @@ function Connections(p: {
           </Button>
         </div>
       </div>
+      <TingAuthorization ctx={p.ctx} />
       <div class="panel">
         <div class="panel-title">
           <h3>Integration tools</h3>

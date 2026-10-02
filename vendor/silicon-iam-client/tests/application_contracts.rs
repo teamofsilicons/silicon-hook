@@ -686,11 +686,11 @@ async fn honeycomb_application_authority_and_environment_key_are_separate() {
     let app_secret = secrecy::SecretString::from("ask_production_secret");
     let key = EnvironmentKey::new("X".repeat(32)).expect("key");
     let authority = ManagementAuthority::Application {
-        app_id: "vendor>app",
+        app_id: "vendor-app",
         app_secret: &app_secret,
         environment_key: Some(&key),
     };
-    let input:models::HoneycombTestingInstruction=serde_json::from_value(json!({"operation_id":id,"environment_id":environment,"generation":3,"expected_iam_revision":7,"expected_key_version":2,"operation":"import","app_id":"vendor>app","source_revisions":{"vendor>app":5}})).expect("input");
+    let input:models::HoneycombTestingInstruction=serde_json::from_value(json!({"operation_id":id,"environment_id":environment,"generation":3,"expected_iam_revision":7,"expected_key_version":2,"operation":"import","app_id":"vendor-app","source_revisions":{"vendor-app":5}})).expect("input");
     client
         .testing_instruction_as(&authority, &input, &Mutation::new())
         .await
@@ -701,7 +701,7 @@ async fn honeycomb_application_authority_and_environment_key_are_separate() {
     assert!(headers.contains(&format!("authorization: Bearer {service_credential}")));
     assert!(headers.contains(&format!(
         "x-honeycomb-application-authorization: Basic {}",
-        STANDARD.encode("vendor>app:ask_production_secret")
+        STANDARD.encode("vendor-app:ask_production_secret")
     )));
     assert!(headers.contains(&format!("x-honeycomb-testing-key: {}", "X".repeat(32))));
     assert!(!headers.contains("x-honeycomb-actor-token"));
@@ -728,7 +728,7 @@ async fn honeycomb_environment_authority_needs_no_testing_enable_key() {
         ManagementClient::new(base.base_url().as_str(), credential.clone().into()).expect("client");
     let key = EnvironmentKey::new("X".repeat(32)).expect("key");
     let authority = ManagementAuthority::Environment(&key);
-    let input: models::HoneycombTestingInstruction = serde_json::from_value(json!({"operation_id":id,"environment_id":environment,"generation":3,"expected_iam_revision":7,"expected_key_version":2,"operation":"import","app_id":"vendor>app","source_revisions":{"vendor>app":5}})).expect("input");
+    let input: models::HoneycombTestingInstruction = serde_json::from_value(json!({"operation_id":id,"environment_id":environment,"generation":3,"expected_iam_revision":7,"expected_key_version":2,"operation":"import","app_id":"vendor-app","source_revisions":{"vendor-app":5}})).expect("input");
     client
         .testing_instruction_as(&authority, &input, &Mutation::new())
         .await
@@ -752,14 +752,14 @@ async fn honeycomb_publication_decision_has_a_typed_exact_plan_receipt() {
     let id = Uuid::now_v7();
     let plan = Uuid::now_v7();
     let request = Uuid::now_v7();
-    let response = json!({"operation_id":id,"decision_id":id,"state":"accepted","request_id":request,"plan_id":plan,"app_id":"vendor>app","configuration_revision":4,"provider":"honeycomb","scopes":[],"decision":"approve","reason":null});
+    let response = json!({"operation_id":id,"decision_id":id,"state":"accepted","request_id":request,"plan_id":plan,"app_id":"vendor-app","configuration_revision":4,"provider":"honeycomb","scopes":[],"decision":"approve","reason":null});
     let (base, capture, server) = service(response.clone());
     let client = ManagementClient::new(
         base.base_url().as_str(),
         format!("hck_{}", "a".repeat(43)).into(),
     )
     .expect("client");
-    let input:models::HoneycombPublicationDecision=serde_json::from_value(json!({"operation_id":id,"request_id":request,"plan_id":plan,"app_id":"vendor>app","configuration_revision":4,"provider":"honeycomb","scopes":[],"decision":"approve"})).expect("input");
+    let input:models::HoneycombPublicationDecision=serde_json::from_value(json!({"operation_id":id,"request_id":request,"plan_id":plan,"app_id":"vendor-app","configuration_revision":4,"provider":"honeycomb","scopes":[],"decision":"approve"})).expect("input");
     let actor = format!("oat_{}", "b".repeat(43)).into();
     let receipt = client
         .publication_decision(&actor, &input, &Mutation::new())
@@ -772,8 +772,198 @@ async fn honeycomb_publication_decision_has_a_typed_exact_plan_receipt() {
         .expect("request");
     assert!(
         headers
-            .starts_with("POST /api/v1/honeycomb/applications/vendor%3Eapp/publication-decisions ")
+            .starts_with("POST /api/v1/honeycomb/applications/vendor-app/publication-decisions ")
     );
     assert_eq!(body["request_id"], request.to_string());
     server.join().expect("server");
+}
+
+fn obo_access() -> Value {
+    json!({
+        "grant_id": Uuid::from_u128(1), "access_token": "oat_endpoint_access",
+        "token_type": "Bearer", "expires_in": 300, "expires_at": "2026-09-27T00:05:00Z",
+        "audience": "storage", "endpoint_id": "files.create", "org_id": "customer",
+        "scope": "obo:storage:files.create"
+    })
+}
+
+#[tokio::test]
+async fn obo_code_and_refresh_use_owner_credentials_and_distinct_payloads() {
+    for refresh in [false, true] {
+        let mut token = obo_access();
+        token["refresh_token"] = json!("ort_endpoint_refresh");
+        let (client, capture, server) = service(json!({"items": [token]}));
+        let client = client.with_credential(Credential::application("checkout", "ask_owner"));
+        let key =
+            Mutation::with_key(IdempotencyKey::parse("obo-owner-issuance-0001").expect("key"));
+        let response = if refresh {
+            client.obo().refresh("ort_previous_refresh", &key).await
+        } else {
+            client
+                .obo()
+                .exchange_code(Uuid::from_u128(9), "oac_approved", &key)
+                .await
+        }
+        .expect("token response");
+        assert_eq!(response.items[0].refresh_token, "ort_endpoint_refresh");
+        let (headers, body) = capture.recv().expect("request");
+        assert!(headers.starts_with("POST /api/v1/obo-access/tokens "));
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("authorization: basic ")
+        );
+        assert!(headers.contains("obo-owner-issuance-0001"));
+        assert!(!headers.to_ascii_lowercase().contains("x-obo-signature"));
+        if refresh {
+            assert_eq!(body, json!({"refresh_token":"ort_previous_refresh"}));
+        } else {
+            assert_eq!(
+                body,
+                json!({"authorization_id":Uuid::from_u128(9),"authorization_code":"oac_approved"})
+            );
+        }
+        server.join().expect("mock done");
+    }
+}
+
+#[tokio::test]
+async fn obo_delegation_sends_incoming_authority_and_receives_access_only() {
+    let (client, capture, server) = service(obo_access());
+    let client = client.with_credential(Credential::application("waveform", "ask_receiver"));
+    let result = client
+        .obo()
+        .delegate(
+            &models::OboDelegationRequest {
+                access_token: "oat_incoming".to_owned(),
+                audience: "storage".to_owned(),
+                endpoint_id: "files.create".to_owned(),
+            },
+            &Mutation::new(),
+        )
+        .await
+        .expect("child access token");
+    assert!(
+        serde_json::to_value(result)
+            .expect("token JSON")
+            .get("refresh_token")
+            .is_none()
+    );
+    let (headers, body) = capture.recv().expect("request");
+    assert!(headers.starts_with("POST /api/v1/obo-access/delegations "));
+    assert!(
+        headers
+            .to_ascii_lowercase()
+            .contains("authorization: basic ")
+    );
+    assert_eq!(
+        body,
+        json!({"access_token":"oat_incoming","audience":"storage","endpoint_id":"files.create"})
+    );
+    server.join().expect("mock done");
+}
+
+#[tokio::test]
+async fn obo_consent_preserves_the_displayed_version_with_direct_user_auth() {
+    let id = Uuid::from_u128(9);
+    let (client, capture, server) = service(json!({
+        "request_id":id,"status":"approved","authorization_code":"oac_approved","expires_at":"2026-09-27T00:02:00Z"
+    }));
+    let client = client.with_credential(Credential::bearer("cat_direct_user"));
+    client
+        .obo()
+        .decide(
+            id,
+            &models::OboConsentDecision {
+                contexts: None,
+                decision: models::OboConsentDecisionDecision::Approve,
+                version: 7,
+            },
+            &Mutation::new(),
+        )
+        .await
+        .expect("decision");
+    let (headers, body) = capture.recv().expect("request");
+    assert!(headers.starts_with(&format!("POST /api/v1/obo-access/consents/{id}/decision ")));
+    assert!(
+        headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer cat_direct_user\r\n")
+    );
+    assert_eq!(body, json!({"decision":"approve","version":7}));
+    server.join().expect("mock done");
+}
+
+#[tokio::test]
+async fn obo_verification_repeats_without_proof_hash_or_idempotency_header() {
+    let request = models::OboTokenVerificationRequest {
+        access_token: "oat_reusable".to_owned(),
+        endpoint_id: "files.create".to_owned(),
+        request: models::OboTokenRequestBinding {
+            method: "POST".to_owned(),
+            path: "/v1/files".to_owned(),
+        },
+    };
+    for _ in 0..2 {
+        let (client, capture, server) = service(json!({
+            "active":true,"token_id":Uuid::from_u128(2),"grant_id":Uuid::from_u128(1),
+            "actor":{"type":"carbon","principal_id":"c:someone","public_id":"c:someone"},
+            "org_id":"customer","issuer_app_id":"checkout","originating_app_id":"checkout",
+            "endpoint":{"app_id":"storage","endpoint_id":"files.create","path":"/v1/files"},"chain":[],
+            "authorization":{"actor_type":null,"public_id":null,"org_id":"customer","org_role":null,"tags":null,"scopes":["obo:storage:files.create"],"organization_id":Uuid::from_u128(3),"membership_id":"c:someone[customer]","membership_version":1,"authorization_epoch":1,"audience":"storage","testing_environment_id":null},
+            "expires_at":"2026-09-27T00:05:00Z"
+        }));
+        let client = client.with_credential(Credential::application("storage", "ask_receiver"));
+        let verified = client
+            .obo()
+            .verify(&request)
+            .await
+            .expect("reusable verification");
+        assert!(verified.active);
+        let (headers, body) = capture.recv().expect("request");
+        assert!(headers.starts_with("POST /api/v1/obo-access/token-verifications "));
+        assert!(
+            headers
+                .to_ascii_lowercase()
+                .contains("authorization: basic ")
+        );
+        assert!(!headers.to_ascii_lowercase().contains("idempotency-key:"));
+        assert_eq!(
+            body,
+            json!({"access_token":"oat_reusable","endpoint_id":"files.create","request":{"method":"POST","path":"/v1/files"}})
+        );
+        server.join().expect("mock done");
+    }
+}
+
+#[tokio::test]
+async fn obo_grant_pages_preserve_the_opaque_cursor_and_direct_user_credential() {
+    let (client, capture, server) = service(json!({
+        "items": [], "page": {"has_more": true, "next_cursor": "next-grants-page"}
+    }));
+    let client = client.with_credential(Credential::bearer("cat_direct_user"));
+    let paging = silicon_iam_client::Paging::new().after("page+/=").limit(2);
+    let grants = client.obo().grants_page(&paging).await.expect("grant page");
+    assert!(grants.page.has_more);
+    assert_eq!(grants.page.next_cursor.as_deref(), Some("next-grants-page"));
+    let (headers, body) = capture.recv().expect("captured list request");
+    assert!(
+        headers
+            .to_ascii_lowercase()
+            .contains("authorization: bearer cat_direct_user")
+    );
+    assert!(body.is_null());
+    let route = headers.split_whitespace().nth(1).expect("request target");
+    let url = url::Url::parse(&format!("http://localhost{route}")).expect("request URL");
+    assert_eq!(url.path(), "/api/v1/obo-access/grants");
+    let query: std::collections::HashMap<_, _> = url.query_pairs().collect();
+    assert_eq!(
+        query.get("cursor").map(std::convert::AsRef::as_ref),
+        Some("page+/=")
+    );
+    assert_eq!(
+        query.get("limit").map(std::convert::AsRef::as_ref),
+        Some("2")
+    );
+    server.join().expect("mock completed");
 }

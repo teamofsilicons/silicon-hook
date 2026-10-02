@@ -166,6 +166,19 @@ fn management_router(
             post(super::delivery::provision_publisher),
         )
         .route(
+            &route("/delivery/authorization"),
+            get(super::delivery::ting_authorization_status)
+                .post(super::delivery::start_ting_authorization),
+        )
+        .route(
+            &route("/delivery/authorization/complete"),
+            post(super::delivery::complete_ting_authorization),
+        )
+        .route(
+            &route("/delivery/authorization/disconnect"),
+            post(super::delivery::disconnect_ting_authorization),
+        )
+        .route(
             &route("/delivery/recipient"),
             post(super::delivery::register_recipient),
         )

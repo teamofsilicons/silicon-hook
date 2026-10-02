@@ -50,7 +50,7 @@ use url::Url;
 use uuid::Uuid;
 use wiremock::{
     Mock, MockServer, ResponseTemplate,
-    matchers::{method, path},
+    matchers::{body_partial_json, method, path},
 };
 
 const ORG: &str = "tos";
@@ -488,6 +488,55 @@ struct Remote {
 }
 
 impl Remote {
+    async fn approve(&self, app: &HookApplication, token: &str) -> Result<()> {
+        let iam = app.ting_iam(self.iam.clone());
+        let (actor, kind) = if token == PUBLISHER_ACCESS {
+            ("si:publisher", "silicon")
+        } else {
+            (CARBON, "carbon")
+        };
+        let id = Uuid::new_v4();
+        let code = format!("obc_fixture_{id}");
+        let detail = json!({"id":id,"app_id":"hook","app_name":"Hook","actor":{"type":kind,"public_id":actor},
+            "org_id":ORG,"status":"pending","version":1,"expires_at":(OffsetDateTime::now_utc()+time::Duration::minutes(10)).format(&Rfc3339)?,
+            "endpoints":[],"authorization_url":"https://iam.example/consent",
+            "providers":[{"app_id":"ting","app_name":"Ting","actor":{"type":kind,"public_id":actor},"org_id":ORG}]});
+        Mock::given(method("POST"))
+            .and(path("/api/v1/obo-access/authorizations"))
+            .and(body_partial_json(json!({"subject_token":token})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&detail))
+            .mount(&self.iam_server)
+            .await;
+        Mock::given(method("GET"))
+            .and(path(format!("/api/v1/obo-access/authorizations/{id}")))
+            .respond_with(ResponseTemplate::new(200).set_body_json(&detail))
+            .mount(&self.iam_server)
+            .await;
+        let expiry = (OffsetDateTime::now_utc() + time::Duration::hours(1)).format(&Rfc3339)?;
+        let pairs:Vec<Value>=["subscriptions.register","tings.send","sent.query"].into_iter().map(|endpoint| {
+            json!({"actor":{"type":kind,"public_id":actor},"grant_id":Uuid::new_v4(),"access_token":format!("oba_{actor}_{endpoint}"),
+                "refresh_token":format!("obr_{actor}_{endpoint}"),"token_type":"Bearer","expires_in":3600,
+                "expires_at":expiry,
+                "audience":"ting","endpoint_id":endpoint,"org_id":ORG,"scope":format!("obo:ting:{endpoint}")})
+        }).collect();
+        Mock::given(method("POST"))
+            .and(path("/api/v1/obo-access/tokens"))
+            .and(body_partial_json(json!({"authorization_code":code})))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":pairs})))
+            .expect(1)
+            .mount(&self.iam_server)
+            .await;
+        let token = SecretString::from(token.to_owned());
+        let pending = iam
+            .authorize_ting(&token, ORG, &format!("fixture-start-{id}"))
+            .await?;
+        assert_eq!(pending["authorization_id"], id.to_string());
+        assert_eq!(
+            iam.complete_ting(&token, ORG, id, &code).await?["status"],
+            "authorized"
+        );
+        Ok(())
+    }
     async fn start() -> Result<Self> {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let iam_server = MockServer::start().await;
@@ -535,11 +584,6 @@ impl Remote {
                 "endpoints":[{"endpoint_id":"subscriptions.register","path":"/v1/subscriptions","metadata":{},"critical":true,"ttl_seconds":60},
                 {"endpoint_id":"tings.send","path":"/v1/tings","metadata":{},"critical":true,"ttl_seconds":60}]})))
             .mount(&iam_server).await;
-        Mock::given(method("POST")).and(path("/api/v1/obo-access/exchanges"))
-            .respond_with(|_: &wiremock::Request| ResponseTemplate::new(200).set_body_json(json!({
-                "access_proof":format!("proof_{}",Uuid::new_v4()),"proof_id":Uuid::new_v4(),"expires_in":30,
-                "expires_at":(OffsetDateTime::now_utc()+time::Duration::seconds(30)).format(&Rfc3339).unwrap_or_default()
-            }))).mount(&iam_server).await;
         let grant_status = Arc::new(AtomicU16::new(200));
         let grant = Arc::clone(&grant_status);
         Mock::given(method("POST"))
@@ -657,7 +701,8 @@ async fn call_as(
 async fn api_binds_only_the_live_caller_after_ting_consent_and_rechecks_visibility() -> Result<()> {
     let db = Database::start().await?;
     let remote = Remote::start().await?;
-    let api = api(application(db.store.clone())?, &remote)?;
+    let app = application(db.store.clone())?;
+    let api = api(app.clone(), &remote)?;
     let (status, headers, body) = call(&api, Method::GET, "").await?;
     assert_eq!(status, StatusCode::OK);
     assert!(headers["cache-control"].to_str()?.contains("no-store"));
@@ -666,6 +711,11 @@ async fn api_binds_only_the_live_caller_after_ting_consent_and_rechecks_visibili
         call(&api, Method::POST, r#"{"for":"c:bob"}"#).await?.0,
         StatusCode::BAD_REQUEST
     );
+    assert_eq!(
+        call(&api, Method::POST, "").await?.0,
+        StatusCode::PRECONDITION_REQUIRED
+    );
+    remote.approve(&app, ACCESS).await?;
     remote.grant_status.store(403, Ordering::SeqCst);
     assert_eq!(call(&api, Method::POST, "").await?.0, StatusCode::FORBIDDEN);
     assert!(
@@ -690,6 +740,14 @@ async fn api_binds_only_the_live_caller_after_ting_consent_and_rechecks_visibili
         .context("Ting requests")?
     {
         let body: Value = serde_json::from_slice(&request.body)?;
+        assert_eq!(
+            request
+                .headers
+                .get("authorization")
+                .context("OBO bearer")?
+                .to_str()?,
+            format!("Bearer oba_{CARBON}_subscriptions.register")
+        );
         assert_eq!(body, json!({"org_id":ORG,"app_id":"hook","for":CARBON}));
         assert!(
             !request
@@ -700,6 +758,15 @@ async fn api_binds_only_the_live_caller_after_ting_consent_and_rechecks_visibili
     }
     assert!(
         remote
+            .iam_server
+            .received_requests()
+            .await
+            .context("IAM requests")?
+            .iter()
+            .any(|request| request.url.path() == "/api/v1/obo-access/tokens")
+    );
+    assert!(
+        !remote
             .iam_server
             .received_requests()
             .await
@@ -763,6 +830,8 @@ async fn observer_send_waits_for_renewal_then_stops_after_current_visibility_is_
         )
         .await?;
 
+    remote.approve(&app, PUBLISHER_ACCESS).await?;
+
     // Legacy bindings have no retained token: their copies remain pending, while
     // the owning Silicon still receives its own event normally.
     let legacy = subscriptions::subscribe(&db.store, &carbon(CARBON, true)?, &target).await?;
@@ -780,6 +849,7 @@ async fn observer_send_waits_for_renewal_then_stops_after_current_visibility_is_
     );
     assert!(pending.accepted_at.is_none());
 
+    remote.approve(&app, ACCESS).await?;
     let renewed = call(&api, Method::POST, "").await?;
     assert_eq!(renewed.0, StatusCode::OK);
     assert_eq!(renewed.2["subscription"]["id"], legacy.id.to_string());

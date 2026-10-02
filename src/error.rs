@@ -28,6 +28,9 @@ pub enum AppError {
     /// Credential is absent, invalid, expired, or revoked.
     #[error("authentication is required")]
     Unauthenticated,
+    /// This feature requires an independent IAM grant.
+    #[error("Ting requires separate IAM authorization")]
+    TingAuthorizationRequired,
     /// Authenticated actor lacks authority for this action.
     #[error("the actor is not authorized for this action")]
     Forbidden,
@@ -156,6 +159,7 @@ impl AppError {
             Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
             Self::Validation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
+            Self::TingAuthorizationRequired => StatusCode::PRECONDITION_REQUIRED,
             Self::Forbidden | Self::LoginDenied { .. } | Self::Blocked { .. } => {
                 StatusCode::FORBIDDEN
             }
@@ -180,6 +184,13 @@ impl AppError {
                 code,
                 Cow::Borrowed("The request contains invalid data."),
                 details,
+            ),
+            Self::TingAuthorizationRequired => (
+                Cow::Borrowed("ting_authorization_required"),
+                Cow::Borrowed(
+                    "Approve Ting separately in Settings or run hook receiving authorize.",
+                ),
+                None,
             ),
             Self::Unauthenticated => (
                 Cow::Borrowed("unauthenticated"),

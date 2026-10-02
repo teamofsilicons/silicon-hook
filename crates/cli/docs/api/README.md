@@ -508,3 +508,9 @@ their normal error responses. Both discovery and status use `Cache-Control: no-s
 For the legacy v1 transport, local relay destinations are configured after SLT exchange through the client
 or CLI and never appear in the backend login request. `webhook` and `unhook`
 change local delivery configuration; neither changes a provider hook URL.
+
+## Separate Ting authorization
+
+Ting operations require explicit endpoint approval after ordinary login. Use `hook receiving authorize`, review the IAM URL, then `hook receiving complete AUTHORIZATION_ID --code-file -`; pass a stable `--idempotency-key` to mutations. `receiving authorization-status` inspects local state and `receiving disconnect-authorization` removes local tokens. Missing approval returns `428 ting_authorization_required` without invalidating the login.
+
+The API exposes GET/POST `/api/v2/delivery/authorization`, POST `/api/v2/delivery/authorization/complete` (`authorization_id`, secret `authorization_code`), and POST `/api/v2/delivery/authorization/disconnect`. SDK methods are `authorize_ting`, `complete_ting_authorization`, `ting_authorization` and `disconnect_ting_authorization`. Tokens remain encrypted server-side, separately for each endpoint and account/org/environment. See [delivery guide](../ting-delivery.md) for publisher and recovery rules.

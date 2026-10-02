@@ -152,6 +152,15 @@ export function allowed(path: string, method: string): boolean {
     return method === "GET";
   if (new RegExp(base + "delivery/subscription$").test(p))
     return ["GET", "POST", "DELETE"].includes(method);
+  if (p === "/api/v2/delivery/authorization")
+    return method === "GET" || method === "POST";
+  if (
+    [
+      "/api/v2/delivery/authorization/complete",
+      "/api/v2/delivery/authorization/disconnect",
+    ].includes(p)
+  )
+    return method === "POST";
   return p === "/api/v2/delivery/recipient" && method === "POST";
 }
 async function bounded(response: Response) {

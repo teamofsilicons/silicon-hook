@@ -30,6 +30,7 @@ impl Publisher {
     /// Composes a sender from trusted service configuration, never caller URLs.
     #[must_use]
     pub fn new(application: HookApplication, iam: IamClient, ting: TingClient) -> Self {
+        let iam = application.ting_iam(iam);
         let credentials = application.publisher_credentials(iam.clone());
         Self {
             application,
@@ -43,7 +44,7 @@ impl Publisher {
     ///
     /// # Errors
     /// Returns storage failures. Uncertain external outcomes remain retryable
-    /// using the same persisted bytes and producer key, with a fresh proof.
+    /// using the same persisted bytes and producer key, with current OBO authority.
     pub async fn publish_one(&self) -> Result<bool, StoreError> {
         let store = self.application.store();
         let Some(claim) = store.claim_ting(1, Duration::from_secs(180)).await?.pop() else {
@@ -162,7 +163,12 @@ fn retry_delay(attempts: i64, transient: bool) -> Duration {
 
 fn failure(error: &TingError) -> TingSendFailure {
     match error {
-        TingError::Iam(IamError::Forbidden) => TingSendFailure::ConsentRequired,
+        TingError::Iam(IamError::Forbidden | IamError::TingAuthorizationRequired)
+        | TingError::Rejected {
+            status: 401,
+            code: "invalid_obo_token" | "invalid_proof",
+            ..
+        } => TingSendFailure::ConsentRequired,
         TingError::Iam(IamError::InvalidCredential) => TingSendFailure::PublisherUnauthorized,
         TingError::Iam(_) => TingSendFailure::AuthorizationUnavailable,
         TingError::Transport => TingSendFailure::TransportUnavailable,

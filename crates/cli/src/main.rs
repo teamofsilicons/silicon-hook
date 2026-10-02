@@ -216,6 +216,19 @@ async fn run(cli: &Cli) -> Result<()> {
     if let Command::Docs { topic } = &cli.command {
         return docs(topic);
     }
+    if matches!(
+        cli.command,
+        Command::Receiving {
+            action: Receiving::Authorize
+                | Receiving::Complete { .. }
+                | Receiving::DisconnectAuthorization
+        }
+    ) {
+        anyhow::ensure!(
+            cli.idempotency_key.is_some(),
+            "Ting authorization mutations require --idempotency-key; reuse it for the same operation after uncertainty"
+        );
+    }
     if matches!(cli.command, Command::Publisher { .. }) {
         anyhow::ensure!(
             cli.idempotency_key.is_some(),
@@ -569,6 +582,22 @@ async fn run(cli: &Cli) -> Result<()> {
             }
         },
         Command::Receiving { action } => match action {
+            Receiving::Authorize => print(&client.authorize_ting(&mutation).await?)?,
+            Receiving::Complete {
+                authorization_id,
+                code_file,
+            } => {
+                let code = read_secret(code_file)?;
+                print(
+                    &client
+                        .complete_ting_authorization(*authorization_id, &code, &mutation)
+                        .await?,
+                )?;
+            }
+            Receiving::AuthorizationStatus => print(&client.ting_authorization().await?)?,
+            Receiving::DisconnectAuthorization => {
+                print(&client.disconnect_ting_authorization(&mutation).await?)?
+            }
             Receiving::Scope => print(&client.receiver_scope().await?)?,
             Receiving::Bootstrap { receiver_id, .. } => {
                 let (scope, mut output) = receiver_bootstrap

@@ -199,3 +199,9 @@ The Rust client is a normal dependency. It never runs Cargo, modifies a
 lockfile, or schedules runtime updates. Update through the consuming project's
 dependency workflow. `with_auto_update` remains a compatibility no-op;
 Honeycomb owns CLI installation and updates.
+
+## Separate Ting authorization
+
+Ting operations require explicit endpoint approval after ordinary login. Use `hook receiving authorize`, review the IAM URL, then `hook receiving complete AUTHORIZATION_ID --code-file -`; pass a stable `--idempotency-key` to mutations. `receiving authorization-status` inspects local state and `receiving disconnect-authorization` removes local tokens. Missing approval returns `428 ting_authorization_required` without invalidating the login.
+
+The API exposes GET/POST `/api/v2/delivery/authorization`, POST `/api/v2/delivery/authorization/complete` (`authorization_id`, secret `authorization_code`), and POST `/api/v2/delivery/authorization/disconnect`. SDK methods are `authorize_ting`, `complete_ting_authorization`, `ting_authorization` and `disconnect_ting_authorization`. Tokens remain encrypted server-side, separately for each endpoint and account/org/environment. See [delivery guide](../ting-delivery.md) for publisher and recovery rules.

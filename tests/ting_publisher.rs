@@ -15,7 +15,7 @@ use base64::{Engine as _, engine::general_purpose::STANDARD};
 use hmac::{Hmac, Mac as _};
 use secrecy::SecretString;
 use serde_json::{Value, json};
-use sha2::{Digest as _, Sha256};
+use sha2::Sha256;
 use silicon_hook::{
     api::{ApiDependencies, router},
     application::{
@@ -103,6 +103,7 @@ impl Harness {
             Arc::new(SystemClock),
             public_base_url.clone(),
         );
+        let iam = application.ting_iam(iam);
         let routes = router(
             ApiDependencies {
                 application: application.clone(),
@@ -165,6 +166,15 @@ impl Harness {
                 "slt_dedicated_publisher_fixture",
                 "publisher-provision-0001",
             )
+            .await?;
+        let token = SecretString::from(ACCESS_V1);
+        let pending = self
+            .iam
+            .authorize_ting(&token, ORG, "publisher-approval-1")
+            .await?;
+        let id: Uuid = serde_json::from_value(pending["authorization_id"].clone())?;
+        self.iam
+            .complete_ting(&token, ORG, id, "approved-fixture")
             .await?;
         Ok(())
     }
@@ -277,7 +287,7 @@ fn introspection() -> Value {
     })
 }
 
-async fn iam_fixture(reject_first_subject: bool) -> Result<(MockServer, IamClient)> {
+async fn iam_fixture(_reject_first_subject: bool) -> Result<(MockServer, IamClient)> {
     let server = MockServer::start().await;
     Mock::given(method("GET"))
         .and(path("/api/version"))
@@ -314,32 +324,22 @@ async fn iam_fixture(reject_first_subject: bool) -> Result<(MockServer, IamClien
         })
         .mount(&server)
         .await;
-    Mock::given(method("GET"))
-        .and(path("/api/v1/obo-access/applications/ting/endpoints"))
-        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "application":{"app_id":"ting", "org_id":ORG},
-            "endpoints":[{"endpoint_id":"tings.send", "path":"/v1/tings", "metadata":{},
-                "critical":true, "ttl_seconds":60},
-                {"endpoint_id":"sent.query","path":"/v1/sent/query","metadata":{},"critical":true,"ttl_seconds":60}]
-        })))
+    let id = Uuid::new_v4();
+    let detail = json!({"id":id,"app_id":"hook","app_name":"Hook","actor":{"type":"silicon","public_id":PUBLISHER},"org_id":ORG,"status":"approved","version":1,"expires_at":(OffsetDateTime::now_utc()+time::Duration::hours(1)).format(&Rfc3339)?,"endpoints":[],"authorization_url":"https://iam.example/consent","providers":[{"app_id":"ting","app_name":"Ting","actor":{"type":"silicon","public_id":PUBLISHER},"org_id":ORG}]});
+    Mock::given(method("POST"))
+        .and(path("/api/v1/obo-access/authorizations"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&detail))
         .mount(&server)
         .await;
-    let attempts = AtomicUsize::new(0);
+    Mock::given(method("GET"))
+        .and(path(format!("/api/v1/obo-access/authorizations/{id}")))
+        .respond_with(ResponseTemplate::new(200).set_body_json(&detail))
+        .mount(&server)
+        .await;
+    let pairs:Vec<_>=["subscriptions.register","tings.send","sent.query"].iter().map(|endpoint| json!({"grant_id":Uuid::new_v4(),"actor":{"type":"silicon","public_id":PUBLISHER},"access_token":format!("oba_{endpoint}"),"refresh_token":format!("obr_{endpoint}"),"token_type":"Bearer","expires_in":3600,"expires_at":(OffsetDateTime::now_utc()+time::Duration::hours(1)).format(&Rfc3339).unwrap_or_default(),"audience":"ting","endpoint_id":endpoint,"org_id":ORG,"scope":format!("obo:ting:{endpoint}")})).collect();
     Mock::given(method("POST"))
-        .and(path("/api/v1/obo-access/exchanges"))
-        .respond_with(move |_: &Request| {
-            if attempts.fetch_add(1, Ordering::SeqCst) == 0 && reject_first_subject {
-                return ResponseTemplate::new(401).set_body_json(json!({"error":{
-                    "code":"invalid_subject_token", "message":"Subject is no longer active",
-                    "request_id":Uuid::now_v7()
-                }}));
-            }
-            let expiry = OffsetDateTime::now_utc() + time::Duration::seconds(30);
-            ResponseTemplate::new(200).set_body_json(json!({
-                "access_proof":format!("proof_{}", Uuid::new_v4()), "proof_id":Uuid::new_v4(),
-                "expires_in":30, "expires_at":expiry.format(&Rfc3339).unwrap_or_default()
-            }))
-        })
+        .and(path("/api/v1/obo-access/tokens"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"items":pairs})))
         .mount(&server)
         .await;
     let iam = IamClient::connect(&IamSettings {
@@ -375,19 +375,6 @@ async fn requests(server: &MockServer, route: &str) -> Result<Vec<Request>> {
         .into_iter()
         .filter(|request| request.url.path() == route)
         .collect())
-}
-
-fn assert_proof_binding(exchange: &Request, body: &[u8]) -> Result<()> {
-    let value: Value = serde_json::from_slice(&exchange.body)?;
-    assert_eq!(
-        value["request"]["body_sha256"],
-        hex::encode(Sha256::digest(body))
-    );
-    assert_eq!(value["request"]["method"], "POST");
-    assert_eq!(value["audience"], "ting");
-    assert_eq!(value["endpoint_id"], "tings.send");
-    assert_eq!(value["org_id"], ORG);
-    Ok(())
 }
 
 #[tokio::test]
@@ -441,13 +428,12 @@ async fn missing_publisher_stays_pending_then_records_normal_and_silent_acceptan
     let sent = requests(&harness.receiver, "/v1/tings").await?;
     let proofs = requests(&harness.issuer, "/api/v1/obo-access/exchanges").await?;
     assert_eq!(sent.len(), 2);
-    assert_eq!(proofs.len(), 2);
-    assert_ne!(
+    assert!(proofs.is_empty(), "legacy exchange is not used");
+    assert_eq!(
         sent[0].headers.get("authorization"),
         sent[1].headers.get("authorization")
     );
-    for (send, proof) in sent.iter().zip(&proofs) {
-        assert_proof_binding(proof, &send.body)?;
+    for send in &sent {
         assert!(!String::from_utf8_lossy(&send.body).contains("private_provider_payload"));
         let envelope: Value = serde_json::from_slice(&send.body)?;
         assert_eq!(envelope["for"], SILICON);
@@ -458,7 +444,7 @@ async fn missing_publisher_stays_pending_then_records_normal_and_silent_acceptan
 }
 
 #[tokio::test]
-async fn uncertain_acceptance_replays_persisted_bytes_with_a_fresh_proof_after_restart()
+async fn uncertain_acceptance_replays_persisted_bytes_with_reusable_authority_after_restart()
 -> Result<()> {
     let harness = Harness::start(false).await?;
     harness.provision().await?;
@@ -504,18 +490,13 @@ async fn uncertain_acceptance_replays_persisted_bytes_with_a_fresh_proof_after_r
     let sent = requests(&harness.receiver, "/v1/tings").await?;
     let proofs = requests(&harness.issuer, "/api/v1/obo-access/exchanges").await?;
     assert_eq!(sent.len(), 2);
-    assert_eq!(proofs.len(), 2);
-    for (send, proof) in sent.iter().zip(&proofs) {
+    assert!(proofs.is_empty(), "legacy exchange is not used");
+    for send in &sent {
         assert_eq!(send.body, prepared);
-        assert_proof_binding(proof, &prepared)?;
     }
-    assert_ne!(
+    assert_eq!(
         sent[0].headers.get("authorization"),
         sent[1].headers.get("authorization")
-    );
-    assert_ne!(
-        proofs[0].headers.get("idempotency-key"),
-        proofs[1].headers.get("idempotency-key")
     );
     assert_eq!(
         requests(&harness.issuer, "/api/v1/app-auth/tokens")
@@ -667,10 +648,9 @@ async fn legacy_ordinary_body_survives_uncertain_acceptance_and_new_publisher_re
     let sends = requests(&harness.receiver, "/v1/tings").await?;
     let proofs = requests(&harness.issuer, "/api/v1/obo-access/exchanges").await?;
     assert_eq!(sends.len(), 2);
-    assert_eq!(proofs.len(), 2);
-    for (send, proof) in sends.iter().zip(&proofs) {
+    assert!(proofs.is_empty(), "legacy exchange is not used");
+    for send in &sends {
         assert_eq!(send.body, bytes);
-        assert_proof_binding(proof, &bytes)?;
     }
     let url = harness
         .application
@@ -694,75 +674,36 @@ async fn legacy_ordinary_body_survives_uncertain_acceptance_and_new_publisher_re
 }
 
 #[tokio::test]
-async fn rejected_subject_refreshes_owned_family_before_retrying_the_same_send() -> Result<()> {
-    let harness = Harness::start(true).await?;
+async fn disconnected_grant_keeps_outbox_pending_without_refreshing_login_consent() -> Result<()> {
+    let harness = Harness::start(false).await?;
     harness.provision().await?;
+    harness
+        .iam
+        .ting_authorization_status(&SecretString::from(ACCESS_V1), ORG, true)
+        .await?;
     let hook = harness.create_hook().await?;
-    let event = harness.receive(&hook, "provider-revoked-access").await?;
-    let prepared = harness.body(event).await?;
-    Mock::given(method("POST"))
-        .and(path("/v1/tings"))
-        .respond_with(|request: &Request| {
-            ResponseTemplate::new(202).set_body_json(acceptance(request, false))
-        })
-        .expect(1)
-        .mount(&harness.receiver)
-        .await;
+    let event = harness.receive(&hook, "missing-dedicated-approval").await?;
     assert!(harness.publisher().publish_one().await?);
     let pending = harness.status(event).await?;
-    assert_eq!(
-        pending.last_error_code.as_deref(),
-        Some("publisher_unauthorized")
-    );
+    assert_eq!(pending.last_error_code.as_deref(), Some("consent_required"));
     assert!(pending.accepted_at.is_none());
     assert!(requests(&harness.receiver, "/v1/tings").await?.is_empty());
-    let expired: bool = sqlx::query_scalar(
-        "SELECT expires_at <= clock_timestamp() FROM hook_private.ting_publisher_credentials WHERE org_id=$1",
-    ).bind(ORG).fetch_one(&harness.pool).await?;
     assert!(
-        expired,
-        "early IAM rejection invalidates the exact cached access token"
-    );
-    harness.make_due(event).await?;
-    assert!(harness.publisher().publish_one().await?);
-    assert!(harness.status(event).await?.accepted_at.is_some());
-    let exchanges = requests(&harness.issuer, "/api/v1/obo-access/exchanges").await?;
-    assert_eq!(exchanges.len(), 2);
-    let first: Value = serde_json::from_slice(&exchanges[0].body)?;
-    let second: Value = serde_json::from_slice(&exchanges[1].body)?;
-    assert_eq!(first["subject_token"], ACCESS_V1);
-    assert_eq!(second["subject_token"], ACCESS_V2);
-    for exchange in &exchanges {
-        assert_proof_binding(exchange, &prepared)?;
-    }
-    let token_calls = requests(&harness.issuer, "/api/v1/app-auth/tokens").await?;
-    assert_eq!(token_calls.len(), 2);
-    let refresh: std::collections::HashMap<_, _> =
-        url::form_urlencoded::parse(&token_calls[1].body).collect();
-    assert_eq!(
-        refresh.get("refresh_token").map(AsRef::as_ref),
-        Some(REFRESH_V1)
-    );
-    assert!(!refresh.contains_key("slt"));
-    assert_ne!(
-        token_calls[0].headers.get("idempotency-key"),
-        token_calls[1].headers.get("idempotency-key")
+        requests(&harness.issuer, "/api/v1/obo-access/exchanges")
+            .await?
+            .is_empty()
     );
     assert_eq!(
-        requests(&harness.issuer, "/api/v1/oauth/introspect")
+        requests(&harness.issuer, "/api/v1/app-auth/tokens")
             .await?
             .len(),
-        2
+        1
     );
-    let sent = requests(&harness.receiver, "/v1/tings").await?;
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].body, prepared);
     Ok(())
 }
 
 #[tokio::test]
-async fn receipt_lookup_refreshes_an_early_rejected_publisher_without_a_pending_send() -> Result<()>
-{
+async fn receipt_lookup_uses_separate_authority_without_a_pending_send() -> Result<()> {
     let harness = Harness::start(true).await?;
     harness.provision().await?;
     let hook = harness.create_hook().await?;
@@ -812,19 +753,16 @@ async fn receipt_lookup_refreshes_an_early_rejected_publisher_without_a_pending_
         body["recipient_receipt"]["deliveries"][0]["delivery_acked"],
         true
     );
-    let exchanges = requests(&harness.issuer, "/api/v1/obo-access/exchanges").await?;
-    assert_eq!(exchanges.len(), 2);
-    let first: Value = serde_json::from_slice(&exchanges[0].body)?;
-    let second: Value = serde_json::from_slice(&exchanges[1].body)?;
-    assert_eq!(first["subject_token"], ACCESS_V1);
-    assert_eq!(second["subject_token"], ACCESS_V2);
-    assert_eq!(first["endpoint_id"], "sent.query");
-    assert_eq!(second["endpoint_id"], "sent.query");
+    assert!(
+        requests(&harness.issuer, "/api/v1/obo-access/exchanges")
+            .await?
+            .is_empty()
+    );
     assert_eq!(
         requests(&harness.issuer, "/api/v1/app-auth/tokens")
             .await?
             .len(),
-        2
+        1
     );
     assert!(requests(&harness.receiver, "/v1/tings").await?.is_empty());
     Ok(())

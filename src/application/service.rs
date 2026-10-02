@@ -153,6 +153,15 @@ impl HookApplication {
         &self.store
     }
 
+    /// Attach the dedicated grant store to this exact data plane.
+    #[must_use]
+    pub fn ting_iam(
+        &self,
+        iam: crate::infrastructure::iam::IamClient,
+    ) -> crate::infrastructure::iam::IamClient {
+        iam.with_ting_grants(self.store.clone(), self.secret_cipher.clone())
+    }
+
     /// Creates the scoped, exclusively server-owned publishing session manager.
     #[must_use]
     pub fn publisher_credentials(
