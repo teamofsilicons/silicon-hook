@@ -6,7 +6,6 @@ export const callbackScript = `"use strict";
 (() => {
   const state = new URLSearchParams(location.search).get("state");
   const fragment = new URLSearchParams(location.hash.slice(1));
-  history.replaceState(null, "", location.pathname + location.search);
   const status = document.getElementById("status");
   const retry = document.getElementById("retry");
   let items;
@@ -25,6 +24,7 @@ export const callbackScript = `"use strict";
       });
       const result = await response.json();
       if (!response.ok) throw new Error(result.error?.message || "Sign-in could not be completed. Retry this attempt.");
+      history.replaceState(null, "", location.pathname);
       location.replace(result.redirect_url);
     } catch (error) {
       status.textContent = error instanceof Error ? error.message : "Sign-in could not be completed. Retry this attempt.";

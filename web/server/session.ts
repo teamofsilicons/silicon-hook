@@ -35,6 +35,12 @@ export interface LoginAttempt {
   state: string;
   expires: number;
   mutation: string;
+  identityKind?: "carbon" | "silicon";
+  popupNonce?: string;
+  bound?: boolean;
+  initiatingContext?: string;
+  completedContext?: string;
+  invalidated?: boolean;
   hookApp: string;
   hookKey: string;
   tingKey: string;

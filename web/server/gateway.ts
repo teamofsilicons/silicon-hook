@@ -531,6 +531,19 @@ export function gateway(cfg: Config) {
         "invalid_callback",
         "This sign-in attempt expired. Return to the application and continue with IAM again.",
       );
+    if (
+      pending.invalidated ||
+      (pending.bound &&
+        session.planes.production.contextId !==
+          (pending.complete
+            ? pending.completedContext
+            : pending.initiatingContext))
+    )
+      throw new GatewayError(
+        409,
+        "session_context_changed",
+        "The selected workspace changed while signing in. Start a new sign-in attempt.",
+      );
     if (body.slts !== undefined) {
       if (
         !Array.isArray(body.slts) ||
@@ -621,6 +634,16 @@ export function gateway(cfg: Config) {
     await refresh(id, session, pending.hook);
     const actor = pending.hook.tokens!.actor;
     if (
+      pending.identityKind &&
+      (actor.type !== pending.identityKind ||
+        pending.ting.kind !== pending.identityKind)
+    )
+      throw new GatewayError(
+        403,
+        "identity_kind_mismatch",
+        "Choose the same account type for both application sessions.",
+      );
+    if (
       actor.id !== pending.ting.id ||
       actor.type !== pending.ting.kind ||
       pending.ting.environmentId !== PRODUCTION
@@ -671,6 +694,7 @@ export function gateway(cfg: Config) {
       { ...pending.hook, ting: pending.ting },
       `retire-${pending.hookKey}`,
     );
+    pending.completedContext = pending.hook.contextId;
     delete pending.items;
     delete pending.hook;
     delete pending.ting;
@@ -1161,13 +1185,24 @@ export function gateway(cfg: Config) {
             "This browser did not initiate the sign-in attempt.",
           );
         const body = await readBody(req);
-        await store.locked(id, async () =>
-          completeLogin(id, await store.read(id), body),
-        );
+        const completed = await store.locked(id, async () => {
+          const session = await store.read(id);
+          await completeLogin(id, session, body);
+          return {
+            nonce: session.login?.popupNonce,
+            context: session.login?.completedContext,
+          };
+        });
+        const destination = new URL(cfg.frontendOrigin);
+        if (completed.nonce && completed.context) {
+          destination.searchParams.set("iam_popup", "complete");
+          destination.searchParams.set("nonce", completed.nonce);
+          destination.searchParams.set("context_id", completed.context);
+        } else destination.hash = "overview?iam_signed_in=1";
         res.writeHead(200, { "Content-Type": "application/json" });
         res.end(
           JSON.stringify({
-            redirect_url: cfg.frontendOrigin + "/#overview?iam_signed_in=1",
+            redirect_url: destination.href,
           }),
         );
         return;
@@ -1190,7 +1225,13 @@ export function gateway(cfg: Config) {
           : undefined;
         for (const saved of Object.values(session.planes))
           saved.telemetry = req.headers["x-hook-telemetry"] !== "off";
-        if (!["/console/session", "/console/attach"].includes(url.pathname))
+        if (
+          ![
+            "/console/session",
+            "/console/attach",
+            "/console/login/cancel",
+          ].includes(url.pathname)
+        )
           requireContext(plane, req.headers["x-hook-context"]);
         if (url.pathname === "/console/telemetry" && req.method === "POST") {
           if (plane?.telemetry !== false && plane?.tokens && !plane.logout) {
@@ -1296,6 +1337,8 @@ export function gateway(cfg: Config) {
           if (plane.tokens)
             session.contexts![plane.contextId!] = { planeId, plane };
           session.planes[planeId] = saved.plane;
+          if (planeId === "production" && session.login)
+            session.login.invalidated = true;
           delete session.contexts![body.context_id];
           await store.save(id, session);
           return publicSession(session);
@@ -1305,6 +1348,7 @@ export function gateway(cfg: Config) {
           ![
             "/console/login",
             "/console/login/start",
+            "/console/login/cancel",
             "/console/logout",
             "/console/forget",
           ].includes(url.pathname)
@@ -1345,6 +1389,42 @@ export function gateway(cfg: Config) {
               .map(({ id, name }) => ({ id, name })),
           };
         }
+        if (url.pathname === "/console/login/cancel" && req.method === "POST") {
+          if (
+            typeof body?.nonce !== "string" ||
+            !/^[a-f0-9]{64}$/.test(body.nonce)
+          )
+            throw new GatewayError(
+              422,
+              "invalid_login",
+              "A login cancellation requires its popup nonce.",
+            );
+          const pending = session.login;
+          if (pending && pending.popupNonce === body.nonce) {
+            pending.invalidated = true;
+            if (
+              pending.complete &&
+              session.planes.production.contextId === pending.completedContext
+            ) {
+              const completed = session.planes.production;
+              const previous =
+                pending.initiatingContext &&
+                session.contexts?.[pending.initiatingContext];
+              session.contexts ??= {};
+              session.contexts[completed.contextId!] = {
+                planeId: "production",
+                plane: completed,
+              };
+              session.planes.production = previous
+                ? previous.plane
+                : { name: "Production" };
+              if (previous) delete session.contexts[pending.initiatingContext!];
+              closePlane(id, "production");
+            }
+            await store.save(id, session);
+          }
+          return { cancelled: true };
+        }
         if (url.pathname === "/console/login/start" && req.method === "POST") {
           if (planeId !== "production")
             throw new GatewayError(
@@ -1352,11 +1432,33 @@ export function gateway(cfg: Config) {
               "test_token_required",
               "Use an IAM test token to sign in to this environment.",
             );
+          const kind = body?.identity_kind,
+            nonce = body?.popup_nonce;
+          if (
+            (kind !== undefined && kind !== "carbon" && kind !== "silicon") ||
+            (nonce !== undefined &&
+              (!kind ||
+                typeof nonce !== "string" ||
+                !/^[a-f0-9]{64}$/.test(nonce)))
+          )
+            throw new GatewayError(
+              422,
+              "invalid_login",
+              "Choose Carbon or Silicon to sign in.",
+            );
           const key = mutation(req);
           let pending = session.login;
           if (
+            pending?.mutation === key &&
+            (pending.identityKind !== kind || pending.popupNonce !== nonce)
+          )
+            throw new GatewayError(
+              409,
+              "login_attempt_mismatch",
+              "A login retry must use the same account type and popup.",
+            );
+          if (
             !pending ||
-            pending.complete ||
             pending.expires < Date.now() ||
             pending.mutation !== key
           ) {
@@ -1383,6 +1485,10 @@ export function gateway(cfg: Config) {
               state: randomBytes(32).toString("hex"),
               expires: Date.now() + 300000,
               mutation: key,
+              identityKind: kind,
+              popupNonce: nonce,
+              bound: true,
+              initiatingContext: plane.contextId,
               hookApp: info.app_id,
               hookKey: crypto.randomUUID(),
               tingKey: crypto.randomUUID(),
@@ -1399,8 +1505,50 @@ export function gateway(cfg: Config) {
               "app_ids",
               [pending.hookApp, TING_APP].join(","),
             );
+          if (pending.identityKind)
+            authorize.searchParams.set("identity_kind", pending.identityKind);
+          if (pending.popupNonce)
+            authorize.searchParams.set("display", "popup");
           authorize.searchParams.set("redirect_uri", callback.href);
           return { authorize_url: authorize.href };
+        }
+        if (url.pathname === "/console/login/status" && req.method === "GET") {
+          const kind = url.searchParams.get("identity_kind");
+          if (
+            planeId !== "production" ||
+            !plane.tokens ||
+            plane.logout ||
+            !["carbon", "silicon"].includes(kind || "")
+          )
+            throw new GatewayError(
+              409,
+              "login_unavailable",
+              "The returned sign-in is unavailable.",
+            );
+          await refresh(id, session, plane);
+          const status = await upstream(
+            "/api/v2/auth/status",
+            "GET",
+            plane,
+            plane.tokens.org_id,
+          );
+          if (
+            status.authenticated !== true ||
+            status.actor?.id !== plane.tokens.actor.id ||
+            status.actor?.type !== kind ||
+            plane.tokens.actor.type !== kind ||
+            status.org_id !== plane.tokens.org_id ||
+            !plane.ting ||
+            plane.ting.id !== status.actor.id ||
+            plane.ting.kind !== kind
+          )
+            throw new GatewayError(
+              409,
+              "identity_changed",
+              "The returned login identity or organization changed.",
+            );
+          await ting.identity(plane.ting);
+          return publicSession(session);
         }
         if (url.pathname === "/console/login" && req.method === "POST") {
           if (
