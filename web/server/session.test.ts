@@ -184,8 +184,10 @@ test("organization discovery uses the selected private session and IAM grant pag
     refresh_token: "private-refresh",
     expires_in: 3600,
     actor: { type: "carbon", id: "test-user" },
+    org_id: "first",
     scopes: [],
   };
+  session.planes.production.contextId = "org-context";
   session.planes.production.expiresAt = Date.now() + 3600000;
   const testId = "00000000-0000-7000-8000-000000000001";
   session.planes[testId] = { name: "Sandbox", key: "sandbox-root" };
@@ -265,6 +267,9 @@ test("organization discovery uses the selected private session and IAM grant pag
             host: "hook.example",
             origin: cfg.origin,
             "x-hook-frontend": "1",
+            ...(cookie && plane === "production"
+              ? { "x-hook-context": "org-context" }
+              : {}),
             "x-hook-telemetry": telemetry ? "on" : "off",
             ...(telemetry
               ? { "x-org-id": "first", "content-type": "application/json" }
@@ -289,10 +294,7 @@ test("organization discovery uses the selected private session and IAM grant pag
     const result = await call();
     assert.equal(result.status, 200);
     assert.deepEqual(result.data, {
-      items: [
-        { id: "first", name: "First" },
-        { id: "second", name: "Second" },
-      ],
+      items: [{ id: "first", name: "First" }],
     });
     assert.equal(calls, 2);
     assert.deepEqual((await call(testId)).data, {
@@ -323,9 +325,11 @@ test("stale access and delayed refresh replies recover without changing mutation
       refresh_token: "old-refresh",
       expires_in: 1800,
       actor: { type: "carbon", id: "actor" },
+      org_id: "tos",
       scopes: [],
     };
     const plane = session.planes.production;
+    plane.contextId = "refresh-context";
     plane.tokens = tokens;
     plane.expiresAt = replay ? 0 : Date.now() + 3600000;
     if (replay)
@@ -393,6 +397,7 @@ test("stale access and delayed refresh replies recover without changing mutation
               origin: cfg.origin,
               "x-hook-frontend": "1",
               "x-org-id": "tos",
+              "x-hook-context": "refresh-context",
               "idempotency-key": "original-mutation",
               "content-type": "application/json",
               cookie: "__Host-hook-session=" + id,
@@ -419,5 +424,48 @@ test("stale access and delayed refresh replies recover without changing mutation
       await new Promise<void>((resolve) => server.close(() => resolve()));
       await rm(folder, { recursive: true, force: true });
     }
+  }
+});
+
+test("gateway allows explicit Ting approval without exposing IAM token routes", () => {
+  assert.equal(allowed("/api/v1/delivery/authorization", "POST"), false);
+  for (const version of ["v2"]) {
+    for (const method of ["GET", "POST"])
+      assert.equal(
+        allowed(`/api/${version}/delivery/authorization`, method),
+        true,
+      );
+    for (const suffix of ["complete", "disconnect"]) {
+      assert.equal(
+        allowed(`/api/${version}/delivery/authorization/${suffix}`, "POST"),
+        true,
+      );
+      assert.equal(
+        allowed(`/api/${version}/delivery/authorization/${suffix}`, "GET"),
+        false,
+      );
+    }
+    assert.equal(allowed(`/api/${version}/obo-access/tokens`, "POST"), false);
+  }
+});
+
+test("upgrade never guesses an organization for a legacy persisted bearer", async () => {
+  const folder = await mkdtemp(join(tmpdir(), "hook-legacy-"));
+  try {
+    const store = new SessionStore(folder, randomBytes(32)),
+      id = store.newId();
+    const session = await store.read(id);
+    session.planes.production.tokens = {
+      access_token: "legacy",
+      refresh_token: "legacy-refresh",
+      expires_in: 3600,
+      actor: { type: "carbon", id: "ca_legacy" },
+      org_id: "tos",
+      scopes: [],
+    };
+    await store.save(id, session);
+    assert.equal((await store.read(id)).planes.production.tokens, undefined);
+  } finally {
+    await rm(folder, { recursive: true, force: true });
   }
 });

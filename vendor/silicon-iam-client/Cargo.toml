@@ -13,7 +13,7 @@
 edition = "2024"
 rust-version = "1.98"
 name = "silicon-iam-client"
-version = "4.0.0"
+version = "5.0.0"
 authors = ["Team of Silicons"]
 build = false
 autolib = false
@@ -56,6 +56,10 @@ path = "tests/canonical_cutover.rs"
 [[test]]
 name = "live"
 path = "tests/live.rs"
+
+[[test]]
+name = "social_signup"
+path = "tests/social_signup.rs"
 
 [dependencies.base64]
 version = "0.22.1"

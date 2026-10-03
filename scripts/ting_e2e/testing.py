@@ -272,9 +272,8 @@ def ting_lifecycle(state, action, generation=None):
 
 
 def proof(state, label, endpoint, raw, subject):
-    return cli(state, label, ["app", "obo", "exchange", "ting", endpoint,
-        "--as-app-id", "hook", "--app-secret", state["imports"]["hook"]["app_secret"],
-        "--subject-token", subject, "--org-context", "tos", "--method", "POST", "--body-file", "-"], raw)
+    return fixture.endpoint_authority(state, label, endpoint, subject,
+        state["imports"]["hook"]["app_secret"], lambda args: cli(state, label, args))
 
 
 def downstream(state, label, endpoint, path, body, expected=(200, 201)):
@@ -285,7 +284,7 @@ def downstream(state, label, endpoint, path, body, expected=(200, 201)):
         raise RuntimeError("IAM audience testing context mismatch")
     if context["app_secret"] == state["imports"]["hook"]["app_secret"]:
         raise RuntimeError("IAM did not provide a separate Ting audience credential")
-    return http(state, state["ting_url"], "POST", path, raw, token=result["access_proof"],
+    return http(state, state["ting_url"], "POST", path, raw, token=result["access_token"],
         headers={"IAM_TEST_APP_SECRET": context["app_secret"], "X-Testing-Environment-Key": context["iam_test_key"]}, expected=expected)
 
 
@@ -316,7 +315,7 @@ def verify_protocol(state):
         ordinary_status, _ = http(state, state["ting_url"], "GET", "/v1/me", token=capability, expected=(401,))
         replay_status, replay = downstream(state, label, "receivers.bootstrap", "/v1/receivers/bootstrap", body)
         if replay_status != 200 or replay != receiver:
-            raise RuntimeError("fresh-proof exact receiver replay was not identical")
+            raise RuntimeError("reusable-token exact receiver replay was not identical")
         wrong_status, _ = downstream(state, label, "receivers.bootstrap", "/v1/receivers/bootstrap",
             {**body, "key": str(uuid.uuid4()), "generation": state["generation"] + 1}, expected=(403,))
         http(state, state["ting_url"], "DELETE", "/v1/receivers/session", token=capability)
@@ -339,7 +338,7 @@ def verify_protocol(state):
             "Actual IAM participant prepare/activate/import/private configuration/activate-apps",
             "Actual test Carbon OTP signup/login and Silicon creation/authentication; no seeded test identities",
             "Only Hook-bound consent/SLT app sessions used for receiving bootstrap",
-            "Every downstream call uses a fresh actual IAM proof and its separate Ting audience testing context",
+            "Every downstream call uses separately approved reusable IAM OBO authority and its separate Ting audience testing context",
             "Actual Ting authenticated lifecycle import with matching environment and generation",
             "Carbon and Silicon scoped create/read/replay/wrong-generation/revoke assertions passed"],
         "limitations": ["Full Honeycomb coordinator is not running; authenticated participant APIs are driven locally",

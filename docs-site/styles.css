@@ -370,3 +370,5 @@ footer {
     scroll-margin-top: 20px;
   }
 }
+
+.release-preview{margin:0 0 1.5rem;padding:1rem 1.2rem;border:1px solid #b9d1f1;border-radius:8px;background:#f1f6fd;color:#163f76}.release-preview p{margin:.35rem 0 0;line-height:1.6}.release-preview a{color:inherit;text-decoration:underline}

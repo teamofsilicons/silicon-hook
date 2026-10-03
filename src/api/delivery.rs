@@ -264,6 +264,12 @@ fn publisher_error(error: PublisherCredentialError) -> AppError {
 pub(super) fn ting_error(error: &TingError) -> AppError {
     match error {
         TingError::Iam(IamError::InvalidCredential) => AppError::Unauthenticated,
+        TingError::Iam(IamError::TingAuthorizationRequired)
+        | TingError::Rejected {
+            status: 401,
+            code: "invalid_obo_token" | "invalid_proof",
+            ..
+        } => AppError::TingAuthorizationRequired,
         TingError::Iam(IamError::Forbidden) | TingError::Rejected { status: 403, .. } => {
             AppError::Forbidden
         }
@@ -312,4 +318,79 @@ pub(super) async fn event(
         super::handlers::secret_response_headers(),
         Json(EventResponse::from(&event)),
     ))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(super) struct CompleteTingAuthorization {
+    authorization_id: Uuid,
+    authorization_code: SecretString,
+}
+
+pub(super) async fn start_ting_authorization(
+    Extension(state): Extension<ApiState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
+    if !body.is_empty() {
+        return Err(AppError::bad_request("unexpected_body"));
+    }
+    let key = extractors::idempotency_key(&headers)?;
+    let auth = authorize_management(&state, &headers, &[]).await?;
+    let token = extractors::bearer_token(&headers)?;
+    let result = state
+        .iam
+        .authorize_ting(&token, auth.organization_id().as_str(), &key)
+        .await?;
+    Ok((super::handlers::secret_response_headers(), Json(result)))
+}
+pub(super) async fn complete_ting_authorization(
+    Extension(state): Extension<ApiState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
+    extractors::require_json(&headers)?;
+    let _key = extractors::idempotency_key(&headers)?;
+    let request: CompleteTingAuthorization = parse_json(&body)?;
+    let auth = authorize_management(&state, &headers, &[]).await?;
+    let token = extractors::bearer_token(&headers)?;
+    let result = state
+        .iam
+        .complete_ting(
+            &token,
+            auth.organization_id().as_str(),
+            request.authorization_id,
+            request.authorization_code.expose_secret(),
+        )
+        .await?;
+    Ok((super::handlers::secret_response_headers(), Json(result)))
+}
+pub(super) async fn ting_authorization_status(
+    Extension(state): Extension<ApiState>,
+    headers: HeaderMap,
+) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
+    let auth = authorize_management(&state, &headers, &[]).await?;
+    let token = extractors::bearer_token(&headers)?;
+    let result = state
+        .iam
+        .ting_authorization_status(&token, auth.organization_id().as_str(), false)
+        .await?;
+    Ok((super::handlers::secret_response_headers(), Json(result)))
+}
+pub(super) async fn disconnect_ting_authorization(
+    Extension(state): Extension<ApiState>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
+    if !body.is_empty() {
+        return Err(AppError::bad_request("unexpected_body"));
+    }
+    let _key = extractors::idempotency_key(&headers)?;
+    let auth = authorize_management(&state, &headers, &[]).await?;
+    let token = extractors::bearer_token(&headers)?;
+    let result = state
+        .iam
+        .ting_authorization_status(&token, auth.organization_id().as_str(), true)
+        .await?;
+    Ok((super::handlers::secret_response_headers(), Json(result)))
 }

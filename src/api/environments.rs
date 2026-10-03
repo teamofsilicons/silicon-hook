@@ -178,7 +178,7 @@ pub(crate) async fn resolve(
             context.environment.id,
             context.environment.generation,
         );
-        state.iam = context.iam;
+        state.iam = state.application.ting_iam(context.iam);
     }
     Ok(())
 }

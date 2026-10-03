@@ -19,6 +19,7 @@ use url::Url;
 use zeroize::Zeroizing;
 
 mod ting;
+pub(crate) mod ting_grants;
 
 use crate::{
     config::{IamSettings, IamWebhookSettings},
@@ -93,6 +94,9 @@ pub enum IamError {
     /// The presented credential is absent from, inactive in, or rejected by IAM.
     #[error("IAM rejected the presented credential")]
     InvalidCredential,
+    /// Separate feature approval is missing or was revoked.
+    #[error("Ting requires separate IAM authorization")]
+    TingAuthorizationRequired,
     /// IAM refused the action for this actor.
     #[error("IAM refused the action for this actor")]
     Forbidden,
@@ -141,6 +145,7 @@ impl IamError {
     const fn diagnostic_code(&self) -> &'static str {
         match self {
             Self::InvalidCredential => "invalid_credential",
+            Self::TingAuthorizationRequired => "ting_authorization_required",
             Self::Forbidden => "forbidden",
             Self::NotFound => "not_found",
             Self::Rejected { .. } => "rejected",
@@ -161,6 +166,7 @@ impl From<IamError> for AppError {
     fn from(error: IamError) -> Self {
         match error {
             IamError::InvalidCredential => Self::Unauthenticated,
+            IamError::TingAuthorizationRequired => Self::TingAuthorizationRequired,
             IamError::Forbidden => Self::Forbidden,
             IamError::NotFound => Self::NotFound,
             IamError::InvalidInput(field) => Self::validation(format!("invalid_{field}")),
@@ -188,6 +194,7 @@ impl From<IamError> for AppError {
 #[derive(Clone)]
 pub struct IamClient {
     inner: Arc<Inner>,
+    ting_grants: Option<ting_grants::TingGrants>,
 }
 
 struct Inner {
@@ -260,6 +267,7 @@ impl IamClient {
             _ => return Err(IamError::NotConfigured),
         };
         Ok(Self {
+            ting_grants: None,
             inner: Arc::new(Inner {
                 sdk,
                 base_url: settings.base_url.clone(),
@@ -311,6 +319,7 @@ impl IamClient {
             .ok_or(IamError::InvalidResponse)?;
         Ok((
             Self {
+                ting_grants: None,
                 inner: Arc::new(Inner {
                     sdk: Some(sdk),
                     base_url: self.inner.base_url.clone(),
@@ -369,6 +378,7 @@ impl IamClient {
             .await
             .map_err(sdk_error)?;
         Ok(Self {
+            ting_grants: None,
             inner: Arc::new(Inner {
                 sdk: Some(sdk),
                 base_url: self.inner.base_url.clone(),

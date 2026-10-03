@@ -3,6 +3,58 @@ use reqwest::Method;
 use uuid::Uuid;
 
 impl Client {
+    /// Start separate IAM approval for Ting; never changes login consent.
+    pub async fn authorize_ting(&self, mutation: &Mutation) -> Result<serde_json::Value> {
+        self.call(
+            Method::POST,
+            &["delivery", "authorization"],
+            &[],
+            None::<&()>,
+            Some(mutation),
+        )
+        .await
+    }
+    /// Complete a request using the code shown by IAM. Tokens remain server-side.
+    pub async fn complete_ting_authorization(
+        &self,
+        id: Uuid,
+        code: &Secret,
+        mutation: &Mutation,
+    ) -> Result<serde_json::Value> {
+        self.call(
+            Method::POST,
+            &["delivery", "authorization", "complete"],
+            &[],
+            Some(&serde_json::json!({"authorization_id":id,"authorization_code":code.expose()})),
+            Some(mutation),
+        )
+        .await
+    }
+    /// Read locally stored endpoint status; receiving applications still verify every request.
+    pub async fn ting_authorization(&self) -> Result<serde_json::Value> {
+        self.call(
+            Method::GET,
+            &["delivery", "authorization"],
+            &[],
+            None::<&()>,
+            None,
+        )
+        .await
+    }
+    /// Disconnect locally stored Ting credentials. Global revocation remains in IAM.
+    pub async fn disconnect_ting_authorization(
+        &self,
+        mutation: &Mutation,
+    ) -> Result<serde_json::Value> {
+        self.call(
+            Method::POST,
+            &["delivery", "authorization", "disconnect"],
+            &[],
+            None::<&()>,
+            Some(mutation),
+        )
+        .await
+    }
     pub async fn list_hooks(&self, silicon: &str, include_deleted: bool) -> Result<Items<Hook>> {
         self.call(
             Method::GET,

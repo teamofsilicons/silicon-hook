@@ -8,10 +8,12 @@ export interface Tokens {
   refresh_token: string;
   expires_in: number;
   actor: { type: string; id: string };
-  org_id?: string;
+  org_id: string;
   scopes: string[];
 }
 export interface Plane {
+  contextId?: string;
+  organizationId?: string;
   telemetry?: boolean;
   name: string;
   key?: string;
@@ -54,6 +56,7 @@ export interface ExchangeOutcome {
 export interface Session {
   expires: number;
   planes: Record<string, Plane>;
+  contexts?: Record<string, { planeId: string; plane: Plane }>;
   login?: LoginAttempt;
   manual?: Record<
     string,
@@ -99,7 +102,19 @@ export class SessionStore {
           decipher.final(),
         ]).toString(),
       ) as Session;
-      if (session.expires > Date.now()) return session;
+      if (session.expires > Date.now()) {
+        // A pre-IAM-5 bearer could carry several organization grants. Never
+        // infer one context from such a persisted session after an upgrade.
+        for (const [planeId, plane] of Object.entries(session.planes)) {
+          if (plane.tokens && (!plane.contextId || !plane.tokens.org_id))
+            session.planes[planeId] = {
+              name: plane.name,
+              key: plane.key,
+              appSecret: plane.appSecret,
+            };
+        }
+        return session;
+      }
       await unlink(join(this.folder, id));
     } catch (error) {
       if (

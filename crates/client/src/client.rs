@@ -249,14 +249,17 @@ impl Client {
 
     /// Exchanges an SLT without persisting credentials or configuring delivery.
     pub async fn authenticate(&self, slt: &str, mutation: &Mutation) -> Result<Tokens> {
-        self.call(
-            Method::POST,
-            &["auth", "login"],
-            &[],
-            Some(&serde_json::json!({"slt":slt})),
-            Some(mutation),
-        )
-        .await
+        let tokens: Tokens = self
+            .call(
+                Method::POST,
+                &["auth", "login"],
+                &[],
+                Some(&serde_json::json!({"slt":slt})),
+                Some(mutation),
+            )
+            .await?;
+        tokens.validate_context(self.org.as_deref())?;
+        Ok(tokens)
     }
     /// Discover the selected production/test application's public IAM configuration.
     pub async fn iam(&self) -> Result<crate::models::IamInformation> {
@@ -290,14 +293,17 @@ impl Client {
     /// Rotates a token pair when explicitly requested by the host. Reuse the
     /// mutation on uncertain retries and replace both stored tokens atomically.
     pub async fn refresh(&self, refresh_token: &str, mutation: &Mutation) -> Result<Tokens> {
-        self.call(
-            Method::POST,
-            &["auth", "refresh"],
-            &[],
-            Some(&serde_json::json!({"refresh_token":refresh_token})),
-            Some(mutation),
-        )
-        .await
+        let tokens: Tokens = self
+            .call(
+                Method::POST,
+                &["auth", "refresh"],
+                &[],
+                Some(&serde_json::json!({"refresh_token":refresh_token})),
+                Some(mutation),
+            )
+            .await?;
+        tokens.validate_context(self.org.as_deref())?;
+        Ok(tokens)
     }
     pub async fn logout(&self, mutation: &Mutation) -> Result<()> {
         self.empty(Method::POST, &["auth", "logout"], None, Some(mutation))

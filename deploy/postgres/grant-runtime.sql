@@ -106,6 +106,10 @@ GRANT UPDATE (
     operation_key, operation_started_at, lease_id, lease_until, updated_at
 ) ON TABLE hook_private.ting_publisher_credentials TO :"api_role";
 
+-- Separate feature grants remain exclusive to the API process.
+GRANT SELECT, INSERT, UPDATE, DELETE ON TABLE hook_private.ting_authorizations,
+    hook_private.ting_obo_credentials TO :"api_role";
+
 -- Worker: retention maintenance only.
 GRANT SELECT, DELETE ON TABLE hook.hooks, hook.events, hook.blocked_requests
     TO :"worker_role";

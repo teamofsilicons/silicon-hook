@@ -264,6 +264,18 @@ pub enum Publisher {
 }
 #[derive(Debug, Subcommand)]
 pub enum Receiving {
+    /// Request separate Ting approval for this account and organization.
+    Authorize,
+    /// Save independently approved Ting authority; never prints delegated credentials.
+    Complete {
+        authorization_id: Uuid,
+        #[arg(long)]
+        code_file: String,
+    },
+    /// Inspect this account's locally stored Ting grant status.
+    AuthorizationStatus,
+    /// Remove local Ting credentials; use IAM to revoke the grants globally.
+    DisconnectAuthorization,
     /// Print the validated non-secret scope for an internal testing receiver.
     Scope,
     /// Write a scoped testing capability to a new private file; starts no receiver.

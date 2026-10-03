@@ -33,7 +33,7 @@ pub enum TingError {
     InvalidInput(&'static str),
     /// IAM could not authorize the fixed downstream operation.
     Iam(IamError),
-    /// The network outcome is unknown; retry with the same key and a fresh proof.
+    /// The network outcome is unknown; retry with the same key and a valid OBO access token.
     Transport,
     /// Ting returned an invalid success body or unexpected HTTP success status.
     InvalidResponse,
@@ -60,6 +60,7 @@ impl TingError {
             Self::InvalidInput(code) | Self::Rejected { code, .. } => code,
             Self::Iam(IamError::InvalidCredential) => "ting_subject_expired",
             Self::Iam(IamError::Forbidden) => "ting_authorization_denied",
+            Self::Iam(IamError::TingAuthorizationRequired) => "ting_authorization_required",
             Self::Iam(IamError::NotConfigured) => "ting_iam_not_configured",
             Self::Iam(_) => "ting_iam_unavailable",
             Self::Transport => "ting_transport_unavailable",
@@ -75,7 +76,8 @@ impl TingError {
             Self::InvalidInput(_) => false,
             Self::Iam(error) => !matches!(
                 error,
-                IamError::InvalidCredential
+                IamError::TingAuthorizationRequired
+                    | IamError::InvalidCredential
                     | IamError::Forbidden
                     | IamError::NotFound
                     | IamError::InvalidInput(_)
@@ -262,7 +264,7 @@ impl fmt::Debug for TingClient {
 }
 
 impl TingClient {
-    /// Reads actual downstream receipts with fresh proof and validates record ownership.
+    /// Reads actual downstream receipts with current OBO authority and validates record ownership.
     ///
     /// # Errors
     /// Returns an authorization, transport or response-validation failure.
@@ -351,7 +353,7 @@ impl TingClient {
         Ok(Self { http, origin })
     }
 
-    /// Sends the exact persisted bytes with a fresh request-bound IAM proof.
+    /// Sends the exact persisted bytes with a valid independently approved OBO access token.
     ///
     /// # Errors
     /// Rejects invalid payloads before obtaining a proof, IAM failures, provider
@@ -596,6 +598,8 @@ fn rejection(status: u16, body: &[u8], retry_after: Option<Duration>) -> TingErr
     let code = match raw {
         Some("authentication_required") => "authentication_required",
         Some("invalid_proof") => "invalid_proof",
+        Some("invalid_obo_token") => "invalid_obo_token",
+        Some("obo_verification_uncertain") => "obo_verification_uncertain",
         Some("proof_expired") => "proof_expired",
         Some("proof_consumed") => "proof_consumed",
         Some("proof_verification_uncertain") => "proof_verification_uncertain",
@@ -628,7 +632,6 @@ mod tests {
     use super::*;
     use crate::config::IamSettings;
     use serde_json::{Value, json};
-    use sha2::{Digest as _, Sha256};
     use wiremock::{
         Mock, MockServer, ResponseTemplate,
         matchers::{method, path},
@@ -649,7 +652,13 @@ mod tests {
             "created_at":"2026-09-22T10:00:00Z"})
     }
 
-    async fn iam_fixture() -> Result<(MockServer, IamClient), Box<dyn std::error::Error>> {
+    async fn iam_fixture() -> Result<
+        (
+            MockServer,
+            crate::infrastructure::iam::ting_grants::tests::Harness,
+        ),
+        Box<dyn std::error::Error>,
+    > {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let server = MockServer::start().await;
         Mock::given(method("GET"))
@@ -661,29 +670,6 @@ mod tests {
                     .set_body_json(json!({"service":"silicon-iam", "selected_api_version":"v1",
                     "supported_api_versions":["v1"], "build":"test", "commit":"test"})),
             )
-            .mount(&server)
-            .await;
-        Mock::given(method("GET"))
-            .and(path("/api/v1/obo-access/applications/ting/endpoints"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-                "application":{"app_id":"ting","org_id":"tos"},
-                "endpoints":[{"endpoint_id":"tings.send","path":"/v1/tings","metadata":{},
-                    "critical":true,"ttl_seconds":60},
-                    {"endpoint_id":"subscriptions.register","path":"/v1/subscriptions",
-                    "metadata":{},"critical":true,"ttl_seconds":60},
-                    {"endpoint_id":"sent.query","path":"/v1/sent/query",
-                    "metadata":{},"critical":true,"ttl_seconds":60}]})))
-            .mount(&server)
-            .await;
-        Mock::given(method("POST"))
-            .and(path("/api/v1/obo-access/exchanges"))
-            .respond_with(|_: &wiremock::Request| {
-                let expiry = OffsetDateTime::now_utc() + time::Duration::seconds(30);
-                ResponseTemplate::new(200).set_body_json(json!({
-                    "access_proof":format!("proof_{}", uuid::Uuid::new_v4()),
-                    "proof_id":uuid::Uuid::new_v4(), "expires_in":30,
-                    "expires_at":expiry.format(&Rfc3339).unwrap_or_default()}))
-            })
             .mount(&server)
             .await;
         let iam = IamClient::connect(&IamSettings {
@@ -698,7 +684,14 @@ mod tests {
             webhook: None,
         })
         .await?;
-        Ok((server, iam))
+        let harness = crate::infrastructure::iam::ting_grants::tests::approved(
+            iam,
+            &server,
+            None,
+            uuid::Uuid::new_v4(),
+        )
+        .await?;
+        Ok((server, harness))
     }
 
     #[test]
@@ -821,8 +814,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sends_exact_bytes_with_a_different_proof_for_every_attempt() -> TestResult {
-        let (issuer, iam) = iam_fixture().await?;
+    async fn sends_exact_bytes_with_reusable_separately_approved_authority() -> TestResult {
+        let (issuer, harness) = iam_fixture().await?;
+        let iam = &harness.iam;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/tings"))
@@ -833,11 +827,11 @@ mod tests {
         let client = TingClient::new(&server.uri(), Duration::from_secs(2))?;
         let subject = SecretString::from("oat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let body = br#"{ "key": "key-fixture", "org_id":"tos", "type":"hook.webhook.received", "for":"si:worker", "data": {"type":"new_event","data":{}} }"#;
-        client.send(&iam, &subject, body).await?;
-        client.send(&iam, &subject, body).await?;
+        client.send(iam, &subject, body).await?;
+        client.send(iam, &subject, body).await?;
         let requests = server.received_requests().await.ok_or("missing requests")?;
         assert!(requests.iter().all(|request| request.body == body));
-        assert_ne!(
+        assert_eq!(
             requests[0].headers.get("authorization"),
             requests[1].headers.get("authorization")
         );
@@ -853,27 +847,17 @@ mod tests {
             .into_iter()
             .filter(|request| request.url.path() == "/api/v1/obo-access/exchanges")
             .collect::<Vec<_>>();
-        assert_eq!(exchanges.len(), 2);
-        assert_ne!(
-            exchanges[0].headers.get("idempotency-key"),
-            exchanges[1].headers.get("idempotency-key")
+        assert!(
+            exchanges.is_empty(),
+            "ordinary identity must never mint legacy proofs"
         );
-        for exchange in exchanges {
-            let request: serde_json::Value = serde_json::from_slice(&exchange.body)?;
-            assert_eq!(
-                request["request"]["body_sha256"],
-                hex::encode(Sha256::digest(body))
-            );
-            assert_eq!(request["request"]["method"], "POST");
-            assert_eq!(request["audience"], "ting");
-            assert_eq!(request["org_id"], "tos");
-        }
         Ok(())
     }
 
     #[tokio::test]
     async fn subscription_response_must_match_requested_actor() -> TestResult {
-        let (_issuer, iam) = iam_fixture().await?;
+        let (_issuer, harness) = iam_fixture().await?;
+        let iam = &harness.iam;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/subscriptions"))
@@ -884,7 +868,7 @@ mod tests {
         let client = TingClient::new(&server.uri(), Duration::from_secs(2))?;
         let result = client
             .register_recipient(
-                &iam,
+                iam,
                 &SecretString::from("oat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"),
                 br#"{"org_id":"tos","app_id":"hook","for":"si:worker"}"#,
             )
@@ -895,7 +879,8 @@ mod tests {
 
     #[tokio::test]
     async fn receipt_validates_identity_and_preserves_incomplete_destination_state() -> TestResult {
-        let (_issuer, iam) = iam_fixture().await?;
+        let (_issuer, harness) = iam_fixture().await?;
+        let iam = &harness.iam;
         let server = MockServer::start().await;
         let detail = json!({"id":"msg_fixture", "type":"hook.webhook.received", "for":"si:worker",
             "read":false,"silent":false,"deliveries":[{"webhook_id":"hook_a","delivery_acked":true,"read_acked":false}],
@@ -909,7 +894,7 @@ mod tests {
         let token = SecretString::from("oat_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
         let receipt = client
             .receipt(
-                &iam,
+                iam,
                 &token,
                 "tos",
                 "msg_fixture",
@@ -924,7 +909,7 @@ mod tests {
         assert!(matches!(
             client
                 .receipt(
-                    &iam,
+                    iam,
                     &token,
                     "tos",
                     "msg_other",
@@ -937,7 +922,7 @@ mod tests {
         assert!(matches!(
             client
                 .receipt(
-                    &iam,
+                    iam,
                     &token,
                     "tos",
                     "msg_fixture",
@@ -950,7 +935,7 @@ mod tests {
         assert!(matches!(
             client
                 .receipt(
-                    &iam,
+                    iam,
                     &token,
                     "tos",
                     "msg_fixture",

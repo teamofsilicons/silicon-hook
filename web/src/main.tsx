@@ -2,6 +2,8 @@ import { render } from "solid-js/web";
 import { ErrorBoundary } from "solid-js";
 import App from "./App";
 import "./styles.css";
+import "./arc.css";
+import "./workspace-polish.css";
 render(
   () => (
     <ErrorBoundary

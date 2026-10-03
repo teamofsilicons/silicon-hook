@@ -337,6 +337,7 @@ export function Live(p: { ctx: Context }) {
     const url = new URL("/console/stream", gatewayOrigin());
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
     url.searchParams.set("plane", p.ctx.plane);
+    if (p.ctx.contextId) url.searchParams.set("context", p.ctx.contextId);
     url.searchParams.set("telemetry", telemetryEnabled() ? "on" : "off");
     url.searchParams.set("org", p.ctx.org);
     silicons.forEach((id) => url.searchParams.append("silicon_id", id));

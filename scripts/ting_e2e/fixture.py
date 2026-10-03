@@ -6,6 +6,7 @@ the checksum-pinned published Ting server. Only fixture identity/type rows are
 seeded; SLT issuance, app login, OBO, subscription, send, and ACK are real APIs.
 """
 import argparse
+import datetime
 import base64
 import contextlib
 import datetime
@@ -137,11 +138,53 @@ def exchange(state, actor, app):
                               "--app-secret", state["app_secrets"][app]])
 
 
+def endpoint_authority(state, label, endpoint, subject, app_secret, run_cli):
+    # This is an explicitly owned disposable fixture. Approval is performed as
+    # its real direct IAM actor, never by editing login-consent database rows.
+    cache = state.setdefault("separate_obo", {})
+    selector = f"{label}:{endpoint}:{state.get('environment_id', 'production')}:{state.get('generation', 0)}"
+    pair = cache.get(selector)
+    if pair is None:
+        request = run_cli(["app", "obo", "authorize", "hook", "--endpoints",
+            json.dumps([{"audience": "ting", "endpoint_id": endpoint}]),
+            "--org-context", "tos", "--subject-token", subject, "--app-secret", app_secret,
+            "--idempotency-key", str(uuid.uuid4())])
+        consent = run_cli(["app", "obo", "consent", request["id"]])
+        approved = run_cli(["app", "obo", "decide", request["id"], "approve",
+            "--consent-version", str(consent["version"]), "--idempotency-key", str(uuid.uuid4())])
+        result = run_cli(["app", "obo", "token", "hook", request["id"],
+            "--authorization-code", approved["authorization_code"], "--app-secret", app_secret,
+            "--idempotency-key", str(uuid.uuid4())])
+        if len(result["items"]) != 1:
+            raise RuntimeError("fixture expected one approved root endpoint")
+        pair = result["items"][0]
+        if pair["audience"] != "ting" or pair["endpoint_id"] != endpoint or not pair["access_token"].startswith("oba_"):
+            raise RuntimeError("IAM returned mismatched endpoint authority")
+        cache[selector] = pair
+        save(state)
+    expiry = datetime.datetime.fromisoformat(pair["expires_at"].replace("Z", "+00:00"))
+    if expiry <= datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(seconds=30):
+        retry_selector = selector + ":refresh-key"
+        retry = cache.setdefault(retry_selector, str(uuid.uuid4()))
+        save(state)
+        result = run_cli(["app", "obo", "refresh", "hook", "--refresh-token", pair["refresh_token"],
+            "--app-secret", app_secret, "--idempotency-key", retry])
+        if len(result["items"]) != 1 or result["items"][0]["grant_id"] != pair["grant_id"]:
+            raise RuntimeError("fixture refresh changed its approved grant")
+        pair = result["items"][0]
+        cache[selector] = pair
+        cache.pop(retry_selector, None)
+        save(state)
+    return pair
+
+
 def proof(state, endpoint, raw, subject=None):
-    return cli(state, "recipient", ["app", "obo", "exchange", "ting", endpoint,
-        "--as-app-id", "hook", "--app-secret", state["app_secrets"]["hook"],
-        "--subject-token", subject or state["hook_recipient"]["access_token"],
-        "--org-context", "tos", "--method", "POST", "--body-file", "-"], raw)["access_proof"]
+    # Historical helper name; returns a reusable separately approved access token.
+    token = subject or state["hook_recipient"]["access_token"]
+    label = "publisher" if token == state.get("hook_publisher", {}).get("access_token") else "recipient"
+    pair = endpoint_authority(state, label, endpoint, token, state["app_secrets"]["hook"],
+        lambda args: cli(state, label, args))
+    return pair["access_token"]
 
 
 def seed(state, pepper):
@@ -337,7 +380,7 @@ def verify(state):
     raw=json.dumps(body,separators=(",",":")).encode()
     accepted=request(state["ting_url"],"POST","/v1/tings",raw,token=proof(state,"tings.send",raw),expected=(202,))
     replay=request(state["ting_url"],"POST","/v1/tings",raw,token=proof(state,"tings.send",raw),expected=(200,))
-    if accepted!=replay:raise RuntimeError("fresh-proof send retry changed accepted identity")
+    if accepted!=replay:raise RuntimeError("reusable-token send retry changed accepted identity")
     while True:
         value=pending.pop(0) if pending else json.loads(ws.recv())
         if value.get("op")=="ping":ws.send(json.dumps({"op":"pong"}));continue
@@ -354,8 +397,8 @@ def verify(state):
     report={"real_iam":True,"real_ting":True,"iam_url":state["iam_url"],"ting_url":state["ting_url"],
             "ting_commit":state["ting_commit"],"ting_version":health["version"],"ting_archive_sha256":state.get("ting_archive_sha256", TING_SHA256),
             "checks":["official IAM CLI SLT and application login","recipient OBO registration",
-                      "fresh request-bound OBO send proof","HTTP202 durable acceptance",
-                      "fresh-proof idempotent replay returns same Ting ID","real websocket receives exact event",
+                      "separately approved OBO send token","HTTP202 durable acceptance",
+                      "reusable-token idempotent replay returns same Ting ID","real websocket receives exact event",
                       "delivery ACK leaves notification unread","read ACK marks notification read"],
             "limitations":["Ting type definition is fixture seeded; Honeycomb management bootstrap not exercised",
                            "Uses disposable IAM normal data plane; cross-testing-environment isolation not exercised",

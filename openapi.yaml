@@ -3124,7 +3124,7 @@ paths:
       tags: [Ting]
       operationId: bootstrapReceiverV2
       summary: Acquire or explicitly renew a scoped internal testing receiver
-      description: Requires Ting 0.1.4. The environment and shared generation must match the previously selected scope. Hook obtains a fresh request-bound IAM proof for every attempt, using only its exact audience testing headers. Retry an uncertain request with the same Idempotency-Key and body. An exact replay returns the original capability and expiry, which can already be expired; it does not resume receiving or extend authority. Renew explicitly with a new key and the original receiver_id. This testing-only capability permits the current actor's Hook inbox and watch, not general sessions, grant changes, destinations or ACKs. It expires within 30 seconds and no later than its IAM proof. Production is rejected.
+      description: Requires Ting 0.1.4. The environment and shared generation must match the previously selected scope. Hook obtains a valid independently approved OBO access token for every attempt, using only its exact audience testing headers. Retry an uncertain request with the same Idempotency-Key and body. An exact replay returns the original capability and expiry, which can already be expired; it does not resume receiving or extend authority. Renew explicitly with a new key and the original receiver_id. This testing-only capability permits the current actor's Hook inbox and watch, not general sessions, grant changes, destinations or ACKs. It expires within 30 seconds and no later than its IAM proof. Production is rejected.
       parameters:
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -3230,7 +3230,7 @@ paths:
         - "Ting"
       operationId: "registerDeliveryRecipientV2"
       summary: "Register the current actor as a Ting recipient"
-      description: "Send an empty body, not {}. Hook obtains a fresh request-bound IAM proof representing the authenticated actor. The caller cannot select a different recipient or remote URL. This grant authorizes Hook publication; the enclosing app separately manages the actor's Ting receiving session and destination."
+      description: "Send an empty body, not {}. Hook loads the independently approved OBO registration token for the authenticated actor. Missing or revoked authorization returns 428 ting_authorization_required. The caller cannot select a different recipient or remote URL. This grant authorizes Hook publication; the enclosing app separately manages the actor's Ting receiving session and destination."
       parameters: []
       responses:
         "200":
@@ -3437,7 +3437,7 @@ paths:
         - "Ting"
       operationId: "registerDeliveryRecipientV1"
       summary: "Register the current actor as a Ting recipient"
-      description: "Send an empty body, not {}. Hook obtains a fresh request-bound IAM proof representing the authenticated actor. The caller cannot select a different recipient or remote URL. This grant authorizes Hook publication; the enclosing app separately manages the actor's Ting receiving session and destination."
+      description: "Send an empty body, not {}. Hook loads the independently approved OBO registration token for the authenticated actor. Missing or revoked authorization returns 428 ting_authorization_required. The caller cannot select a different recipient or remote URL. This grant authorizes Hook publication; the enclosing app separately manages the actor's Ting receiving session and destination."
       parameters: []
       responses:
         "200":
@@ -3807,6 +3807,275 @@ paths:
       responses:
         "410":
           "$ref": "#/components/responses/DeliveryTransportReplaced"
+
+  "/api/v1/delivery/authorization":
+    parameters:
+    - "$ref": "#/components/parameters/OrgId"
+    - "$ref": "#/components/parameters/TestAppSecret"
+    - "$ref": "#/components/parameters/TestKey"
+    get:
+      tags: [Ting]
+      operationId: statusTingAuthorizationV1
+      summary: Read locally stored Ting endpoint authorization
+      description: "Bound to the authenticated account, selected organization, application and active environment generation. Login consent never grants Ting access. Dedicated tokens remain encrypted on the server. Global grant revocation is managed in IAM."
+      deprecated: true
+      responses:
+        '200':
+          description: Non-secret authorization metadata. Start returns authorization_id, authorization_url and expires_at; other operations return status, endpoints, actor_id and org_id. Never contains access or refresh credentials.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '428':
+          description: Separate endpoint authorization is required, expired or revoked; current login remains valid.
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    post:
+      tags: [Ting]
+      operationId: startTingAuthorizationV1
+      summary: Request separate IAM approval for Ting endpoints
+      description: "Bound to the authenticated account, selected organization, application and active environment generation. Login consent never grants Ting access. Dedicated tokens remain encrypted on the server. Global grant revocation is managed in IAM."
+      deprecated: true
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Non-secret authorization metadata. Start returns authorization_id, authorization_url and expires_at; other operations return status, endpoints, actor_id and org_id. Never contains access or refresh credentials.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '428':
+          description: Separate endpoint authorization is required, expired or revoked; current login remains valid.
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v1/delivery/authorization/complete":
+    parameters:
+    - "$ref": "#/components/parameters/OrgId"
+    - "$ref": "#/components/parameters/TestAppSecret"
+    - "$ref": "#/components/parameters/TestKey"
+    post:
+      tags: [Ting]
+      operationId: completeTingAuthorizationV1
+      summary: Save independently approved Ting credentials
+      description: "Bound to the authenticated account, selected organization, application and active environment generation. Login consent never grants Ting access. Dedicated tokens remain encrypted on the server. Global grant revocation is managed in IAM."
+      deprecated: true
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [authorization_id, authorization_code]
+              properties:
+                authorization_id: {type: string, format: uuid}
+                authorization_code: {type: string, minLength: 1, maxLength: 4096, writeOnly: true}
+      responses:
+        '200':
+          description: Non-secret authorization metadata. Start returns authorization_id, authorization_url and expires_at; other operations return status, endpoints, actor_id and org_id. Never contains access or refresh credentials.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '428':
+          description: Separate endpoint authorization is required, expired or revoked; current login remains valid.
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v1/delivery/authorization/disconnect":
+    parameters:
+    - "$ref": "#/components/parameters/OrgId"
+    - "$ref": "#/components/parameters/TestAppSecret"
+    - "$ref": "#/components/parameters/TestKey"
+    post:
+      tags: [Ting]
+      operationId: disconnectTingAuthorizationV1
+      summary: Remove local Ting credentials
+      description: "Bound to the authenticated account, selected organization, application and active environment generation. Login consent never grants Ting access. Dedicated tokens remain encrypted on the server. Global grant revocation is managed in IAM."
+      deprecated: true
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Non-secret authorization metadata. Start returns authorization_id, authorization_url and expires_at; other operations return status, endpoints, actor_id and org_id. Never contains access or refresh credentials.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '428':
+          description: Separate endpoint authorization is required, expired or revoked; current login remains valid.
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/delivery/authorization":
+    parameters:
+    - "$ref": "#/components/parameters/OrgId"
+    - "$ref": "#/components/parameters/TestAppSecret"
+    - "$ref": "#/components/parameters/TestKey"
+    get:
+      tags: [Ting]
+      operationId: statusTingAuthorizationV2
+      summary: Read locally stored Ting endpoint authorization
+      description: "Bound to the authenticated account, selected organization, application and active environment generation. Login consent never grants Ting access. Dedicated tokens remain encrypted on the server. Global grant revocation is managed in IAM."
+      responses:
+        '200':
+          description: Non-secret authorization metadata. Start returns authorization_id, authorization_url and expires_at; other operations return status, endpoints, actor_id and org_id. Never contains access or refresh credentials.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '428':
+          description: Separate endpoint authorization is required, expired or revoked; current login remains valid.
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+    post:
+      tags: [Ting]
+      operationId: startTingAuthorizationV2
+      summary: Request separate IAM approval for Ting endpoints
+      description: "Bound to the authenticated account, selected organization, application and active environment generation. Login consent never grants Ting access. Dedicated tokens remain encrypted on the server. Global grant revocation is managed in IAM."
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Non-secret authorization metadata. Start returns authorization_id, authorization_url and expires_at; other operations return status, endpoints, actor_id and org_id. Never contains access or refresh credentials.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '428':
+          description: Separate endpoint authorization is required, expired or revoked; current login remains valid.
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/delivery/authorization/complete":
+    parameters:
+    - "$ref": "#/components/parameters/OrgId"
+    - "$ref": "#/components/parameters/TestAppSecret"
+    - "$ref": "#/components/parameters/TestKey"
+    post:
+      tags: [Ting]
+      operationId: completeTingAuthorizationV2
+      summary: Save independently approved Ting credentials
+      description: "Bound to the authenticated account, selected organization, application and active environment generation. Login consent never grants Ting access. Dedicated tokens remain encrypted on the server. Global grant revocation is managed in IAM."
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              additionalProperties: false
+              required: [authorization_id, authorization_code]
+              properties:
+                authorization_id: {type: string, format: uuid}
+                authorization_code: {type: string, minLength: 1, maxLength: 4096, writeOnly: true}
+      responses:
+        '200':
+          description: Non-secret authorization metadata. Start returns authorization_id, authorization_url and expires_at; other operations return status, endpoints, actor_id and org_id. Never contains access or refresh credentials.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '428':
+          description: Separate endpoint authorization is required, expired or revoked; current login remains valid.
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
+  "/api/v2/delivery/authorization/disconnect":
+    parameters:
+    - "$ref": "#/components/parameters/OrgId"
+    - "$ref": "#/components/parameters/TestAppSecret"
+    - "$ref": "#/components/parameters/TestKey"
+    post:
+      tags: [Ting]
+      operationId: disconnectTingAuthorizationV2
+      summary: Remove local Ting credentials
+      description: "Bound to the authenticated account, selected organization, application and active environment generation. Login consent never grants Ting access. Dedicated tokens remain encrypted on the server. Global grant revocation is managed in IAM."
+      parameters:
+      - "$ref": "#/components/parameters/IdempotencyKey"
+      responses:
+        '200':
+          description: Non-secret authorization metadata. Start returns authorization_id, authorization_url and expires_at; other operations return status, endpoints, actor_id and org_id. Never contains access or refresh credentials.
+          content:
+            application/json:
+              schema: {type: object, additionalProperties: true}
+        '400':
+          "$ref": "#/components/responses/BadRequest"
+        '401':
+          "$ref": "#/components/responses/Unauthorized"
+        '403':
+          "$ref": "#/components/responses/Forbidden"
+        '404':
+          "$ref": "#/components/responses/NotFound"
+        '422':
+          "$ref": "#/components/responses/UnprocessableEntity"
+        '428':
+          description: Separate endpoint authorization is required, expired or revoked; current login remains valid.
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
 
 components:
   securitySchemes:

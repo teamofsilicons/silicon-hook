@@ -5,6 +5,26 @@ use sqlx::PgPool;
 use super::StoreError;
 
 const REQUIRED_COLUMNS: &[&str] = &[
+    "hook_private.ting_authorizations.environment_id|uuid|true",
+    "hook_private.ting_authorizations.generation|bigint|true",
+    "hook_private.ting_authorizations.app_id|text|true",
+    "hook_private.ting_authorizations.org_id|text|true",
+    "hook_private.ting_authorizations.actor_kind|text|true",
+    "hook_private.ting_authorizations.actor_id|text|true",
+    "hook_private.ting_authorizations.authorization_id|uuid|true",
+    "hook_private.ting_authorizations.expires_at|timestamp with time zone|true",
+    "hook_private.ting_authorizations.completion_digest|bytea|false",
+    "hook_private.ting_authorizations.start_key|text|true",
+    "hook_private.ting_authorizations.start_payload|jsonb|true",
+    "hook_private.ting_obo_credentials.environment_id|uuid|true",
+    "hook_private.ting_obo_credentials.generation|bigint|true",
+    "hook_private.ting_obo_credentials.app_id|text|true",
+    "hook_private.ting_obo_credentials.org_id|text|true",
+    "hook_private.ting_obo_credentials.actor_kind|text|true",
+    "hook_private.ting_obo_credentials.actor_id|text|true",
+    "hook_private.ting_obo_credentials.endpoint_id|text|true",
+    "hook_private.ting_obo_credentials.grant_id|uuid|true",
+    "hook_private.ting_obo_credentials.sealed|jsonb|true",
     "hook.events.source_generation|bigint|true",
     "hook_private.ting_outbox.recipient_binding_id|uuid|false",
     "hook_private.ting_recipient_bindings.id|uuid|true",
@@ -186,6 +206,8 @@ const REQUIRED_COLUMNS: &[&str] = &[
 ];
 
 const REQUIRED_CONSTRAINTS: &[&str] = &[
+    "hook_private.ting_authorizations.ting_authorizations_pkey|p",
+    "hook_private.ting_obo_credentials.ting_obo_credentials_pkey|p",
     "hook.events.events_source_generation_valid|c",
     "hook_private.ting_outbox.ting_outbox_binding_fk|f",
     "hook_private.ting_recipient_bindings.ting_recipient_bindings_pkey|p",
@@ -341,6 +363,8 @@ const REQUIRED_INDEXES: &[&str] = &[
 ];
 
 const REQUIRED_TRIGGERS: &[&str] = &[
+    "hook_private.ting_authorizations.fence_environment_write|hook_private.fence_ting_authorization_write|30",
+    "hook_private.ting_obo_credentials.fence_environment_write|hook_private.fence_ting_authorization_write|30",
     "hook_private.ting_recipient_bindings.fence_environment_write|hook_private.fence_environment_write|30",
     "hook_private.ting_outbox.fence_environment_write|hook_private.fence_environment_write|30",
     "hook_private.ting_publisher_credentials.fence_environment_write|hook_private.fence_environment_write|30",
@@ -497,6 +521,8 @@ pub(super) async fn validate(pool: &PgPool) -> Result<(), StoreError> {
             "hook_private.audit_log",
             "hook_private.ting_outbox",
             "hook_private.ting_publisher_credentials",
+            "hook_private.ting_authorizations",
+            "hook_private.ting_obo_credentials",
             "hook_private.ting_recipient_bindings",
         ][..],
     )

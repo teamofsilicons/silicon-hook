@@ -11,6 +11,8 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "hook_private.audit_log",
     "hook_private.ting_outbox",
     "hook_private.ting_publisher_credentials",
+    "hook_private.ting_authorizations",
+    "hook_private.ting_obo_credentials",
     "hook_private.ting_recipient_bindings",
     "hook_private.telemetry_events",
     "hook_private.contract_versions",
@@ -30,6 +32,14 @@ const REQUIRED_SCHEMAS: &[&str] = &["hook|USAGE", "hook_private|USAGE", "hook_co
 
 const API_TABLE_PRIVILEGES: &[&str] = &[
     "public._sqlx_migrations|SELECT",
+    "hook_private.ting_obo_credentials|DELETE",
+    "hook_private.ting_obo_credentials|UPDATE",
+    "hook_private.ting_obo_credentials|INSERT",
+    "hook_private.ting_obo_credentials|SELECT",
+    "hook_private.ting_authorizations|DELETE",
+    "hook_private.ting_authorizations|UPDATE",
+    "hook_private.ting_authorizations|INSERT",
+    "hook_private.ting_authorizations|SELECT",
     "hook.hooks|SELECT",
     "hook.hooks|INSERT",
     "hook.hooks|UPDATE",

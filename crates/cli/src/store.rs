@@ -26,6 +26,8 @@ pub struct Session {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Profile {
+    #[serde(default)]
+    pub pending_logins: BTreeMap<String, LoginReceipt>,
     #[serde(default = "enabled")]
     pub telemetry: bool,
     #[serde(default)]
@@ -50,6 +52,7 @@ pub struct Profile {
 impl Default for Profile {
     fn default() -> Self {
         Self {
+            pending_logins: BTreeMap::new(),
             selected_test: None,
             telemetry: true,
             test_app_secrets: BTreeMap::new(),
@@ -64,6 +67,23 @@ impl Default for Profile {
             test_silicons: BTreeMap::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LoginReceipt {
+    pub input_hash: String,
+    pub key: String,
+    pub started_at: u64,
+}
+
+pub fn same_context(previous: &Tokens, next: &Tokens) -> Result<()> {
+    previous.validate_context(None)?;
+    next.validate_context(previous.org_id.as_deref())?;
+    anyhow::ensure!(
+        previous.actor.kind == next.actor.kind && previous.actor.id == next.actor.id,
+        "The returned account does not match this saved profile. Use a new --profile for another account."
+    );
+    Ok(())
 }
 
 #[derive(Debug, Default, Serialize, Deserialize)]
@@ -215,6 +235,23 @@ pub fn select_client(
     url: Option<&str>,
     org: Option<&str>,
 ) -> Result<Client> {
+    build_client(profile, env, url, org, true)
+}
+pub fn login_client(
+    profile: &Profile,
+    env: Option<Uuid>,
+    url: Option<&str>,
+    org: Option<&str>,
+) -> Result<Client> {
+    build_client(profile, env, url, org, false)
+}
+fn build_client(
+    profile: &Profile,
+    env: Option<Uuid>,
+    url: Option<&str>,
+    org: Option<&str>,
+    use_session: bool,
+) -> Result<Client> {
     if let Some(url) = url
         && Client::new(url)?.base_url() != Client::new(&profile.url)?.base_url()
         && (profile.session.is_some()
@@ -258,7 +295,8 @@ pub fn select_client(
     if let Some(org) = org {
         client = client.with_organization(org);
     }
-    if let Some(session) = session {
+    if let Some(session) = session.filter(|_| use_session) {
+        session.tokens.validate_context(org)?;
         client = client.with_token(session.tokens.access_token.expose());
     }
     Ok(client)
@@ -307,11 +345,9 @@ pub async fn refresh_if_needed(
         // The lock and durable write span the request: another CLI process
         // must never rotate the same refresh token with a different key.
         store.save()?;
-        let mut tokens = client.refresh(session.tokens.refresh_token.expose(), &mutation)
+        let tokens = client.refresh(session.tokens.refresh_token.expose(), &mutation)
         .await.context("Session refresh failed; retry the command, or sign in again with hook login --slt-file <file>")?;
-        // Refresh may omit unchanged organization metadata. Keep the session's
-        // authoritative selection instead of trying to recover it from actor IDs.
-        tokens.org_id = tokens.org_id.or_else(|| session.tokens.org_id.clone());
+        same_context(&session.tokens, &tokens)?;
         session.expires_at = started_at.saturating_add(tokens.expires_in);
         session.tokens = tokens;
         session.pending_refresh_key = None;
@@ -353,7 +389,25 @@ pub async fn verified_status(
         let status = select_client(profile, env, url, org)?
             .login_status()
             .await?;
-        if status.authenticated || attempt == 1 {
+        if status.authenticated {
+            let session = match env {
+                Some(id) => profile.test_sessions.get(&id),
+                None => profile.session.as_ref(),
+            }
+            .context("Authenticated response has no selected local session")?;
+            let actor = status
+                .actor
+                .as_ref()
+                .context("IAM 5 status omitted its selected account")?;
+            anyhow::ensure!(
+                status.org_id == session.tokens.org_id
+                    && actor.kind == session.tokens.actor.kind
+                    && actor.id == session.tokens.actor.id,
+                "Online identity differs from the saved account or organization; use the correct --profile and sign in again"
+            );
+            return Ok(status);
+        }
+        if attempt == 1 {
             return Ok(status);
         }
         let session = match env {

@@ -207,7 +207,14 @@ mod tests {
 
     async fn fixture(
         scope: &ReceiverScope,
-    ) -> Result<(MockServer, IamClient, IamClient), Box<dyn std::error::Error>> {
+    ) -> Result<
+        (
+            MockServer,
+            crate::infrastructure::iam::ting_grants::tests::Harness,
+            IamClient,
+        ),
+        Box<dyn std::error::Error>,
+    > {
         let _ = rustls::crypto::ring::default_provider().install_default();
         let server = MockServer::start().await;
         Mock::given(method("GET")).and(path("/api/version"))
@@ -220,16 +227,6 @@ mod tests {
                 "actor_type":"silicon","public_id":scope.recipient,"organization_id":scope.org_id,"org_id":"tos",
                 "membership_id":"si:worker[tos]","membership_version":1,"authorization_epoch":1,"audience":"hook",
                 "testing_environment_id":scope.environment.id,"scopes":[],"org_role":null,"tags":null}})))
-            .mount(&server).await;
-        Mock::given(method("GET")).and(path("/api/v1/obo-access/applications/ting/endpoints"))
-            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"application":{"app_id":"ting","org_id":"tos"},
-                "endpoints":[{"endpoint_id":"receivers.bootstrap","path":"/v1/receivers/bootstrap","metadata":{},"critical":true,"ttl_seconds":30}]})))
-            .mount(&server).await;
-        Mock::given(method("POST")).and(path("/api/v1/obo-access/exchanges"))
-            .respond_with(|_: &wiremock::Request| ResponseTemplate::new(200).set_body_json(json!({
-                "access_proof":format!("proof_{}",Uuid::new_v4()),"proof_id":Uuid::new_v4(),"expires_in":30,
-                "expires_at":(OffsetDateTime::now_utc()+time::Duration::seconds(30)).format(&Rfc3339).unwrap_or_default(),
-                "testing_context":{"app_id":"ting","app_secret":"ask_ting_audience_secret","iam_test_key":TING_KEY}})))
             .mount(&server).await;
         let iam = IamClient::connect(&IamSettings {
             base_url: Url::parse(&server.uri())?,
@@ -255,13 +252,22 @@ mod tests {
                 },
             )
             .await?;
-        Ok((server, testing, iam))
+        let harness = crate::infrastructure::iam::ting_grants::tests::approved(
+            testing,
+            &server,
+            Some((scope.environment.id, scope.environment.generation)),
+            scope.org_id,
+        )
+        .await?;
+        Ok((server, harness, iam))
     }
 
     #[tokio::test]
-    async fn receiver_retries_keep_exact_body_but_use_fresh_audience_scoped_proofs() -> TestResult {
+    async fn receiver_retries_keep_exact_body_and_reusable_audience_scoped_authority() -> TestResult
+    {
         let scope = scope();
-        let (issuer, iam, _) = fixture(&scope).await?;
+        let (issuer, harness, _) = fixture(&scope).await?;
+        let iam = &harness.iam;
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/receivers/bootstrap"))
@@ -276,7 +282,7 @@ mod tests {
         for _ in 0..2 {
             let result = client
                 .bootstrap_receiver(
-                    &iam,
+                    iam,
                     &SecretString::from(SUBJECT),
                     &scope,
                     "stable-hook-operation",
@@ -290,7 +296,7 @@ mod tests {
             .await
             .ok_or("missing Ting requests")?;
         assert_eq!(requests[0].body, requests[1].body);
-        assert_ne!(
+        assert_eq!(
             requests[0].headers["authorization"],
             requests[1].headers["authorization"]
         );
@@ -318,20 +324,10 @@ mod tests {
             .into_iter()
             .filter(|r| r.url.path() == "/api/v1/obo-access/exchanges")
             .collect();
-        assert_eq!(exchanges.len(), 2);
-        assert_ne!(
-            exchanges[0].headers["idempotency-key"],
-            exchanges[1].headers["idempotency-key"]
+        assert!(
+            exchanges.is_empty(),
+            "receiver bootstrap cannot silently mint proof authority"
         );
-        for exchange in exchanges {
-            let body: Value = serde_json::from_slice(&exchange.body)?;
-            assert_eq!(body["endpoint_id"], "receivers.bootstrap");
-            assert_eq!(body["org_id"], "tos");
-            assert_eq!(
-                body["request"]["body_sha256"],
-                hex::encode(Sha256::digest(&requests[0].body))
-            );
-        }
         Ok(())
     }
 
@@ -339,7 +335,8 @@ mod tests {
     async fn receiver_organization_uses_current_iam_mapping_and_rejects_other_authority()
     -> TestResult {
         let scope = scope();
-        let (_, iam, production) = fixture(&scope).await?;
+        let (_server, harness, production) = fixture(&scope).await?;
+        let iam = &harness.iam;
         let token = SecretString::from(SUBJECT);
         let org = OrganizationId::new("tos")?;
         let actor = ActorRef::new(ActorKind::Silicon, ActorId::new("si:worker")?);
