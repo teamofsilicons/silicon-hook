@@ -72,6 +72,25 @@
   background: #fff;
   color: #526174;
 }
+.topbar-context {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  max-width: 320px;
+  color: #526174;
+  font-size: 12px;
+}
+.topbar-context strong {
+  font-weight: 500;
+  color: #344c6c;
+}
+.topbar-context > :not([aria-hidden]) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 main {
   padding: 42px;
   max-width: 1400px;
@@ -235,6 +254,10 @@ footer {
     min-height: 36px;
     padding-inline: 10px;
     font-size: 12px;
+  }
+  .topbar-context {
+    flex: 1 1 calc(100% - 195px);
+    max-width: none;
   }
   .page-heading h1 {
     font-size: 28px;

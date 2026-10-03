@@ -318,6 +318,18 @@ export default function App() {
             <Badge
               value={ctx().plane === "production" ? "Production" : "Test"}
             />
+            <Show when={ready() && current()?.actor && current()?.org_id}>
+              <div
+                class="topbar-context"
+                role="group"
+                aria-label="Current account and organization"
+                title={`${current()!.actor!.id} · ${current()!.org_id}`}
+              >
+                <strong>{current()!.actor!.id}</strong>
+                <span aria-hidden="true">·</span>
+                <span>{current()!.org_id}</span>
+              </div>
+            </Show>
             <Show when={ctx().plane !== "production"}>
               <span class="small muted truncate">
                 Test environment: {current()?.name} ·{" "}
