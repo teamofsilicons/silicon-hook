@@ -39,10 +39,16 @@ credential reports `authenticated: false`; service and permission errors fail.
 An early access-token rejection triggers at most one refresh recovery before
 the command is dispatched. `whoami` reads saved metadata without contacting IAM.
 
-Organization selection uses `--org`, the selected profile/environment setting,
-then the token's organization. For an unscoped Silicon session, the CLI derives
-the organization from `name:organization` and verifies it online. Test sessions
-never borrow production credentials or organization settings.
+Each IAM 5 session has one canonical Carbon or Silicon account and one organization.
+`--org` and saved organization settings must match that session. Legacy unscoped
+sessions require a fresh IAM login. Use a separate `--profile` for a different
+account or organization. Login, refresh, and live status cannot change an existing
+profile's identity. Test sessions never borrow production credentials or settings.
+
+Login saves a private retry receipt before exchanging the SLT. If the response is
+lost, repeat the same input within ten minutes; Hook reuses the original key and
+expiry. Explicit `--idempotency-key` values must remain identical on retries.
+A receipt stores only a hash of the SLT, never the one-time credential itself.
 
 ## Context and saved state
 
@@ -61,8 +67,8 @@ Global flags may appear before or after a command:
 
 `SILICON_HOOK_URL` and `SILICON_HOOK_ORG` provide defaults. Without `--org` or
 `SILICON_HOOK_ORG`, the shared `SILICON_ORG` selects the organization, as Silicon
-runtimes set it. A login keeps the saved organization when its token names none,
-which is always the case for a Silicon. A profile containing
+runtimes set it. Both Carbon and Silicon logins must return the organization
+selected in IAM; environment variables can only assert that choice. A profile containing
 credentials or test selectors stays bound to its original backend; use another
 profile for a different origin. A signed-in Silicon is the default target.
 Carbons normally use `--silicon`; supplying it during login saves the target for

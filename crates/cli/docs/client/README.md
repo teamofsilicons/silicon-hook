@@ -205,3 +205,11 @@ Honeycomb owns CLI installation and updates.
 Ting operations require explicit endpoint approval after ordinary login. Use `hook receiving authorize`, review the IAM URL, then `hook receiving complete AUTHORIZATION_ID --code-file -`; pass a stable `--idempotency-key` to mutations. `receiving authorization-status` inspects local state and `receiving disconnect-authorization` removes local tokens. Missing approval returns `428 ting_authorization_required` without invalidating the login.
 
 The API exposes GET/POST `/api/v2/delivery/authorization`, POST `/api/v2/delivery/authorization/complete` (`authorization_id`, secret `authorization_code`), and POST `/api/v2/delivery/authorization/disconnect`. SDK methods are `authorize_ting`, `complete_ting_authorization`, `ting_authorization` and `disconnect_ting_authorization`. Tokens remain encrypted server-side, separately for each endpoint and account/org/environment. See [delivery guide](../ting-delivery.md) for publisher and recovery rules.
+
+### IAM 5 session identity
+
+`login`, `authenticate`, and `refresh` require a canonical Carbon or Silicon actor
+and one organization in the response. Missing organization metadata is an error;
+no identity text or caller default supplies it. A client selected with
+`with_organization` rejects responses for a different org. The state owner must
+also compare the refreshed actor with its saved actor before replacing a family.

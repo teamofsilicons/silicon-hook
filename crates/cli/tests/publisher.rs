@@ -49,7 +49,7 @@ impl Server {
                 get(|headers: HeaderMap| async move {
                     assert_eq!(headers["authorization"], "Bearer admin-access");
                     assert_eq!(headers["x-org-id"], "tos");
-                    Json(json!({"authenticated":true,"actor":{"type":"carbon","id":"admin"},"org_id":"tos"}))
+                    Json(json!({"authenticated":true,"actor":{"type":"carbon","id":"c:admin"},"org_id":"tos"}))
                 }),
             )
             .route(
@@ -71,7 +71,7 @@ impl Server {
         let home = std::env::temp_dir().join(format!("hook-publisher-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(home.join(".silicon-hook")).unwrap();
         let session = json!({"tokens":{"access_token":"admin-access","refresh_token":"admin-refresh",
-            "token_type":"Bearer","expires_in":3600,"scopes":[],"actor":{"type":"carbon","id":"admin"},"org_id":"tos"},
+            "token_type":"Bearer","expires_in":3600,"scopes":[],"actor":{"type":"carbon","id":"c:admin"},"org_id":"tos"},
             "expires_at":4_000_000_000u64});
         std::fs::write(
             home.join(".silicon-hook/state.json"),

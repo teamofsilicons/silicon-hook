@@ -56,8 +56,14 @@ async fn status(State(requests): State<Requests>, headers: HeaderMap) -> axum::r
         )
             .into_response();
     }
-    Json(json!({"authenticated":true,"actor":{"type":"silicon","id":"si:testsi"},"org_id":org}))
-        .into_response()
+    let (kind, id) = if headers.get("authorization").and_then(|v| v.to_str().ok())
+        == Some("Bearer oat_carbon")
+    {
+        ("carbon", "c:alice")
+    } else {
+        ("silicon", "si:testsi")
+    };
+    Json(json!({"authenticated":true,"actor":{"type":kind,"id":id},"org_id":org})).into_response()
 }
 
 async fn run(
@@ -112,13 +118,19 @@ async fn run_details_env(
             .route("/api/v2/auth/login", post(|State(requests): State<Requests>, headers: HeaderMap, Json(body): Json<Value>| async move {
                 assert_eq!(headers["silicon-hook-api-version"], "v2");
                 let org = match body["slt"].as_str() {
-                    Some("fixture-slt") => Some("tos"),
-                    // A Silicon's IAM login token carries no organization.
-                    Some("silicon-slt") => None,
+                    Some("fixture-slt" | "other-account" | "unscoped-slt" | "wrong-org-slt") => Some("tos"),
+                    Some("silicon-slt") => Some("bricks"),
                     other => panic!("unexpected SLT {other:?}"),
                 };
                 requests.lock().unwrap().push(("login".into(), None, None));
-                Json(session("si:testsi", "silicon", org, "oat_login")["tokens"].clone())
+                let mut tokens=session("si:testsi", "silicon", org, "oat_login")["tokens"].clone();
+                match body["slt"].as_str() {
+                    Some("other-account") => tokens["actor"]=json!({"type":"carbon","id":"c:bobby"}),
+                    Some("unscoped-slt") => tokens["org_id"]=Value::Null,
+                    Some("wrong-org-slt") => tokens["org_id"]=json!("lab"),
+                    _=>{},
+                }
+                Json(tokens)
             }))
             .route("/api/v2/delivery/recipient", post(|State(requests): State<Requests>, body: axum::body::Bytes| async move {
                 assert!(body.is_empty());
@@ -168,8 +180,14 @@ async fn run_details_env(
                             return (StatusCode::UNAUTHORIZED, Json(json!({"error":{"code":"invalid_token","message":"family revoked"}}))).into_response();
                         }
                         let mut tokens =
-                            session("si:testsi", "silicon", None, "oat_refreshed")["tokens"]
+                            session("si:testsi", "silicon", Some("tos"), "oat_refreshed")["tokens"]
                                 .clone();
+                        match body["refresh_token"].as_str() {
+                            Some("wrong-actor") => tokens["actor"]=json!({"type":"carbon","id":"c:bobby"}),
+                            Some("wrong-org") => tokens["org_id"]=json!("lab"),
+                            Some("missing-org") => tokens["org_id"]=Value::Null,
+                            _=>{},
+                        }
                         if body["refresh_token"] == "repeat-refresh" { tokens["access_token"] = json!("repeat"); }
                         tokens["refresh_token"] =
                             json!(format!("{}_next", body["refresh_token"].as_str().unwrap()));
@@ -226,27 +244,26 @@ fn authenticated(output: &Output, expected: bool) {
 }
 
 #[tokio::test]
-async fn unscoped_silicon_status_requires_explicit_organization() {
+async fn unscoped_legacy_sessions_require_reauthentication_even_with_an_org_override() {
     let profile = json!({"session":session("si:testsi","silicon",None,"oat_fixture")});
-    let (output, requests) = run(profile.clone(), &[]).await;
-    assert!(!output.status.success());
-    assert_eq!(requests, vec![("status".into(), None, None)]);
-    let (output, requests) = run(profile, &["--org", "chosen"]).await;
-    authenticated(&output, true);
-    assert_eq!(requests[0].1.as_deref(), Some("chosen"));
+    for args in [vec![], vec!["--org", "chosen"]] {
+        let (output, requests) = run(profile.clone(), &args).await;
+        assert!(!output.status.success());
+        assert!(requests.is_empty());
+    }
 }
 
 #[tokio::test]
-async fn token_org_and_profile_selection_take_precedence_over_identity() {
-    let profile = json!({"session":session("c:alice","carbon",Some("token-org"),"oat_fixture")});
+async fn token_organization_is_immutable_and_profile_override_is_only_an_assertion() {
+    let profile = json!({"session":session("c:alice","carbon",Some("token-org"),"oat_carbon")});
     let (output, requests) = run(profile.clone(), &[]).await;
     authenticated(&output, true);
     assert_eq!(requests[0].1.as_deref(), Some("token-org"));
-    let mut profile = profile;
-    profile["org"] = json!("selected-org");
-    let (output, requests) = run(profile, &[]).await;
-    authenticated(&output, true);
-    assert_eq!(requests[0].1.as_deref(), Some("selected-org"));
+    let mut wrong = profile;
+    wrong["org"] = json!("selected-org");
+    let (output, requests) = run(wrong, &[]).await;
+    assert!(!output.status.success());
+    assert!(requests.is_empty());
 }
 
 #[tokio::test]
@@ -459,7 +476,7 @@ async fn saving_legacy_state_drops_transport_fields_but_preserves_both_session_p
 
 #[tokio::test]
 async fn internal_receiving_commands_use_stateless_sdk_operations() {
-    let profile = json!({"session":session("c:alice","carbon",Some("tos"),"oat_fixture")});
+    let profile = json!({"session":session("c:alice","carbon",Some("tos"),"oat_carbon")});
     for (action, recorded) in [
         ("register", "register"),
         ("status", "receiving_status"),
@@ -527,8 +544,8 @@ async fn event_and_publication_inspection_preserve_original_data_and_receipt_lev
 }
 
 #[tokio::test]
-async fn silicon_runtimes_select_the_organization_through_silicon_org() {
-    let profile = json!({"session":session("si:testsi", "silicon", None, "oat_fixture")});
+async fn silicon_runtime_org_is_an_assertion_on_the_saved_session() {
+    let profile = json!({"session":session("si:testsi", "silicon", Some("bricks"), "oat_fixture")});
     let (output, requests, _, _) = run_details_env(
         profile.clone(),
         &["login", "status", "--json"],
@@ -537,20 +554,19 @@ async fn silicon_runtimes_select_the_organization_through_silicon_org() {
     .await;
     authenticated(&output, true);
     assert_eq!(requests[0].1.as_deref(), Some("bricks"));
-    // The Hook-specific variable still takes precedence over the shared one.
     let (output, requests, _, _) = run_details_env(
         profile,
         &["login", "status", "--json"],
         &[("SILICON_ORG", "bricks"), ("SILICON_HOOK_ORG", "tos")],
     )
     .await;
-    authenticated(&output, true);
-    assert_eq!(requests[0].1.as_deref(), Some("tos"));
+    assert!(!output.status.success());
+    assert!(requests.is_empty());
 }
 
 #[tokio::test]
 async fn a_silicon_login_keeps_its_organization() {
-    // Runtime login: the token has no organization, SILICON_ORG supplies it.
+    // Runtime login: SILICON_ORG must match the one organization chosen in IAM.
     let (output, _, saved, _) = run_details_env(
         json!({}),
         &["login", "silicon-slt", "--json"],
@@ -559,9 +575,140 @@ async fn a_silicon_login_keeps_its_organization() {
     .await;
     authenticated(&output, true);
     assert_eq!(saved["profiles"]["default"]["org"], "bricks");
-    // Without any organization input, a new login keeps the saved one.
+    // Without an override, the authoritative login organization is saved.
     let (output, _, saved, _) =
         run_details(json!({"org":"bricks"}), &["login", "silicon-slt", "--json"]).await;
     authenticated(&output, true);
     assert_eq!(saved["profiles"]["default"]["org"], "bricks");
+}
+
+#[tokio::test]
+async fn changed_refresh_identity_never_replaces_the_saved_family() {
+    for refresh in ["wrong-actor", "wrong-org", "missing-org"] {
+        let mut original = session("si:testsi", "silicon", Some("tos"), "oat_expired");
+        original["expires_at"] = json!(0);
+        original["tokens"]["refresh_token"] = json!(refresh);
+        let (output, requests, saved, _) = run_details(
+            json!({"session":original.clone()}),
+            &["login", "status", "--json"],
+        )
+        .await;
+        assert!(!output.status.success());
+        assert_eq!(requests.len(), 1);
+        assert_eq!(
+            saved["profiles"]["default"]["session"]["tokens"],
+            original["tokens"]
+        );
+        assert!(saved["profiles"]["default"]["session"]["pending_refresh_key"].is_string());
+    }
+}
+#[tokio::test]
+async fn online_status_cannot_adopt_another_account() {
+    let (output, requests) = run(
+        json!({"session":session("si:original","silicon",Some("tos"),"oat_fixture")}),
+        &[],
+    )
+    .await;
+    assert!(!output.status.success());
+    assert_eq!(requests.len(), 1);
+    assert!(String::from_utf8_lossy(&output.stderr).contains("differs"));
+}
+#[tokio::test]
+async fn login_cannot_rebind_an_existing_profile_or_store_unscoped_tokens() {
+    for slt in ["other-account", "unscoped-slt", "wrong-org-slt"] {
+        let original = session("si:testsi", "silicon", Some("tos"), "oat_fixture");
+        let (output, _, saved, _) = run_details(
+            json!({"session":original.clone()}),
+            &["login", slt, "--json"],
+        )
+        .await;
+        assert!(!output.status.success());
+        assert_eq!(
+            saved["profiles"]["default"]["session"]["tokens"],
+            original["tokens"]
+        );
+        let receipt = &saved["profiles"]["default"]["pending_logins"]["production"];
+        assert!(receipt["key"].is_string());
+        assert!(!receipt.to_string().contains(slt));
+    }
+}
+#[tokio::test]
+async fn config_org_cannot_retarget_an_authenticated_profile() {
+    let profile =
+        json!({"org":"tos","session":session("si:testsi","silicon",Some("tos"),"oat_fixture")});
+    let (output, requests, saved, _) =
+        run_details(profile, &["config", "set", "org", "lab", "--json"]).await;
+    assert!(!output.status.success());
+    assert!(requests.is_empty());
+    assert_eq!(saved["profiles"]["default"]["org"], "tos");
+}
+
+#[tokio::test]
+async fn interrupted_login_reuses_its_durable_key_and_never_persists_the_slt() {
+    let keys: Arc<Mutex<Vec<String>>> = Arc::default();
+    let app = Router::new()
+        .route(
+            "/api/version",
+            get(|| async { Json(json!({"service":"silicon-hook","selected_api_version":"v2"})) }),
+        )
+        .route(
+            "/api/v2/auth/login",
+            post(
+                |State(keys): State<Arc<Mutex<Vec<String>>>>, headers: HeaderMap| async move {
+                    let mut seen = keys.lock().unwrap();
+                    seen.push(headers["idempotency-key"].to_str().unwrap().to_owned());
+                    if seen.len() == 1 {
+                        (
+                            StatusCode::SERVICE_UNAVAILABLE,
+                            Json(json!({"error":{"code":"uncertain","message":"retry"}})),
+                        )
+                            .into_response()
+                    } else {
+                        Json(
+                            session("si:testsi", "silicon", Some("tos"), "oat_login")["tokens"]
+                                .clone(),
+                        )
+                        .into_response()
+                    }
+                },
+            ),
+        )
+        .with_state(keys.clone());
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let url = format!("http://{}", listener.local_addr().unwrap());
+    let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    let home =
+        Home(std::env::temp_dir().join(format!("hook-login-retry-{}", uuid::Uuid::new_v4())));
+    let folder = home.0.join(".silicon-hook");
+    std::fs::create_dir_all(&folder).unwrap();
+    std::fs::write(
+        folder.join("state.json"),
+        json!({"profiles":{"default":{"url":url,"telemetry":false}}}).to_string(),
+    )
+    .unwrap();
+    for attempt in 0..2 {
+        let output = Command::new(env!("CARGO_BIN_EXE_hook"))
+            .env("SILICON_HOME", &home.0)
+            .env_remove("SILICON_HOOK_HOME")
+            .env_remove("SILICON_HOOK_ORG")
+            .env_remove("SILICON_ORG")
+            .env_remove("SILICON_HOOK_URL")
+            .env("SILICON_HOOK_TELEMETRY", "off")
+            .args(["login", "oac_sensitive_login", "--json"])
+            .output()
+            .await
+            .unwrap();
+        assert_eq!(
+            output.status.success(),
+            attempt == 1,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let saved = std::fs::read_to_string(folder.join("state.json")).unwrap();
+        assert!(!saved.contains("oac_sensitive_login"));
+    }
+    let keys = keys.lock().unwrap();
+    assert_eq!(keys.len(), 2);
+    assert_eq!(keys[0], keys[1]);
+    server.abort();
 }

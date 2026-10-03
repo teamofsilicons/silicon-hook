@@ -41,6 +41,44 @@ pub struct Tokens {
     pub org_id: Option<String>,
 }
 
+impl Tokens {
+    /// Checks the IAM 5 ordinary session boundary without deriving authority from an actor ID.
+    pub fn validate_context(&self, selected_org: Option<&str>) -> crate::Result<()> {
+        let valid_org = self.org_id.as_deref().is_some_and(valid_org);
+        if !valid_actor(&self.actor)
+            || !valid_org
+            || self.token_type != "Bearer"
+            || self.expires_in == 0
+            || self.access_token.expose().is_empty()
+            || self.refresh_token.expose().is_empty()
+            || self.scopes.iter().any(|scope| scope.starts_with("obo:"))
+            || selected_org.is_some_and(|org| self.org_id.as_deref() != Some(org))
+        {
+            return Err(crate::Error::Protocol("IAM 5 requires one canonical account and organization; sign in again using a separate profile for each account and org".into()));
+        }
+        Ok(())
+    }
+}
+fn valid_org(org: &str) -> bool {
+    (3..=50).contains(&org.len())
+        && org
+            .bytes()
+            .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+}
+fn valid_actor(actor: &Actor) -> bool {
+    let (prefix, max) = match actor.kind.as_str() {
+        "carbon" => ("c:", 30),
+        "silicon" => ("si:", 50),
+        _ => return false,
+    };
+    actor.id.strip_prefix(prefix).is_some_and(|handle| {
+        (3..=max).contains(&handle.len())
+            && handle
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'_' || b == b'-')
+    })
+}
+
 /// Public IAM discovery information; contains no secrets.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct IamInformation {

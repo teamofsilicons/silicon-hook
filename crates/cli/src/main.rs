@@ -301,6 +301,7 @@ async fn run(cli: &Cli) -> Result<()> {
             None => p.session.as_ref(),
         };
         let s = session.context("Not signed in; run hook login --help")?;
+        s.tokens.validate_context(cli.org.as_deref())?;
         return print(
             &serde_json::json!({"profile":cli.profile,"test":cli.test,"actor":s.tokens.actor,"org_id":s.tokens.org_id,"expires_at":s.expires_at}),
         );
@@ -334,7 +335,9 @@ async fn run(cli: &Cli) -> Result<()> {
     let profile = stored.profile(&cli.profile).clone();
     // Attaching is the bootstrap operation for a test environment, so it
     // must validate the supplied key before the normal test-key selection.
-    let client = if matches!(
+    let client = if matches!(cli.command, Command::Login(_)) {
+        store::login_client(&profile, cli.test, cli.url.as_deref(), cli.org.as_deref())?
+    } else if matches!(
         cli.command,
         Command::Env {
             action: Environment::Attach { .. }
@@ -373,15 +376,82 @@ async fn run(cli: &Cli) -> Result<()> {
                     )?,
                 },
             });
-            let tokens = client.login(&slt, &mutation).await?;
+            use sha2::{Digest as _, Sha256};
+            let slot = cli
+                .test
+                .map_or_else(|| "production".to_owned(), |id| id.to_string());
+            let input_hash = format!(
+                "{:x}",
+                Sha256::digest(serde_json::to_vec(&(
+                    &*slt,
+                    cli.org.as_deref(),
+                    client.base_url().as_str(),
+                    &slot
+                ))?)
+            );
+            let p = stored.profile(&cli.profile);
+            if let (Some(saved), Some(key)) =
+                (p.pending_logins.get(&slot), cli.idempotency_key.as_ref())
+            {
+                anyhow::ensure!(
+                    saved.key != *key || saved.input_hash == input_hash,
+                    "This idempotency key belongs to another login input"
+                );
+            }
+            let receipt = match p
+                .pending_logins
+                .get(&slot)
+                .filter(|r| r.input_hash == input_hash)
+            {
+                Some(receipt) => {
+                    anyhow::ensure!(
+                        store::now() < receipt.started_at.saturating_add(600),
+                        "Login recovery expired; obtain a fresh IAM login credential"
+                    );
+                    if let Some(key) = &cli.idempotency_key {
+                        anyhow::ensure!(
+                            key == &receipt.key,
+                            "Retry this login with its original idempotency key"
+                        );
+                    }
+                    receipt.clone()
+                }
+                None => store::LoginReceipt {
+                    input_hash,
+                    key: mutation.key().to_owned(),
+                    started_at: store::now(),
+                },
+            };
+            p.pending_logins.insert(slot, receipt.clone());
+            stored.save()?;
+            let tokens = client
+                .login(&slt, &Mutation::with_key(receipt.key)?)
+                .await?;
+            if slt.starts_with("c:") || slt.starts_with("si:") {
+                anyhow::ensure!(
+                    tokens.actor.id == *slt,
+                    "Testing login returned a different account"
+                );
+            }
+            let p = stored.profile(&cli.profile);
+            let previous = match cli.test {
+                Some(id) => p.test_sessions.get(&id),
+                None => p.session.as_ref(),
+            };
+            if let Some(previous) =
+                previous.filter(|previous| previous.tokens.validate_context(None).is_ok())
+            {
+                store::same_context(&previous.tokens, &tokens)?;
+            }
             let actor = tokens.actor.clone();
+            let selected_org = tokens.org_id.clone();
             let p = stored.profile(&cli.profile);
             if let Some(url) = &cli.url {
                 p.url = url.clone();
             }
-            let org = cli.org.clone().or(tokens.org_id.clone());
+            let org = tokens.org_id.clone();
             let session = Session {
-                expires_at: store::now().saturating_add(tokens.expires_in),
+                expires_at: receipt.started_at.saturating_add(tokens.expires_in),
                 pending_refresh_key: None,
                 refresh_started_at: None,
                 tokens,
@@ -396,10 +466,7 @@ async fn run(cli: &Cli) -> Result<()> {
                 }
             } else {
                 p.session = Some(session);
-                // A Silicon login token carries no organization; keep the saved one.
-                if org.is_some() {
-                    p.org = org;
-                }
+                p.org = org;
                 if let Some(silicon) = &cli.silicon {
                     p.silicon = Some(silicon.clone());
                 }
@@ -407,7 +474,7 @@ async fn run(cli: &Cli) -> Result<()> {
             stored.save()?;
             drop(stored);
             print(
-                &serde_json::json!({"signed_in":true,"authenticated":true,"actor":actor,"profile":cli.profile,"test":cli.test}),
+                &serde_json::json!({"signed_in":true,"authenticated":true,"actor":actor,"org_id":selected_org,"profile":cli.profile,"test":cli.test}),
             )?;
             if !cli.json {
                 eprintln!(
@@ -826,6 +893,13 @@ fn configuration(cli: &Cli, action: &Config, stored: &mut LockedStore) -> Result
                 }
                 "org" => {
                     let p = stored.profile(&cli.profile);
+                    let session = match cli.test {
+                        Some(id) => p.test_sessions.get(&id),
+                        None => p.session.as_ref(),
+                    };
+                    if let Some(session) = session {
+                        session.tokens.validate_context(Some(value))?;
+                    }
                     if let Some(id) = cli.test {
                         p.test_orgs.insert(id, value.clone());
                     } else {
