@@ -440,3 +440,16 @@ test("cancellation queued behind paired completion restores the previous context
   );
   assert.equal((await f.call("/auth/callback/complete", body)).status, 409);
 });
+test("nonce cancellation remains available while interrupted retirement is pending", async (t) => {
+  const f = await fixture(t),
+    body = await f.start("carbon"),
+    saved = await f.store.read(f.id);
+  saved.planes.production.logout = { key: "interrupted-retirement" };
+  await f.store.save(f.id, saved);
+  assert.equal(
+    (await f.call("/console/login/cancel", { nonce }, undefined)).status,
+    200,
+  );
+  assert.equal((await f.call("/auth/callback/complete", body)).status, 409);
+  assert((await f.store.read(f.id)).planes.production.logout);
+});

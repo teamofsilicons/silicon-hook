@@ -1348,6 +1348,7 @@ export function gateway(cfg: Config) {
           ![
             "/console/login",
             "/console/login/start",
+            "/console/login/cancel",
             "/console/logout",
             "/console/forget",
           ].includes(url.pathname)
