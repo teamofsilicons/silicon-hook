@@ -1,0 +1,68 @@
+{
+  "commit": "792791245398f1009a0054544a02fb4f3455df07",
+  "source": "UIArc official public free registry mirror",
+  "items": [
+    {
+      "file": "arc-foundation.json",
+      "source": "https://raw.githubusercontent.com/kuratlielia/arc-library/792791245398f1009a0054544a02fb4f3455df07/public/r/arc-foundation.json",
+      "sha256": "707e3576a82b429966996265386efe6c7dd221fd9628cabd8adffef0ce6c2ece",
+      "bytes": 16024,
+      "files": [
+        "registry/foundation.css",
+        "registry/motion-tokens.ts",
+        "lib/motion-tokens.ts"
+      ],
+      "registry_name": "arc-foundation"
+    },
+    {
+      "file": "button.json",
+      "source": "https://raw.githubusercontent.com/kuratlielia/arc-library/792791245398f1009a0054544a02fb4f3455df07/public/r/button.json",
+      "sha256": "34b3fab633e91f5772ba9796d5c87088a15f763d63afd2b7e0bb26bc775180b5",
+      "bytes": 13359,
+      "files": [
+        "registry/components/button/button.tsx",
+        "registry/components/button/button.module.css"
+      ],
+      "registry_name": "button"
+    },
+    {
+      "file": "card.json",
+      "source": "https://raw.githubusercontent.com/kuratlielia/arc-library/792791245398f1009a0054544a02fb4f3455df07/public/r/card.json",
+      "sha256": "761c584e7b95d99d15ba30985bf340e6c911fe497c8fed2925c77caf051d65ce",
+      "bytes": 20461,
+      "files": [
+        "registry/components/card/card.tsx",
+        "registry/components/card/card.module.css"
+      ],
+      "registry_name": "card"
+    },
+    {
+      "file": "badge.json",
+      "source": "https://raw.githubusercontent.com/kuratlielia/arc-library/792791245398f1009a0054544a02fb4f3455df07/public/r/badge.json",
+      "sha256": "29781d12a54dfa7d31b2ebab5fde01e1c4ec386cdaa354bb6fc6af5ecdd16842",
+      "bytes": 8801,
+      "files": [
+        "registry/components/badge/badge.tsx",
+        "registry/components/badge/badge.module.css"
+      ],
+      "registry_name": "badge"
+    },
+    {
+      "file": "input.json",
+      "source": "https://raw.githubusercontent.com/kuratlielia/arc-library/792791245398f1009a0054544a02fb4f3455df07/public/r/input.json",
+      "sha256": "5073c6ab18f876b2b307a3434fcffd479ade5ab31cfa1b95e456c75ea9a4f9df",
+      "bytes": 10239,
+      "files": [
+        "registry/components/input/input.tsx",
+        "registry/components/input/input.module.css"
+      ],
+      "registry_name": "input"
+    },
+    {
+      "file": "LICENSE",
+      "source": "https://raw.githubusercontent.com/kuratlielia/arc-library/792791245398f1009a0054544a02fb4f3455df07/LICENSE",
+      "sha256": "1b73a3fbab233cb995e6e9b6a63d302f91975c74c1629919c8e9820902820dde",
+      "bytes": 1069
+    }
+  ]
+}

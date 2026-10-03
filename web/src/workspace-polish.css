@@ -1,0 +1,263 @@
+:root {
+  --ink: #242b36;
+  --muted: #647286;
+  --line: #e3e8ef;
+  --blue: #2468d5;
+  --radius: 16px;
+  color: var(--ink);
+  background: #f7f9fc;
+}
+.shell {
+  grid-template-columns: 256px minmax(0, 1fr);
+}
+.sidebar {
+  background: #fbfcfe;
+  padding: 30px 14px 20px;
+}
+.sidebar > .brand {
+  padding-bottom: 32px;
+}
+.context-controls {
+  background: #f3f6fa;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  padding: 15px 12px;
+  margin: 0 0 24px;
+  gap: 16px;
+}
+.context-controls .field > span {
+  font-size: 10px;
+  letter-spacing: 0.055em;
+  color: #5c6e85;
+}
+.context-controls .text-button {
+  font-size: 12px;
+}
+.context-controls input,
+.context-controls select {
+  background: #fff;
+  border-color: #dce3ed;
+  border-radius: 8px;
+}
+.sidebar nav a {
+  border-radius: 10px;
+  gap: 13px;
+  font-size: 13px;
+  padding: 11px 13px;
+}
+.sidebar nav a.active {
+  background: #eaf1fd;
+  color: #245ba7;
+}
+.sidebar nav a.active > span {
+  color: #2468d5;
+}
+.sidebar nav a:hover {
+  background: #f0f4fa;
+}
+.sidebar-bottom {
+  padding-top: 24px;
+}
+.identity {
+  border-top: 1px solid var(--line);
+  padding-top: 20px;
+}
+.topbar {
+  background: #fff;
+  height: 64px;
+}
+.topbar .button {
+  border: 1px solid var(--line);
+  padding: 0 14px;
+  background: #fff;
+  color: #526174;
+}
+main {
+  padding: 42px;
+  max-width: 1400px;
+}
+.page-heading {
+  margin-bottom: 32px;
+  align-items: flex-end;
+}
+.page-heading h1 {
+  font-size: 32px;
+  letter-spacing: -1.05px;
+  font-weight: 500;
+}
+.eyebrow {
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  color: #657790;
+}
+.page-heading p.muted {
+  margin-top: 10px;
+}
+.stats {
+  gap: 18px;
+}
+.stat {
+  padding: 25px;
+  text-decoration: none;
+  box-shadow: 0 1px 2px #16243b04;
+}
+.stat:hover {
+  border-color: #c2d3ee;
+  background: #fff;
+  text-decoration: none;
+}
+.stat > span {
+  color: #647286;
+  font-size: 13px;
+}
+.stat strong {
+  font-size: 38px;
+  font-weight: 500;
+  letter-spacing: -1.2px;
+  color: #273b58;
+}
+.stat .stat-date {
+  font-size: 22px;
+  letter-spacing: -0.5px;
+}
+.stat small {
+  color: #5c7393;
+  font-size: 12px;
+}
+.panel {
+  overflow: hidden;
+  box-shadow: 0 1px 2px #16243b03;
+}
+.panel:has(> h2) {
+  padding: 24px;
+}
+.panel-title {
+  padding: 21px 25px;
+  background: #fff;
+}
+.panel-title h3 {
+  font-weight: 500;
+}
+thead th {
+  background: #fafbfd;
+  color: #63738a;
+}
+tbody tr:hover {
+  background: #f7faff;
+}
+.badge {
+  min-height: 24px;
+  font-size: 11px;
+  padding: 0 9px;
+}
+.badge::before {
+  width: 5px;
+  height: 5px;
+}
+.badge.active,
+.badge.connected,
+.badge.verified,
+.badge.ready {
+  background: #edf7f1;
+  color: #277653;
+  border-color: #d7e9de;
+}
+.badge.blocked,
+.badge.deleted {
+  background: #fff1f1;
+  color: #a53743;
+  border-color: #f0d7db;
+}
+.badge.test {
+  background: #fff7e6;
+  color: #85621b;
+  border-color: #ecdfbd;
+}
+.quick-links {
+  gap: 18px;
+}
+.quick-links > a {
+  padding: 24px;
+  background: #fff;
+}
+.quick-links > a:hover {
+  border-color: #c2d3ee;
+  background: #fff;
+}
+.welcome {
+  background: #f0f5fe;
+  border-color: #dce6f7;
+}
+.welcome h2 {
+  color: #264267;
+}
+.welcome-mark {
+  opacity: 0.75;
+}
+dialog {
+  border: 1px solid var(--line);
+  border-radius: 18px;
+  box-shadow: 0 20px 64px #18294320;
+}
+dialog::backdrop {
+  background: #19253b38;
+  backdrop-filter: blur(3px);
+}
+.notice,
+pre {
+  border-radius: 10px;
+}
+section[aria-label="Ting authorization"] .panel-body > .button {
+  align-self: flex-start;
+}
+section[aria-label="Ting authorization"] label {
+  display: grid;
+  gap: 8px;
+  max-width: 460px;
+}
+footer {
+  background: #fff;
+}
+@media (min-width: 761px) and (max-width: 1100px) {
+  .shell {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+}
+@media (max-width: 600px) {
+  main {
+    padding: 28px 18px;
+  }
+  .topbar {
+    height: auto;
+    min-height: 64px;
+  }
+  .topbar .button {
+    min-height: 36px;
+    padding-inline: 10px;
+    font-size: 12px;
+  }
+  .page-heading h1 {
+    font-size: 28px;
+  }
+  .stats {
+    gap: 12px;
+  }
+  .stat {
+    padding: 20px;
+  }
+  .stat strong {
+    font-size: 32px;
+  }
+  .stat .stat-date {
+    font-size: 20px;
+  }
+  .panel-title {
+    padding: 18px;
+  }
+  .context-controls {
+    margin-bottom: 18px;
+  }
+  .quick-links > a {
+    padding: 20px;
+  }
+}

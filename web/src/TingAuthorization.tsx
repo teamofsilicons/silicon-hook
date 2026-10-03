@@ -100,7 +100,11 @@ export function TingAuthorization(p: { ctx: Context }) {
         <Show
           when={pending()}
           fallback={
-            <button disabled={busy() || !p.ctx.org} onClick={() => act(start)}>
+            <button
+              class="button primary"
+              disabled={busy() || !p.ctx.org}
+              onClick={() => act(start)}
+            >
               Authorize Ting
             </button>
           }
@@ -124,12 +128,14 @@ export function TingAuthorization(p: { ctx: Context }) {
             />
           </label>
           <button
+            class="button primary"
             disabled={busy() || !code().trim()}
             onClick={() => act(finish)}
           >
             Save authorization
           </button>
           <button
+            class="button"
             disabled={busy()}
             onClick={() => {
               setPending(undefined);
@@ -143,6 +149,7 @@ export function TingAuthorization(p: { ctx: Context }) {
         </Show>
         <p>
           <button
+            class="button"
             disabled={busy() || !p.ctx.org}
             onClick={() =>
               act(async () => {
