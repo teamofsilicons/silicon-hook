@@ -238,6 +238,12 @@ export function gateway(cfg: Config) {
     body?: unknown,
     key?: string,
   ) {
+    if (org && plane.tokens && org !== plane.tokens.org_id)
+      throw new GatewayError(
+        409,
+        "organization_context_mismatch",
+        "Sign in to this organization separately before using it.",
+      );
     if (path.startsWith("/api/v2/")) await negotiate(plane);
     const headers: Record<string, string> = {
       "silicon-hook-api-version": "v2",
@@ -370,7 +376,8 @@ export function gateway(cfg: Config) {
       if (
         !validTokens(tokens) ||
         tokens.actor.id !== plane.tokens.actor.id ||
-        tokens.actor.type !== plane.tokens.actor.type
+        tokens.actor.type !== plane.tokens.actor.type ||
+        tokens.org_id !== plane.tokens.org_id
       )
         throw new GatewayError(
           502,
@@ -397,6 +404,7 @@ export function gateway(cfg: Config) {
       value.expires_in > 0 &&
       identifier(value.actor?.id) &&
       ["carbon", "silicon"].includes(value.actor?.type) &&
+      identifier(value.org_id) &&
       Array.isArray(value.scopes)
     );
   }
@@ -507,7 +515,7 @@ export function gateway(cfg: Config) {
         );
       if (cursor) seen.add(cursor);
     } while (cursor);
-    return items;
+    return items.filter((org) => org.id === plane.tokens!.org_id);
   }
   async function completeLogin(id: string, session: Session, body: any) {
     const pending = session.login;
@@ -589,6 +597,7 @@ export function gateway(cfg: Config) {
           "Hook returned an invalid session. Retry this sign-in attempt.",
         );
       pending.hook = {
+        contextId: crypto.randomUUID(),
         name: "Production",
         tokens,
         expiresAt: pending.started + tokens.expires_in * 1000,
@@ -629,7 +638,7 @@ export function gateway(cfg: Config) {
         (other) => other.id === org.iamId && other.handle === org.id,
       ),
     );
-    if ((hookOrgs.length || tingOrgs.length) && !shared.length)
+    if (!shared.length)
       throw new GatewayError(
         403,
         "delivery_organization_mismatch",
@@ -654,25 +663,14 @@ export function gateway(cfg: Config) {
           "The signed-in identity or organization changed. Continue with IAM again.",
         );
     }
-    closePlane(id, "production");
-    // Keep the new pair in the encrypted attempt until both old credentials
-    // have been revoked. An unavailable logout is retried without losing either
-    // session family or repeating a completed SLT exchange.
-    const old = session.planes.production;
-    if (old.tokens || old.ting) {
-      if (
-        old.tokens?.refresh_token === pending.hook.tokens?.refresh_token ||
-        old.ting?.token === pending.ting.token
-      )
-        throw new GatewayError(
-          409,
-          "login_family_conflict",
-          "The new login reused an existing session family. Start a new IAM sign-in attempt.",
-        );
-      await logoutPlane(id, session, old, `retire-${pending.hookKey}`);
-    }
     await discardManual(id, session, "production");
-    session.planes.production = { ...pending.hook, ting: pending.ting };
+    await installContext(
+      id,
+      session,
+      "production",
+      { ...pending.hook, ting: pending.ting },
+      `retire-${pending.hookKey}`,
+    );
     delete pending.items;
     delete pending.hook;
     delete pending.ting;
@@ -819,6 +817,7 @@ export function gateway(cfg: Config) {
           "The interrupted sign-in must be recovered before its session can be revoked. Retry this operation.",
         );
       pending.hook = {
+        contextId: crypto.randomUUID(),
         name: "Production",
         tokens,
         expiresAt: pending.started + tokens.expires_in * 1000,
@@ -880,6 +879,7 @@ export function gateway(cfg: Config) {
           "The interrupted sign-in must be recovered before its session can be revoked. Retry this operation.",
         );
       pending.result = {
+        contextId: crypto.randomUUID(),
         name: plane.name,
         key: plane.key,
         appSecret: plane.appSecret,
@@ -935,16 +935,21 @@ export function gateway(cfg: Config) {
           attempt.key,
         ),
       );
-      if (!validTokens(tokens))
+      if (
+        !validTokens(tokens) ||
+        (plane.organizationId && tokens.org_id !== plane.organizationId)
+      )
         throw new GatewayError(
           502,
           "invalid_login",
           "Hook returned an invalid session. Retry this sign-in attempt.",
         );
       pending.result = {
+        contextId: crypto.randomUUID(),
         name: plane.name,
         key: plane.key,
         appSecret: plane.appSecret,
+        organizationId: plane.organizationId,
         telemetry: plane.telemetry,
         tokens,
         expiresAt: pending.started + tokens.expires_in * 1000,
@@ -959,31 +964,101 @@ export function gateway(cfg: Config) {
         "login_family_conflict",
         "This token exchange reused the current session family. Request a new IAM short-lived token.",
       );
-    closePlane(id, planeId);
-    await logoutPlane(
+    if (planeId === "production") await discardBatch(id, session);
+    await installContext(
       id,
       session,
-      plane,
+      planeId,
+      pending.result,
       `retire-${pending.key}`.slice(0, 255),
     );
-    if (planeId === "production") await discardBatch(id, session);
-    session.planes[planeId] = pending.result;
     delete pending.result;
     delete pending.slt;
     pending.complete = true;
     await store.save(id, session);
   }
+  function sameIdentity(a: Plane, b: Plane) {
+    return (
+      a.tokens?.actor.type === b.tokens?.actor.type &&
+      a.tokens?.actor.id === b.tokens?.actor.id &&
+      a.tokens?.org_id === b.tokens?.org_id
+    );
+  }
+  async function installContext(
+    id: string,
+    session: Session,
+    planeId: string,
+    next: Plane,
+    key: string,
+  ) {
+    const old = session.planes[planeId];
+    if (
+      old.tokens?.refresh_token === next.tokens?.refresh_token ||
+      (old.ting && old.ting.token === next.ting?.token)
+    )
+      throw new GatewayError(
+        409,
+        "login_family_conflict",
+        "The new login reused an existing session family. Start a new IAM sign-in attempt.",
+      );
+    closePlane(id, planeId);
+    session.contexts ??= {};
+    if (old.tokens || old.ting) {
+      if (sameIdentity(old, next)) await logoutPlane(id, session, old, key);
+      else {
+        await drainReceivers(id, session, old);
+        session.contexts[old.contextId!] = { planeId, plane: old };
+      }
+    }
+    // A new login replaces only the matching account+organization, never a
+    // different account in the same organization or a different test plane.
+    for (const [contextId, saved] of Object.entries(session.contexts)) {
+      if (saved.planeId === planeId && sameIdentity(saved.plane, next)) {
+        await logoutPlane(
+          id,
+          session,
+          saved.plane,
+          `${key}-${contextId}`.slice(0, 255),
+        );
+        delete session.contexts[contextId];
+      }
+    }
+    session.planes[planeId] = next;
+  }
+  function requireContext(plane: Plane | undefined, marker: unknown) {
+    if (
+      (marker && marker !== plane?.contextId) ||
+      (plane?.tokens && marker !== plane.contextId)
+    )
+      throw new GatewayError(
+        409,
+        "session_context_changed",
+        "This workspace changed. Reload before continuing the original action.",
+      );
+  }
   function publicSession(session: Session) {
+    const publicPlane = (id: string, p: Plane) => ({
+      id,
+      name: p.name,
+      context_id: p.contextId,
+      attached: !!(p.key || p.appSecret),
+      authenticated: !!p.tokens && !p.logout,
+      logout_pending: !!p.logout,
+      actor: p.tokens?.actor,
+      org_id: p.tokens?.org_id,
+      expires_at: p.expiresAt,
+    });
     return {
       planes: Object.entries(session.planes).map(([id, p]) => ({
-        id,
-        name: p.name,
-        attached: !!(p.key || p.appSecret),
-        authenticated: !!p.tokens && !p.logout,
-        logout_pending: !!p.logout,
-        actor: p.tokens?.actor,
-        org_id: p.tokens?.org_id,
-        expires_at: p.expiresAt,
+        ...publicPlane(id, p),
+        contexts: [
+          p,
+          ...Object.values(session.contexts || {})
+            .filter((saved) => saved.planeId === id)
+            .map((saved) => saved.plane),
+        ]
+          .filter((p) => p.tokens && !p.logout)
+          .map((p) => publicPlane(id, p)),
       })),
       upstream: cfg.upstream,
     };
@@ -1035,7 +1110,7 @@ export function gateway(cfg: Config) {
         );
         res.setHeader(
           "Access-Control-Allow-Headers",
-          "Content-Type, X-Hook-Frontend, X-Hook-Telemetry, X-Org-Id, Idempotency-Key",
+          "Content-Type, X-Hook-Frontend, X-Hook-Telemetry, X-Hook-Context, X-Org-Id, Idempotency-Key",
         );
         res.writeHead(204);
         res.end();
@@ -1115,6 +1190,8 @@ export function gateway(cfg: Config) {
           : undefined;
         for (const saved of Object.values(session.planes))
           saved.telemetry = req.headers["x-hook-telemetry"] !== "off";
+        if (!["/console/session", "/console/attach"].includes(url.pathname))
+          requireContext(plane, req.headers["x-hook-context"]);
         if (url.pathname === "/console/telemetry" && req.method === "POST") {
           if (plane?.telemetry !== false && plane?.tokens && !plane.logout) {
             await upstream(
@@ -1161,13 +1238,36 @@ export function gateway(cfg: Config) {
               "A browser session supports up to 19 test environments.",
             );
           closePlane(id, env.id);
-          if (session.planes[env.id])
+          if (session.planes[env.id]) {
+            if (
+              session.planes[env.id].appSecret !== body.app_secret &&
+              session.planes[env.id].tokens
+            )
+              throw new GatewayError(
+                409,
+                "environment_authority_changed",
+                "Forget the existing environment before replacing its application secret.",
+              );
             await drainReceivers(id, session, session.planes[env.id]);
+          }
+          if (
+            Object.values(session.contexts || {}).some(
+              (saved) =>
+                saved.planeId === env.id &&
+                saved.plane.appSecret !== body.app_secret,
+            )
+          )
+            throw new GatewayError(
+              409,
+              "environment_authority_changed",
+              "Forget the existing environment before replacing its application secret.",
+            );
           session.planes[env.id] = {
             ...session.planes[env.id],
             name: env.name,
             key: undefined,
             appSecret: body.app_secret,
+            organizationId: env.org_id,
           };
           await store.save(id, session);
           return { id: env.id, ...publicSession(session) };
@@ -1178,6 +1278,28 @@ export function gateway(cfg: Config) {
             "environment_not_attached",
             "Attach this environment before signing in or making requests.",
           );
+        if (url.pathname === "/console/context" && req.method === "POST") {
+          const saved = session.contexts?.[body?.context_id];
+          if (
+            !saved ||
+            saved.planeId !== planeId ||
+            !saved.plane.tokens ||
+            saved.plane.logout
+          )
+            throw new GatewayError(
+              404,
+              "context_not_found",
+              "That saved workspace is unavailable in this environment.",
+            );
+          closePlane(id, planeId);
+          await drainReceivers(id, session, plane);
+          if (plane.tokens)
+            session.contexts![plane.contextId!] = { planeId, plane };
+          session.planes[planeId] = saved.plane;
+          delete session.contexts![body.context_id];
+          await store.save(id, session);
+          return publicSession(session);
+        }
         if (
           plane.logout &&
           ![
@@ -1313,6 +1435,19 @@ export function gateway(cfg: Config) {
           await logoutPlane(id, session, plane, mutation(req));
           if (planeId === "production") await discardBatch(id, session);
           await discardManual(id, session, planeId);
+          for (const [contextId, saved] of Object.entries(
+            session.contexts || {},
+          )) {
+            if (saved.planeId === planeId) {
+              await logoutPlane(
+                id,
+                session,
+                saved.plane,
+                `${mutation(req)}-${contextId}`.slice(0, 255),
+              );
+              delete session.contexts![contextId];
+            }
+          }
           if (planeId === "production") {
             session.planes.production = { name: "Production" };
           } else delete session.planes[planeId];
@@ -1457,6 +1592,7 @@ export function gateway(cfg: Config) {
       wss.handleUpgrade(req, socket, head, (client) => {
         const planeId = url.searchParams.get("plane") || "production";
         const org = url.searchParams.get("org") || "";
+        const contextId = url.searchParams.get("context") || "";
         const ids = [...new Set(url.searchParams.getAll("silicon_id"))];
         const item = { plane: planeId, socket: client };
         let set = sockets.get(id);
@@ -1706,6 +1842,7 @@ export function gateway(cfg: Config) {
               );
             const session = await store.read(id),
               plane = session.planes[planeId];
+            requireContext(plane, contextId);
             if (stopped || paused)
               throw new GatewayError(
                 499,
@@ -1868,6 +2005,7 @@ export function gateway(cfg: Config) {
           const plane = await store.locked(id, async () => {
             const session = await store.read(id),
               plane = session.planes[planeId];
+            requireContext(plane, contextId);
             if (!plane?.tokens || plane.logout)
               throw new GatewayError(
                 401,
@@ -2064,6 +2202,7 @@ export function gateway(cfg: Config) {
               if (stopped || paused) return;
               const session = await store.read(id),
                 plane = session.planes[planeId];
+              requireContext(plane, contextId);
               if (stopped || paused) return;
               const slot = receiverSlot && plane?.receivers?.[receiverSlot];
               if (

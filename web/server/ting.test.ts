@@ -84,6 +84,8 @@ async function fixture() {
     inbox: [] as Notification[],
     events: new Map([[eid, event()]]),
     tingActor: { ...actor },
+    hookActor: { ...actor },
+    hookOrg: org,
     tingEnvironment: { kind: "production" } as unknown,
     tingOrgs: [orgUuid],
     contract: "v2",
@@ -119,7 +121,8 @@ async function fixture() {
     access_token: access,
     refresh_token: "hook-refresh",
     expires_in: 3600,
-    actor,
+    actor: { ...state.hookActor },
+    org_id: state.hookOrg,
     scopes: [],
   });
   const sessions = new Map<string, any>();
@@ -428,17 +431,28 @@ async function fixture() {
   };
   restart();
   let cookie = "";
+  const markers = new Map<string, string>();
   const call = async (
     path: string,
     method = "GET",
     body?: unknown,
     headers: Record<string, string> = {},
   ) => {
+    if (cookie) {
+      const saved = await store.read(id());
+      for (const [planeId, plane] of Object.entries(saved.planes))
+        if (plane.contextId) markers.set(planeId, plane.contextId);
+    }
+    const planeId =
+      new URL(path, cfg.origin).searchParams.get("plane") || "production";
     const res = await fetch(cfg.origin + path, {
       method,
       headers: {
         origin: cfg.frontendOrigin,
         "x-hook-frontend": "1",
+        ...(markers.has(planeId)
+          ? { "x-hook-context": markers.get(planeId)! }
+          : {}),
         "idempotency-key": "test-operation-key",
         ...(cookie ? { cookie } : {}),
         ...(body === undefined ? {} : { "content-type": "application/json" }),
@@ -448,6 +462,11 @@ async function fixture() {
     });
     if (res.headers.has("set-cookie"))
       cookie = res.headers.get("set-cookie")!.split(";")[0];
+    if (cookie) {
+      const saved = await store.read(id());
+      for (const [planeId, plane] of Object.entries(saved.planes))
+        if (plane.contextId) markers.set(planeId, plane.contextId);
+    }
     const text = await res.text();
     return { status: res.status, data: text ? JSON.parse(text) : undefined };
   };
@@ -475,12 +494,17 @@ async function fixture() {
   };
   const store = new SessionStore(dir, cfg.sessionKey);
   const id = () => cookie.split("=")[1];
-  const open = (plane = "production", silicons = [silicon]) => {
+  const open = (
+    plane = "production",
+    silicons = [silicon],
+    marker = markers.get(plane),
+  ) => {
     const address = new URL(
       `/console/stream?plane=${plane}&org=${org}&silicon_id=${silicon}`,
       cfg.origin,
     );
     address.protocol = "ws:";
+    if (marker) address.searchParams.set("context", marker);
     address.searchParams.delete("silicon_id");
     silicons.forEach((id) => address.searchParams.append("silicon_id", id));
     const remoteClosed = new Promise<void>((resolve) =>
@@ -514,7 +538,12 @@ async function fixture() {
         };
         const timer = setTimeout(() => {
           waiting.delete(done);
-          reject(new Error("Expected observer frame was not received"));
+          reject(
+            new Error(
+              "Expected observer frame was not received: " +
+                JSON.stringify(frames),
+            ),
+          );
         }, timeout);
         waiting.add(done);
       });
@@ -1153,11 +1182,13 @@ test("test selector and Hook-only login report unavailable receiving without con
     const saved = await f.store.read(f.id());
     const plane = {
       name: "Production",
+      contextId: "fixture-context",
       tokens: {
         access_token: "hook-access",
         refresh_token: "hook-refresh",
         expires_in: 3600,
         actor,
+        org_id: org,
         scopes: [],
       },
       expiresAt: Date.now() + 3600000,
@@ -1169,6 +1200,7 @@ test("test selector and Hook-only login report unavailable receiving without con
       key: "test-selector",
     };
     await f.store.save(f.id(), saved);
+    await f.call("/console/session");
     for (const [id, code] of [
       ["production", "delivery_login_required"],
       [f.state.testId, "test_app_selector_required"],
@@ -1779,6 +1811,142 @@ test("scoped initial quota failure includes the server retry delay before reconn
     assert.equal(failure.data.retry_after, 12);
     await observer.remoteClosed;
     assert.equal(f.state.receiverCreated, 0);
+  } finally {
+    observer?.client.terminate();
+    await f.close();
+  }
+});
+
+test("saved IAM contexts isolate accounts, organizations and testing planes across restart", async () => {
+  const f = await fixture();
+  try {
+    const login = async (slt: string, plane = "production") => {
+      const result = await f.call(
+        `/console/login?plane=${plane}`,
+        "POST",
+        { slt },
+        { "idempotency-key": slt },
+      );
+      assert.equal(result.status, 200, JSON.stringify(result.data));
+      return result.data.planes.find((p: any) => p.id === plane);
+    };
+    const first = await login("carbon-first");
+    f.state.hookActor = { type: "carbon", id: "ca_second" };
+    const second = await login("carbon-second");
+    assert.equal(second.contexts.length, 2);
+    f.state.hookActor = { type: "silicon", id: "si_second" };
+    f.state.hookOrg = "another-org";
+    const third = await login("silicon-other-org");
+    assert.equal(third.contexts.length, 3);
+    assert.equal(
+      f.state.calls.filter((call) => call.path.endsWith("/auth/logout")).length,
+      0,
+    );
+    const before = await f.store.read(f.id());
+    const originalToken =
+      before.contexts![first.context_id].plane.tokens!.access_token;
+    assert.ok(
+      !(await readFile(join(f.dir, f.id()))).includes(
+        Buffer.from(originalToken),
+      ),
+    );
+    f.restart();
+    const changed = await f.call("/console/context", "POST", {
+      context_id: first.context_id,
+    });
+    assert.equal(changed.status, 200);
+    assert.equal(changed.data.planes[0].actor.id, actor.id);
+    assert.equal(
+      (await f.store.read(f.id())).planes.production.tokens!.access_token,
+      originalToken,
+    );
+    const calls = f.state.calls.length;
+    for (const [path, method] of [
+      ["/console/logout", "POST"],
+      ["/console/proxy/api/v2/silicons/si_test/hooks", "GET"],
+      ["/console/proxy/api/v2/delivery/authorization/complete", "POST"],
+    ]) {
+      const stale = await f.call(
+        path,
+        method,
+        method === "POST" ? {} : undefined,
+        { "x-hook-context": third.context_id },
+      );
+      assert.equal(stale.status, 409);
+      assert.equal(stale.data.error.code, "session_context_changed");
+    }
+    const override = await f.call(
+      "/console/proxy/api/v2/silicons/si_test/hooks",
+      "GET",
+      undefined,
+      { "x-org-id": "another-org" },
+    );
+    assert.equal(override.status, 409);
+    assert.equal(f.state.calls.length, calls);
+    await f.call("/console/attach", "POST", {
+      app_secret: `ask_${"a".repeat(43)}`,
+    });
+    f.state.hookOrg = org;
+    const test = await login("test-silicon", f.state.testId);
+    assert.equal(test.contexts.length, 1);
+    const foreign = await f.call(
+      `/console/context?plane=${f.state.testId}`,
+      "POST",
+      { context_id: second.context_id },
+    );
+    assert.equal(foreign.status, 404);
+    const after = await f.store.read(f.id());
+    assert.equal(after.planes.production.contextId, first.context_id);
+    assert.equal(after.planes[f.state.testId].contextId, test.context_id);
+  } finally {
+    await f.close();
+  }
+});
+
+test("refresh refuses an organization or actor change and preserves its retry identity", async () => {
+  for (const changed of ["organization", "account", "kind"] as const) {
+    const f = await fixture();
+    try {
+      await f.call("/console/login", "POST", { slt: "first" });
+      const original = (await f.store.read(f.id())).planes.production;
+      if (changed === "organization") f.state.hookOrg = "other-org";
+      if (changed === "account") f.state.hookActor.id = "ca_other";
+      if (changed === "kind") f.state.hookActor.type = "silicon";
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const result = await f.call("/console/refresh", "POST");
+        assert.equal(result.status, 502);
+        assert.equal(result.data.error.code, "invalid_refresh");
+      }
+      const saved = (await f.store.read(f.id())).planes.production;
+      assert.deepEqual(saved.tokens, original.tokens);
+      assert.equal(saved.contextId, original.contextId);
+      const refreshes = f.state.calls.filter((call) =>
+        call.path.endsWith("/auth/refresh"),
+      );
+      assert.equal(refreshes.length, 2);
+      assert.equal(
+        refreshes[0].headers["idempotency-key"],
+        refreshes[1].headers["idempotency-key"],
+      );
+    } finally {
+      await f.close();
+    }
+  }
+});
+
+test("a live stream cannot attach a former account context to the current session", async () => {
+  const f = await fixture();
+  let observer: ReturnType<typeof f.open> | undefined;
+  try {
+    await f.signIn();
+    const original = (await f.store.read(f.id())).planes.production.contextId;
+    f.state.hookActor = { type: "silicon", id: "si_another" };
+    await f.call("/console/login", "POST", { slt: "another-login" });
+    const before = f.state.calls.length;
+    observer = f.open("production", [silicon], original);
+    const frame = await observer.until((frame) => frame.type === "error");
+    assert.equal(frame.data.code, "session_context_changed");
+    assert.equal(f.state.calls.length, before);
   } finally {
     observer?.client.terminate();
     await f.close();

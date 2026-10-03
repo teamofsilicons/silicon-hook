@@ -3,6 +3,8 @@ export interface Actor {
   id: string;
 }
 export interface Plane {
+  context_id?: string;
+  contexts?: Plane[];
   id: string;
   name: string;
   attached: boolean;
@@ -111,6 +113,7 @@ export interface Environment {
   key?: string;
 }
 export interface Context {
+  contextId?: string;
   plane: string;
   org: string;
   silicon: string;
@@ -133,6 +136,7 @@ export async function request<T>(
   body?: unknown,
   key?: string,
   org?: string,
+  contextId?: string,
 ): Promise<T> {
   const headers: Record<string, string> = {
     "X-Hook-Frontend": "1",
@@ -142,6 +146,7 @@ export async function request<T>(
   if (body !== undefined) headers["content-type"] = "application/json";
   if (key) headers["idempotency-key"] = key;
   if (org) headers["x-org-id"] = org;
+  if (contextId) headers["x-hook-context"] = contextId;
   let response: Response;
   try {
     response = await fetch(new URL(path, gatewayOrigin()), {
@@ -198,7 +203,14 @@ export function api<T>(
     );
   const u = new URL("/console/proxy" + path, location.origin);
   u.searchParams.set("plane", ctx.plane);
-  return request<T>(u.pathname + u.search, method, body, key, ctx.org);
+  return request<T>(
+    u.pathname + u.search,
+    method,
+    body,
+    key,
+    ctx.org,
+    ctx.contextId,
+  );
 }
 export function gatewayOrigin(): string {
   return import.meta.env.VITE_HOOK_GATEWAY_ORIGIN || location.origin;
@@ -287,6 +299,7 @@ export async function track(
       },
       undefined,
       ctx.org,
+      ctx.contextId,
     );
   } catch {
     /* Diagnostics must never interrupt the product. */

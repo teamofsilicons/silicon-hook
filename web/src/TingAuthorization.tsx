@@ -1,5 +1,5 @@
-import { createSignal, createEffect, Show } from "solid-js";
-import { api, message, type Context } from "./api";
+import { createSignal, createEffect, onCleanup, Show } from "solid-js";
+import { api, ApiError, message, type Context } from "./api";
 
 type Pending = { authorization_id: string; authorization_url: string };
 export function TingAuthorization(p: { ctx: Context }) {
@@ -7,9 +7,14 @@ export function TingAuthorization(p: { ctx: Context }) {
   const [code, setCode] = createSignal("");
   const [busy, setBusy] = createSignal(false);
   const [notice, setNotice] = createSignal("");
+  let active = true;
+  onCleanup(() => {
+    active = false;
+  });
   let beginKey = crypto.randomUUID(),
     finishKey = crypto.randomUUID();
   createEffect(() => {
+    p.ctx.contextId;
     p.ctx.org;
     p.ctx.plane;
     setPending(undefined);
@@ -24,9 +29,17 @@ export function TingAuthorization(p: { ctx: Context }) {
     try {
       await action();
     } catch (e) {
-      setNotice(message(e));
+      if (active) {
+        if (e instanceof ApiError && e.status === 412) {
+          setPending(undefined);
+          setCode("");
+          beginKey = crypto.randomUUID();
+          finishKey = crypto.randomUUID();
+        }
+        setNotice(message(e));
+      }
     } finally {
-      setBusy(false);
+      if (active) setBusy(false);
     }
   }
   async function start() {
@@ -37,13 +50,16 @@ export function TingAuthorization(p: { ctx: Context }) {
       undefined,
       beginKey,
     );
+    if (!active) return;
     const url = new URL(result.authorization_url);
     if (
-      url.protocol !== "https:" &&
-      !(
-        url.protocol === "http:" &&
-        ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-      )
+      url.username ||
+      url.password ||
+      (url.protocol !== "https:" &&
+        !(
+          url.protocol === "http:" &&
+          ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
+        ))
     )
       throw new Error("IAM returned an invalid authorization link.");
     setPending(result);
@@ -59,6 +75,7 @@ export function TingAuthorization(p: { ctx: Context }) {
       },
       finishKey,
     );
+    if (!active) return;
     setCode("");
     setPending(undefined);
     setNotice("Ting authorization saved for this account and organization.");
@@ -133,6 +150,7 @@ export function TingAuthorization(p: { ctx: Context }) {
                   p.ctx,
                   "/api/v2/delivery/authorization",
                 );
+                if (!active) return;
                 setNotice(
                   result.status === "authorized"
                     ? "Ting grants are stored. Every action is verified by Ting."

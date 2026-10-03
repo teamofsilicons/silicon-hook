@@ -103,11 +103,46 @@ export default function App() {
     const p = session.data()?.planes.find((x) => x.id === id);
     context({
       plane: id,
+      contextId: p?.context_id,
       org: p?.org_id || "",
       silicon: p?.actor?.type === "silicon" ? p.actor.id : "",
     });
     setDialog(undefined);
   };
+  const [switching, setSwitching] = createSignal(false);
+  async function selectContext(contextId: string) {
+    const before = { ...ctx() };
+    setSwitching(true);
+    setError(undefined);
+    try {
+      await request(
+        "/console/context?plane=" + encodeURIComponent(before.plane),
+        "POST",
+        { context_id: contextId },
+        crypto.randomUUID(),
+        undefined,
+        before.contextId,
+      );
+      await reload();
+      selectPlane(before.plane);
+    } catch (error) {
+      setError(error);
+      await reload();
+    } finally {
+      setSwitching(false);
+    }
+  }
+  createEffect(() => {
+    const p = current();
+    if (p && p.context_id !== ctx().contextId) {
+      context({
+        contextId: p.context_id,
+        org: p.org_id || "",
+        silicon: p.actor?.type === "silicon" ? p.actor.id : "",
+      });
+      setDialog(undefined);
+    }
+  });
   createEffect(() => {
     if (session.data() && iamReturned) {
       iamReturned = false;
@@ -124,22 +159,28 @@ export default function App() {
     await reload();
     const p = current();
     context({
-      org: p?.org_id || ctx().org,
-      silicon: p?.actor?.type === "silicon" ? p.actor.id : ctx().silicon,
+      contextId: p?.context_id,
+      org: p?.org_id || "",
+      silicon: p?.actor?.type === "silicon" ? p.actor.id : "",
     });
   }
   const organizations = load(
     () =>
       (ready() || current()?.attached) &&
-      ctx().plane + ":" + current()?.expires_at,
+      ctx().plane + ":" + ctx().contextId + ":" + current()?.expires_at,
     () =>
       request<{ items: { id: string; name: string }[] }>(
         "/console/organizations?plane=" + encodeURIComponent(ctx().plane),
+        "GET",
+        undefined,
+        undefined,
+        undefined,
+        ctx().contextId,
       ),
   );
   createEffect(() => {
     const items = organizations.data()?.items;
-    if (!items || organizations.loading()) return;
+    if (ready() || !items || organizations.loading()) return;
     if (!items.some((org) => org.id === ctx().org)) {
       const org = items.length === 1 ? items[0].id : "";
       if (ctx().org !== org)
@@ -182,44 +223,36 @@ export default function App() {
               </For>
             </select>
           </Field>
-          <Field label="ORGANIZATION">
+          <Field label="ACCOUNT & ORGANIZATION">
             <select
-              aria-label="Organization"
-              disabled={
-                organizations.loading() || !organizations.data()?.items.length
-              }
-              onChange={(e) =>
-                context({ org: e.currentTarget.value, silicon: "" })
-              }
+              aria-label="Account and organization"
+              value={ctx().contextId || ""}
+              disabled={switching() || !current()?.contexts?.length}
+              onChange={(e) => void selectContext(e.currentTarget.value)}
             >
-              <option value="" selected={!ctx().org}>
-                {organizations.loading()
-                  ? "Loading organizations…"
-                  : "Choose an organization"}
-              </option>
-              <For each={organizations.data()?.items || []}>
-                {(org) => (
-                  <option value={org.id} selected={ctx().org === org.id}>
-                    {org.name} ({org.id})
+              <Show when={!ready()}>
+                <option value="">Choose a saved workspace</option>
+              </Show>
+              <For each={current()?.contexts || []}>
+                {(saved) => (
+                  <option value={saved.context_id}>
+                    {saved.actor?.id} · {saved.org_id}
                   </option>
                 )}
               </For>
             </select>
+            <button class="text-button" onClick={() => setDialog("login")}>
+              Add an account or organization
+            </button>
             <Show when={organizations.error()}>
               <p class="small">
-                Could not load organizations.{" "}
+                Could not load the organization name.{" "}
                 <button
                   class="text-button"
                   onClick={() => organizations.refresh()}
                 >
                   Retry
                 </button>
-              </p>
-            </Show>
-            <Show when={ready() && organizations.data()?.items.length === 0}>
-              <p class="small muted">
-                No organizations shared. Continue with IAM to choose
-                organizations.
               </p>
             </Show>
           </Field>
@@ -290,17 +323,13 @@ export default function App() {
                 Test environment: {current()?.name} ·{" "}
                 {current()?.actor?.id || "Not signed in"}
               </span>
-              <Button
-                onClick={() =>
-                  context({ plane: "production", org: "", silicon: "" })
-                }
-              >
+              <Button onClick={() => selectPlane("production")}>
                 Exit testing mode
               </Button>
             </Show>
           </div>
           <Button onClick={() => setDialog("login")}>
-            {ready() ? "Switch identity" : "Sign in"}
+            {ready() ? "Add account or organization" : "Sign in"}
           </Button>
         </header>
         <main id="main-content">
@@ -328,7 +357,7 @@ export default function App() {
                           ? "Enter a Silicon ID in the sidebar to open its connections and requests."
                           : "Choose an organization shared through IAM in the sidebar."
                         : ctx().plane === "production"
-                          ? "Continue with IAM to sign in and choose your organizations."
+                          ? "Continue with IAM to sign in and choose an organization."
                           : "Sign in with an IAM test token for the selected environment."}
                     </Empty>
                     <Show when={!ready()}>
@@ -347,60 +376,71 @@ export default function App() {
                 }
               >
                 <Show
-                  when={ctx().plane + "|" + ctx().org + "|" + ctx().silicon}
+                  when={
+                    ctx().plane +
+                    "|" +
+                    ctx().contextId +
+                    "|" +
+                    ctx().org +
+                    "|" +
+                    ctx().silicon
+                  }
                   keyed
                 >
-                  {(_key) => (
-                    <Switch
-                      fallback={
-                        <Empty title="Page not found">
-                          <a href="#overview">Return to overview</a>
-                        </Empty>
-                      }
-                    >
-                      <Match when={route() === "overview"}>
-                        <Overview
-                          ctx={ctx()}
-                          signedIn={ready()}
-                          login={() => setDialog("login")}
-                        />
-                      </Match>
-                      <Match when={route() === "hooks"}>
-                        <Hooks ctx={ctx()} />
-                      </Match>
-                      <Match when={route() === "events"}>
-                        <History ctx={ctx()} />
-                      </Match>
-                      <Match when={route() === "blocked"}>
-                        <History ctx={ctx()} blocked />
-                      </Match>
-                      <Match when={route() === "deliveries"}>
-                        <Deliveries ctx={ctx()} />
-                      </Match>
-                      <Match when={route() === "live"}>
-                        <Live ctx={ctx()} />
-                      </Match>
-                      <Match when={route() === "testing"}>
-                        <Environments
-                          ctx={ctx()}
-                          session={session.data()!}
-                          refreshSession={reload}
-                          select={selectPlane}
-                          attach={() => setDialog("attach")}
-                          login={() => setDialog("login")}
-                        />
-                      </Match>
-                      <Match when={route() === "connections"}>
-                        <Connections
-                          ctx={ctx()}
-                          session={session.data()!}
-                          refresh={reload}
-                          login={() => setDialog("login")}
-                          attach={() => setDialog("attach")}
-                        />
-                      </Match>
-                    </Switch>
-                  )}
+                  {(_key) => {
+                    const selectedContext = { ...ctx() };
+                    return (
+                      <Switch
+                        fallback={
+                          <Empty title="Page not found">
+                            <a href="#overview">Return to overview</a>
+                          </Empty>
+                        }
+                      >
+                        <Match when={route() === "overview"}>
+                          <Overview
+                            ctx={selectedContext}
+                            signedIn={ready()}
+                            login={() => setDialog("login")}
+                          />
+                        </Match>
+                        <Match when={route() === "hooks"}>
+                          <Hooks ctx={selectedContext} />
+                        </Match>
+                        <Match when={route() === "events"}>
+                          <History ctx={selectedContext} />
+                        </Match>
+                        <Match when={route() === "blocked"}>
+                          <History ctx={selectedContext} blocked />
+                        </Match>
+                        <Match when={route() === "deliveries"}>
+                          <Deliveries ctx={selectedContext} />
+                        </Match>
+                        <Match when={route() === "live"}>
+                          <Live ctx={selectedContext} />
+                        </Match>
+                        <Match when={route() === "testing"}>
+                          <Environments
+                            ctx={selectedContext}
+                            session={session.data()!}
+                            refreshSession={reload}
+                            select={selectPlane}
+                            attach={() => setDialog("attach")}
+                            login={() => setDialog("login")}
+                          />
+                        </Match>
+                        <Match when={route() === "connections"}>
+                          <Connections
+                            ctx={selectedContext}
+                            session={session.data()!}
+                            refresh={reload}
+                            login={() => setDialog("login")}
+                            attach={() => setDialog("attach")}
+                          />
+                        </Match>
+                      </Switch>
+                    );
+                  }}
                 </Show>
               </Show>
             </Show>
@@ -415,6 +455,7 @@ export default function App() {
       <Show when={dialog() === "login"}>
         <Login
           plane={ctx().plane}
+          contextId={ctx().contextId}
           name={current()?.name || "Production"}
           close={() => setDialog(undefined)}
           done={signedIn}
@@ -435,6 +476,7 @@ export default function App() {
 }
 function Login(p: {
   plane: string;
+  contextId?: string;
   name: string;
   close: () => void;
   done: () => Promise<void>;
@@ -456,6 +498,8 @@ function Login(p: {
                 "POST",
                 {},
                 crypto.randomUUID(),
+                undefined,
+                p.contextId,
               );
               location.assign(result.authorize_url);
             } catch (error) {
@@ -464,7 +508,9 @@ function Login(p: {
             }
           }}
         >
-          <p class="muted">Sign in and choose your organizations in IAM.</p>
+          <p class="muted">
+            Sign in as a Carbon or Silicon and choose one organization in IAM.
+          </p>
           <ErrorBox error={error()} />
           <Button type="submit" primary disabled={busy()}>
             {busy() ? "Continuing…" : "Continue with IAM"}
@@ -476,6 +522,7 @@ function Login(p: {
 }
 function TokenLogin(p: {
   plane: string;
+  contextId?: string;
   name: string;
   close: () => void;
   done: () => Promise<void>;
@@ -498,6 +545,8 @@ function TokenLogin(p: {
               "POST",
               { slt: token() },
               key,
+              undefined,
+              p.contextId,
             );
             setToken("");
             await p.done();
@@ -785,7 +834,15 @@ function Connections(p: {
   const system = load(
     () => true,
     async () => {
-      const ctx = { ...p.ctx, plane: "production" };
+      const production = p.session.planes.find(
+        (plane) => plane.id === "production",
+      );
+      const ctx = {
+        ...p.ctx,
+        plane: "production",
+        contextId: production?.context_id,
+        org: production?.org_id || "",
+      };
       const [version, ready, live, negotiation] = await Promise.all([
         api(ctx, "/api/v2/version"),
         api(ctx, "/readyz"),
@@ -818,6 +875,8 @@ function Connections(p: {
             "POST",
             {},
             key,
+            undefined,
+            p.ctx.contextId,
           );
         } finally {
           await p.refresh();
@@ -912,7 +971,9 @@ function Connections(p: {
           </Show>
           <div class="actions wrap">
             <Button primary onClick={p.login}>
-              {current()?.authenticated ? "Switch identity" : "Sign in"}
+              {current()?.authenticated
+                ? "Add account or organization"
+                : "Sign in"}
             </Button>
             <Button onClick={p.attach}>Select test environment</Button>
             <Show when={current()?.authenticated}>
