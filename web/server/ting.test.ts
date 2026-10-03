@@ -4,7 +4,7 @@ import { createServer, type Server } from "node:http";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { WebSocket, WebSocketServer } from "ws";
 import { config, gateway, allowed } from "./gateway.ts";
 import { SessionStore } from "./session.ts";
@@ -471,7 +471,9 @@ async function fixture() {
     return { status: res.status, data: text ? JSON.parse(text) : undefined };
   };
   const start = async () => {
-    const result = await call("/console/login/start", "POST");
+    const result = await call("/console/login/start", "POST", undefined, {
+      "idempotency-key": randomUUID(),
+    });
     assert.equal(result.status, 200);
     const url = new URL(result.data.authorize_url);
     assert.equal(url.searchParams.get("app_ids"), "hook,ting");

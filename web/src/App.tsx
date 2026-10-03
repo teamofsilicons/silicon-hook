@@ -1,3 +1,4 @@
+import { completeIamPopup, openIamPopup, type IdentityKind } from "./iam-popup";
 import { TingAuthorization } from "./TingAuthorization";
 import {
   createSignal,
@@ -11,6 +12,7 @@ import {
 } from "solid-js";
 import {
   api,
+  ApiError,
   telemetryEnabled,
   setTelemetry,
   track,
@@ -67,6 +69,8 @@ function preferences(): Context {
   }
 }
 export default function App() {
+  if (completeIamPopup())
+    return <main>Sign-in completed. Returning to Hook…</main>;
   const [ctx, setCtx] = createSignal<Context>(preferences());
   const [route, setRoute] = createSignal(
     location.hash.slice(1).split("?")[0] || "overview",
@@ -154,9 +158,10 @@ export default function App() {
   const reload = async () => {
     await session.refresh();
   };
-  async function signedIn() {
+  async function signedIn(verified?: Session) {
+    if (verified) session.set(verified);
+    else await reload();
     setDialog(undefined);
-    await reload();
     const p = current();
     context({
       contextId: p?.context_id,
@@ -491,43 +496,182 @@ function Login(p: {
   contextId?: string;
   name: string;
   close: () => void;
-  done: () => Promise<void>;
+  done: (verified?: Session) => Promise<void>;
 }) {
-  const [busy, setBusy] = createSignal(false);
-  const [error, setError] = createSignal<unknown>();
+  const [busy, setBusy] = createSignal(false),
+    [error, setError] = createSignal<unknown>();
+  const [verification, setVerification] = createSignal<{
+    contextId: string;
+    kind: IdentityKind;
+    before?: string;
+    controller: AbortController;
+  }>();
+  let controller: AbortController | undefined, nonce: string | undefined;
+  let generation = 0;
+  function cancel() {
+    generation++;
+    controller?.abort();
+    controller = undefined;
+    setVerification();
+    const saved = nonce;
+    nonce = undefined;
+    return saved
+      ? request("/console/login/cancel", "POST", { nonce: saved })
+      : Promise.resolve();
+  }
+  onCleanup(() => {
+    void cancel().catch(() => {});
+  });
+  async function verify(attempt: NonNullable<ReturnType<typeof verification>>) {
+    setBusy(true);
+    setError(undefined);
+    try {
+      if (attempt.controller.signal.aborted || p.contextId !== attempt.before)
+        throw new Error("The selected workspace changed while signing in.");
+      const result = await request<Session>(
+        "/console/login/status?identity_kind=" + attempt.kind,
+        "GET",
+        undefined,
+        undefined,
+        undefined,
+        attempt.contextId,
+      );
+      const selected = result.planes.find((plane) => plane.id === "production");
+      if (attempt.controller.signal.aborted || p.contextId !== attempt.before)
+        throw new Error("The selected workspace changed while signing in.");
+      if (
+        !selected?.authenticated ||
+        selected.context_id !== attempt.contextId ||
+        selected.actor?.type !== attempt.kind
+      )
+        throw new ApiError(
+          409,
+          "identity_changed",
+          "The returned sign-in did not match the requested account.",
+        );
+      nonce = undefined;
+      controller = undefined;
+      setVerification();
+      await p.done(result);
+    } catch (error) {
+      if (!attempt.controller.signal.aborted) {
+        setError(error);
+        if (
+          !(
+            error instanceof ApiError &&
+            (error.status === 0 || error.status === 429 || error.status >= 500)
+          )
+        )
+          setVerification();
+      }
+    } finally {
+      if (!attempt.controller.signal.aborted) setBusy(false);
+    }
+  }
+  async function signIn(kind: IdentityKind, popup: boolean) {
+    if (busy() && popup) return;
+    const before = p.contextId;
+    // Reserve a popup during this click; only the server request waits for
+    // cancellation of an earlier attempt.
+    const cancellation = cancel().then(
+      () => undefined,
+      (error) => error,
+    );
+    const epoch = generation;
+    const active = new AbortController();
+    controller = active;
+    const key = crypto.randomUUID();
+    setBusy(true);
+    setError(undefined);
+    const current = () =>
+      !active.signal.aborted && generation === epoch && p.contextId === before;
+    const start = async (popupNonce?: string) => {
+      const cancellationError = await cancellation;
+      if (cancellationError) throw cancellationError;
+      if (!current())
+        throw new Error("The selected workspace changed while signing in.");
+      nonce = popupNonce;
+      const result = await request<{ authorize_url: string }>(
+        "/console/login/start",
+        "POST",
+        {
+          identity_kind: kind,
+          ...(popupNonce ? { popup_nonce: popupNonce } : {}),
+        },
+        key,
+        undefined,
+        before,
+      );
+      if (!current()) {
+        // A close may arrive before the start request reaches the server.
+        // Cancel once more after its response so a late receipt cannot survive.
+        if (popupNonce)
+          await request("/console/login/cancel", "POST", { nonce: popupNonce });
+        throw new Error("Sign-in was cancelled.");
+      }
+      return result.authorize_url;
+    };
+    try {
+      if (!popup) {
+        const url = await start();
+        if (current()) location.assign(url);
+        return;
+      }
+      const contextId = await openIamPopup(start, active.signal);
+      if (!current()) return;
+      const attempt = { contextId, kind, before, controller: active };
+      setVerification(attempt);
+      await verify(attempt);
+    } catch (error) {
+      if (generation === epoch && !active.signal.aborted) {
+        await cancel().catch(() => {});
+        setError(error);
+        setBusy(false);
+      }
+    } finally {
+      if (generation === epoch) setBusy(false);
+    }
+  }
   return (
     <Show when={p.plane === "production"} fallback={<TokenLogin {...p} />}>
-      <Modal title="Sign in to Hook" close={() => !busy() && p.close()}>
-        <form
-          class="stack"
-          onSubmit={async (e) => {
-            e.preventDefault();
-            setBusy(true);
-            setError(undefined);
-            try {
-              const result = await request<{ authorize_url: string }>(
-                "/console/login/start",
-                "POST",
-                {},
-                crypto.randomUUID(),
-                undefined,
-                p.contextId,
-              );
-              location.assign(result.authorize_url);
-            } catch (error) {
-              setError(error);
-              setBusy(false);
-            }
-          }}
-        >
+      <Modal title="Sign in to Hook" close={p.close}>
+        <div class="stack">
           <p class="muted">
-            Sign in as a Carbon or Silicon and choose one organization in IAM.
+            Choose your account type and one organization in IAM.
           </p>
           <ErrorBox error={error()} />
-          <Button type="submit" primary disabled={busy()}>
-            {busy() ? "Continuing…" : "Continue with IAM"}
+          <Button
+            primary
+            disabled={busy()}
+            onClick={() => void signIn("carbon", true)}
+          >
+            Continue as Carbon
           </Button>
-        </form>
+          <Button
+            disabled={busy()}
+            onClick={() => void signIn("silicon", true)}
+          >
+            Continue as Silicon
+          </Button>
+          <Show when={verification()}>
+            {(attempt) => (
+              <Button disabled={busy()} onClick={() => void verify(attempt())}>
+                Retry saved sign-in
+              </Button>
+            )}
+          </Show>
+          <p class="muted">
+            If the popup is unavailable, continue in this tab:
+          </p>
+          <div class="actions">
+            <Button onClick={() => void signIn("carbon", false)}>
+              Carbon in this tab
+            </Button>
+            <Button onClick={() => void signIn("silicon", false)}>
+              Silicon in this tab
+            </Button>
+          </div>
+        </div>
       </Modal>
     </Show>
   );
