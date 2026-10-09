@@ -21,3 +21,7 @@ pub mod request_context;
 pub mod shutdown;
 pub mod telemetry;
 pub mod worker;
+
+#[cfg(test)]
+#[path = "../tests/support/postgres.rs"]
+pub(crate) mod test_postgres;

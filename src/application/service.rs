@@ -26,7 +26,6 @@ pub struct HookApplication {
     pub(super) cursor_codec: Arc<CursorCodec>,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) public_base_url: Url,
-    pub(super) environment: Option<(uuid::Uuid, i64)>,
     pub(super) delivery_app_id: String,
 }
 
@@ -39,28 +38,6 @@ impl std::fmt::Debug for HookApplication {
             .field("cursor_codec", &"[REDACTED]")
             .field("public_base_url", &self.public_base_url.as_str())
             .finish_non_exhaustive()
-    }
-}
-
-/// Proof that an actor may read one Silicon's delivery stream.
-#[derive(Clone, Debug)]
-pub struct StreamAccess {
-    pub(super) organization_id: crate::domain::OrganizationId,
-    pub(super) silicon_id: SiliconId,
-    pub(super) consumer: crate::domain::ActorRef,
-}
-
-impl StreamAccess {
-    /// Returns the authorized Silicon stream.
-    #[must_use]
-    pub const fn silicon_id(&self) -> &SiliconId {
-        &self.silicon_id
-    }
-
-    /// Returns the consumer whose acknowledgment cursor applies.
-    #[must_use]
-    pub const fn consumer(&self) -> &crate::domain::ActorRef {
-        &self.consumer
     }
 }
 
@@ -80,7 +57,6 @@ impl HookApplication {
             cursor_codec,
             clock,
             public_base_url,
-            environment: None,
             delivery_app_id: "hook".to_owned(),
         }
     }
@@ -90,61 +66,6 @@ impl HookApplication {
     pub fn with_delivery_application(mut self, app_id: &str) -> Self {
         app_id.clone_into(&mut self.delivery_app_id);
         self
-    }
-
-    /// Binds this application clone to an isolated test pool and generation.
-    #[must_use]
-    pub fn for_test_environment(
-        &self,
-        store: PostgresStore,
-        id: uuid::Uuid,
-        generation: i64,
-    ) -> Self {
-        let mut scoped = self.clone();
-        scoped.store = store;
-        scoped.environment = Some((id, generation));
-        scoped
-    }
-
-    /// Returns the immutable test selector for request activity accounting.
-    #[must_use]
-    pub const fn environment_identity(&self) -> Option<(uuid::Uuid, i64)> {
-        self.environment
-    }
-
-    /// Whether the environment underlying a retained connection is still valid.
-    ///
-    /// # Errors
-    /// Returns database failures instead of allowing stale connections to continue.
-    pub async fn environment_is_available(&self) -> Result<bool, ApplicationError> {
-        sqlx::query_scalar("SELECT hook_private.environment_is_available()")
-            .fetch_one(self.store.pool())
-            .await
-            .map_err(ApplicationError::unavailable)
-    }
-
-    /// Holds a shared lifecycle lock until a test delivery reaches the transport.
-    ///
-    /// # Errors
-    /// Rejects disabled or superseded sessions and storage failures.
-    pub async fn delivery_guard(
-        &self,
-    ) -> Result<Option<sqlx::Transaction<'static, sqlx::Postgres>>, ApplicationError> {
-        let Some((id, expected)) = self.environment else {
-            return Ok(None);
-        };
-        let mut tx = self
-            .store
-            .pool()
-            .begin()
-            .await
-            .map_err(ApplicationError::unavailable)?;
-        let current: Option<(i64, bool)> = sqlx::query_as("SELECT generation,deleted_at IS NULL AND (honeycomb_state IS NULL OR honeycomb_state='ready') FROM hook_control.environments WHERE id=$1 FOR SHARE")
-            .bind(id).fetch_optional(&mut *tx).await.map_err(ApplicationError::unavailable)?;
-        if current != Some((expected, true)) {
-            return Err(ApplicationError::StateConflict);
-        }
-        Ok(Some(tx))
     }
 
     /// Exposes the store for readiness without leaking it into handlers.
@@ -199,11 +120,7 @@ impl HookApplication {
         silicon_id: &SiliconId,
         endpoint_key: &EndpointKey,
     ) -> Result<Url, ApplicationError> {
-        let mut url = endpoint_url(&self.public_base_url, silicon_id, endpoint_key)?;
-        if self.environment.is_some() {
-            url.set_path(&format!("/test{}", url.path()));
-        }
-        Ok(url)
+        endpoint_url(&self.public_base_url, silicon_id, endpoint_key)
     }
 }
 

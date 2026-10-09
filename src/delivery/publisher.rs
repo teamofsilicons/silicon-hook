@@ -8,7 +8,7 @@ use tokio::sync::watch;
 use super::credentials::{PublisherCredentialError, PublisherCredentials};
 use super::observer_authority::ObserverFailure;
 use crate::{
-    application::{HookApplication, environments::EnvironmentService},
+    application::HookApplication,
     domain::OrganizationId,
     infrastructure::{
         iam::{IamClient, IamError},
@@ -98,11 +98,6 @@ impl Publisher {
         } else {
             None
         };
-        // The shared lifecycle guard prevents a local test clean from racing
-        // the external send. Drop it before any write (which takes FOR UPDATE).
-        let Ok(guard) = self.application.delivery_guard().await else {
-            return Ok(true);
-        };
         if !store.ting_claim_is_current(&claim).await? {
             return Ok(true);
         }
@@ -117,7 +112,6 @@ impl Publisher {
         )
         .await
         .unwrap_or(Err(TingError::Transport));
-        drop(guard);
         match result {
             Ok(accepted) => {
                 store
@@ -215,68 +209,6 @@ pub async fn run(publisher: Publisher, interval: Duration, mut shutdown: watch::
                         }
                     }
                 }
-            }
-        }
-    }
-}
-
-/// Fair, bounded background publication for isolated test environments.
-pub async fn run_tests(
-    application: HookApplication,
-    service: EnvironmentService,
-    ting: TingClient,
-    interval: Duration,
-    mut shutdown: watch::Receiver<bool>,
-) {
-    let mut after = None;
-    let mut ticks = tokio::time::interval(interval);
-    ticks.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    loop {
-        tokio::select! {
-            () = wait_for_shutdown(&mut shutdown) => break,
-            _ = ticks.tick() => {},
-        }
-        let pass = async {
-            let ids = service.delivery_environment_ids(after).await?;
-            after = ids.last().copied();
-            // Each context has only one in-flight send; its two-connection pool
-            // can hold the lifecycle guard and perform the current-claim read.
-            let jobs = ids.into_iter().map(|id| {
-                let application = application.clone();
-                let service = service.clone();
-                let ting = ting.clone();
-                async move {
-                    let work = async {
-                        if !service.delivery_pending(id).await? {
-                            return Ok(());
-                        }
-                        let context = service.delivery_context(id).await?;
-                        let scoped = application.for_test_environment(
-                            context.store,
-                            id,
-                            context.environment.generation,
-                        );
-                        Publisher::new(scoped, context.iam, ting)
-                            .publish_one()
-                            .await
-                            .map_err(|_| crate::error::AppError::ProviderUnavailable)?;
-                        Ok::<(), crate::error::AppError>(())
-                    };
-                    if !matches!(
-                        tokio::time::timeout(Duration::from_secs(175), work).await,
-                        Ok(Ok(()))
-                    ) {
-                        tracing::warn!(environment_id=%id, "Ting test publication deferred");
-                    }
-                }
-            });
-            futures::future::join_all(jobs).await;
-            Ok::<(), crate::error::AppError>(())
-        };
-        tokio::select! {
-            () = wait_for_shutdown(&mut shutdown) => break,
-            result = pass => {
-                if result.is_err() { tracing::warn!("Ting test environment discovery unavailable"); }
             }
         }
     }

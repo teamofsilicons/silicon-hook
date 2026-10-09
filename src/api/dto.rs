@@ -12,8 +12,8 @@ use crate::infrastructure::iam::IssuedTokens;
 use crate::{
     application::{HookWithSecret, SigningPatch},
     domain::{
-        ActorRef, BlockedRequest, BlockedRequestId, DeliveryCursor, EventId, EventRecord, Hook,
-        HookId, HookStatus, SigningSecret,
+        ActorRef, BlockedRequest, BlockedRequestId, EventId, EventRecord, Hook, HookId, HookStatus,
+        SigningSecret,
         request::CapturedRequest,
         signature::{
             Expression, SecretEncoding, SignatureAlgorithm, SignatureConfig, SignatureEncoding,
@@ -137,13 +137,6 @@ pub(super) struct SetHooksEnabledRequest {
     pub(super) enabled: bool,
 }
 
-/// Acknowledgment of ordered deliveries.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct AcknowledgeRequest {
-    pub(super) through_sequence: i64,
-}
-
 /// Optional hook-list query parameters.
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -165,20 +158,6 @@ pub(super) struct HistoryQuery {
 }
 
 const fn default_history_limit() -> u32 {
-    100
-}
-
-/// Ordered delivery pull input.
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct DeliveriesQuery {
-    #[serde(default)]
-    pub(super) after_sequence: Option<i64>,
-    #[serde(default = "default_delivery_limit")]
-    pub(super) limit: u32,
-}
-
-const fn default_delivery_limit() -> u32 {
     100
 }
 
@@ -440,33 +419,6 @@ impl From<&BlockedRequest> for BlockedRequestResponse {
 pub(super) struct HistoryPageResponse<T> {
     pub(super) items: Vec<T>,
     pub(super) next_cursor: Option<String>,
-}
-
-/// Consumer position in a Silicon's delivery stream.
-#[derive(Debug, Serialize)]
-pub(super) struct DeliveryCursorResponse {
-    silicon_id: String,
-    acknowledged_through: i64,
-    #[serde(with = "time::serde::rfc3339::option")]
-    acknowledged_at: Option<OffsetDateTime>,
-}
-
-impl From<&DeliveryCursor> for DeliveryCursorResponse {
-    fn from(cursor: &DeliveryCursor) -> Self {
-        Self {
-            silicon_id: cursor.silicon_id.as_str().to_owned(),
-            acknowledged_through: cursor.acknowledged_through,
-            acknowledged_at: cursor.updated_at,
-        }
-    }
-}
-
-/// Ordered deliveries pulled over HTTP.
-#[derive(Debug, Serialize)]
-pub(super) struct DeliveryBatchResponse {
-    pub(super) items: Vec<EventResponse>,
-    pub(super) cursor: DeliveryCursorResponse,
-    pub(super) latest_sequence: i64,
 }
 
 /// Stable public-ingress receipt.

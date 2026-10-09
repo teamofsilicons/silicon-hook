@@ -12,14 +12,13 @@ use crate::domain::{
 
 use super::{
     HISTORY_PAGE_BYTE_BUDGET, MAX_HISTORY_LIMIT, PostgresStore, StoreError,
-    listener::DELIVERY_CHANNEL,
     models::{BlockedRequestRow, EventRow, capture_columns, encode_headers},
     types::{AcceptEvent, HistoryPage, HistoryPageRequest, RecordBlockedRequest},
 };
 
 impl PostgresStore {
     /// Appends a verified request to its hook's log and its Silicon's ordered
-    /// delivery stream, then wakes listening delivery sessions.
+    /// delivery stream, and queues its Ting sends in the same transaction.
     ///
     /// The hook row is exclusively locked for the duration so a concurrent
     /// disable or delete cannot race a successful acceptance, and the
@@ -83,11 +82,6 @@ impl PostgresStore {
             environment_generation,
         )
         .await?;
-        sqlx::query("SELECT pg_notify($1, $2)")
-            .bind(DELIVERY_CHANNEL)
-            .bind(event.silicon_id().as_str())
-            .execute(&mut *transaction)
-            .await?;
         transaction.commit().await?;
         Ok(event)
     }

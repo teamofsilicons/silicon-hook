@@ -1,6 +1,5 @@
 //! Retention maintenance worker composition root.
 
-mod environments;
 mod maintenance;
 
 use std::time::Duration;
@@ -49,16 +48,6 @@ pub async fn run(settings: WorkerProcessSettings) -> anyhow::Result<()> {
         .await
         .context("worker PostgreSQL readiness check failed")?;
 
-    let testing = if let Some(database) = &settings.test_database {
-        let pool = connect(database, "hook-test-worker-control").await?;
-        PostgresStore::new(pool.clone())
-            .ready_for(RuntimeDatabaseRole::Worker)
-            .await?;
-        Some((database.clone(), pool))
-    } else {
-        None
-    };
-
     tracing::info!(
         maintenance_batch_size = settings.maintenance.batch_size.get(),
         maintenance_batches_per_cycle = settings.maintenance.batches_per_cycle.get(),
@@ -69,7 +58,6 @@ pub async fn run(settings: WorkerProcessSettings) -> anyhow::Result<()> {
     let (shutdown_sender, shutdown_receiver) = watch::channel(false);
     let mut task = tokio::spawn(maintenance_loop(
         store.clone(),
-        testing,
         settings.maintenance.clone(),
         shutdown_receiver,
     ));
@@ -99,7 +87,6 @@ pub async fn run(settings: WorkerProcessSettings) -> anyhow::Result<()> {
 
 async fn maintenance_loop(
     store: PostgresStore,
-    testing: Option<(crate::config::DatabaseSettings, sqlx::PgPool)>,
     settings: MaintenanceSettings,
     mut shutdown: watch::Receiver<bool>,
 ) {
@@ -118,10 +105,6 @@ async fn maintenance_loop(
                     return;
                 }
                 maintenance::run_maintenance_cycle(&store, &settings).await;
-                if let Some((database, pool)) = &testing
-                    && let Err(error) = environments::cycle(pool, database, &settings).await {
-                        tracing::error!(%error, "test environment maintenance failed");
-                    }
             }
         }
     }

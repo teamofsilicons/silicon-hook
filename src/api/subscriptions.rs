@@ -7,7 +7,7 @@ use serde::Serialize;
 use super::{
     delivery::ting_error,
     extractors,
-    handlers::{authorize_management, map_application_error, secret_response_headers},
+    handlers::{authorize_management, secret_response_headers},
     state::ApiState,
 };
 use crate::{
@@ -31,11 +31,6 @@ pub(super) async fn get(
         authorize_management(&state, &headers, std::slice::from_ref(&silicon)).await?;
     subscriptions::authorize_subscription(&authorization, &silicon)
         .map_err(|error| subscription_error(&error))?;
-    let _guard = state
-        .application
-        .delivery_guard()
-        .await
-        .map_err(map_application_error)?;
     let subscription = subscriptions::get(state.application.store(), &authorization, &silicon)
         .await
         .map_err(|error| subscription_error(&error))?;
@@ -70,20 +65,11 @@ pub(super) async fn subscribe(
         "for": authorization.actor().id(),
     }))
     .map_err(AppError::internal)?;
-    let guard = state
-        .application
-        .delivery_guard()
-        .await
-        .map_err(map_application_error)?;
     state
         .ting
         .register_recipient(&state.iam, &token, &prepared)
         .await
         .map_err(|error| ting_error(&error))?;
-    // The persistence transaction obtains its own exclusive lifecycle fence.
-    // Holding the separate shared guard across that write would deadlock. A
-    // clean or key rotation in between makes this pinned store reject the write.
-    drop(guard);
     let subscription = state
         .application
         .observer_authorities(state.iam.clone())

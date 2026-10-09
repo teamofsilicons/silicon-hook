@@ -1,48 +1,12 @@
 //! Request-bound Ting proofs issued through the official IAM client.
 
-use secrecy::{ExposeSecret as _, SecretString};
-use silicon_iam_client::{EnvironmentKey, models};
-use uuid::Uuid;
+use secrecy::SecretString;
+use silicon_iam_client::EnvironmentKey;
 
-use super::{IamClient, IamError, sdk_error};
-use crate::domain::{ActorKind, ActorRef, OrganizationId};
+use super::{IamClient, IamError};
 use crate::infrastructure::ting::{TingProof, TingTestingCredentials};
 
 impl IamClient {
-    /// Resolve Ting's organization UUID from current IAM authority, not response aliases.
-    pub(crate) async fn ting_receiver_organization(
-        &self,
-        token: &SecretString,
-        org: &OrganizationId,
-        actor: &ActorRef,
-        environment: Uuid,
-    ) -> Result<Uuid, IamError> {
-        if !self.is_testing() || environment.is_nil() {
-            return Err(IamError::Forbidden);
-        }
-        let snapshot = self
-            .sdk()?
-            .oauth()
-            .authorization(token.expose_secret(), Some(org.as_str()))
-            .await
-            .map_err(sdk_error)?
-            .ok_or(IamError::InvalidCredential)?;
-        let kind = match actor.kind() {
-            ActorKind::Carbon => models::ApplicationAuthorizationActorType::Carbon,
-            ActorKind::Silicon => models::ApplicationAuthorizationActorType::Silicon,
-        };
-        if snapshot.audience != self.app_id()?
-            || snapshot.org_id != org.as_str()
-            || snapshot.public_id.as_deref() != Some(actor.id().as_str())
-            || snapshot.actor_type != Some(kind)
-            || snapshot.testing_environment_id != Some(environment)
-            || snapshot.organization_id.is_nil()
-        {
-            return Err(IamError::InvalidCredential);
-        }
-        Ok(snapshot.organization_id)
-    }
-
     /// Loads only separately approved, renewable authority for one fixed endpoint.
     pub(crate) async fn ting_proof(
         &self,

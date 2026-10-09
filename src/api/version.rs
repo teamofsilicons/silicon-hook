@@ -13,7 +13,7 @@ use http::{HeaderMap, HeaderName, HeaderValue, header};
 use crate::error::AppError;
 
 /// API majors this build serves, highest first.
-pub const SUPPORTED_API_VERSIONS: &[&str] = &["v2", "v1"];
+pub const SUPPORTED_API_VERSIONS: &[&str] = &["v2"];
 /// Request header carrying the client's supported majors.
 pub const SUPPORTED_API_VERSIONS_HEADER: HeaderName =
     HeaderName::from_static("silicon-hook-supported-api-versions");
@@ -145,7 +145,11 @@ mod tests {
     fn negotiation_prefers_the_highest_shared_major() {
         assert_eq!(negotiate(None).ok(), Some("v2"));
         assert_eq!(negotiate(Some("v2, v1")).ok(), Some("v2"));
-        assert_eq!(negotiate(Some("V1")).ok(), Some("v1"));
+        assert_eq!(negotiate(Some("V2")).ok(), Some("v2"));
+        assert!(matches!(
+            negotiate(Some("v1")),
+            Err(AppError::ApiVersionUnsupported)
+        ));
         assert!(matches!(
             negotiate(Some("v3,v4")),
             Err(AppError::ApiVersionUnsupported)
@@ -172,14 +176,13 @@ mod tests {
         assert!(advertised_versions(&headers).is_err());
 
         let mut pinned = HeaderMap::new();
-        assert!(check_pinned(&pinned, "/api/v1/version").is_ok());
-        pinned.insert("silicon-hook-api-version", HeaderValue::from_static("v1"));
-        assert!(check_pinned(&pinned, "/api/v1/version").is_ok());
-        assert!(check_pinned(&pinned, "/healthz").is_ok());
+        assert!(check_pinned(&pinned, "/api/v2/version").is_ok());
         pinned.insert("silicon-hook-api-version", HeaderValue::from_static("v2"));
         assert!(check_pinned(&pinned, "/api/v2/version").is_ok());
+        assert!(check_pinned(&pinned, "/healthz").is_ok());
+        pinned.insert("silicon-hook-api-version", HeaderValue::from_static("v1"));
         assert!(matches!(
-            check_pinned(&pinned, "/api/v1/version"),
+            check_pinned(&pinned, "/api/v2/version"),
             Err(AppError::BadRequest { .. })
         ));
         assert!(check_pinned(&pinned, "/api/version").is_ok());

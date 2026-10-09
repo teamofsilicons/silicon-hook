@@ -519,7 +519,6 @@ impl TingGrants {
         Ok(TingProof {
             token: SecretString::from(pair.access_token),
             testing,
-            expires_at: pair.expires_at,
         })
     }
 }

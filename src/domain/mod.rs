@@ -18,8 +18,8 @@ pub use actor::{ActorKind, ActorRef, AuthorizationContext, OrganizationRole};
 pub use cursor::{HistoryCollection, HistoryCursor, HistoryCursorScope, HistoryFilter};
 pub use error::{DomainError, EntropyError, TransitionError};
 pub use event::{
-    BlockReason, BlockedRequest, BlockedRequestSnapshot, DeliveryCursor, DeliverySequence,
-    EventRecord, EventRecordSnapshot, LOG_RETENTION, MAX_REASON_DETAIL_LENGTH, delivery_summary,
+    BlockReason, BlockedRequest, BlockedRequestSnapshot, DeliverySequence, EventRecord,
+    EventRecordSnapshot, LOG_RETENTION, MAX_REASON_DETAIL_LENGTH, delivery_summary,
 };
 pub use hook::{
     ENCRYPTION_NONCE_BYTES, ENCRYPTION_TAG_BYTES, ENDPOINT_KEY_LENGTH, EncryptedSecret,

@@ -23,7 +23,6 @@ const MAX_KEYRING_ENTRIES: usize = 16;
 const MAX_MAINTENANCE_BATCH_SIZE: usize = 10_000;
 const MAX_MAINTENANCE_BATCHES_PER_CYCLE: u16 = 1_000;
 const MAX_TRUSTED_PROXY_HOPS: u8 = 8;
-const MAX_SILICONS_PER_CONNECTION: usize = 256;
 
 /// Fully validated settings required by the HTTP API process.
 #[derive(Clone, Debug)]
@@ -36,8 +35,6 @@ pub struct ApiSettings {
     pub shutdown: ShutdownSettings,
     /// Runtime PostgreSQL pool settings.
     pub database: DatabaseSettings,
-    /// Separate shared database for isolated Hook testing environments.
-    pub test_database: Option<DatabaseSettings>,
     /// Encryption and cursor-integrity keys.
     pub crypto: CryptoSettings,
     /// Silicon IAM integration settings.
@@ -46,8 +43,6 @@ pub struct ApiSettings {
     pub ting: TingSettings,
     /// Retention, replay, and idempotency policy.
     pub policy: PolicySettings,
-    /// WebSocket delivery policy.
-    pub realtime: RealtimeSettings,
 }
 
 /// Fully validated settings required by the maintenance worker process.
@@ -59,8 +54,6 @@ pub struct WorkerProcessSettings {
     pub shutdown: ShutdownSettings,
     /// Runtime PostgreSQL pool settings.
     pub database: DatabaseSettings,
-    /// Separate shared database for isolated Hook testing environments.
-    pub test_database: Option<DatabaseSettings>,
     /// Retention maintenance policy.
     pub maintenance: MaintenanceSettings,
 }
@@ -121,8 +114,6 @@ pub struct MigrationSettings {
     pub process: ProcessSettings,
     /// Privileged migration pool settings.
     pub database: DatabaseSettings,
-    /// Separate shared database for isolated Hook testing environments.
-    pub test_database: Option<DatabaseSettings>,
 }
 
 /// Settings shared by all executable process boundaries.
@@ -284,28 +275,6 @@ pub struct PolicySettings {
     pub log_retention: Duration,
 }
 
-/// WebSocket delivery policy.
-#[derive(Clone, Copy, Debug)]
-pub struct RealtimeSettings {
-    /// Interval between application-level `ping` frames.
-    pub heartbeat_interval: Duration,
-    /// Longest gap without a valid `pong` before the server closes.
-    pub heartbeat_timeout: Duration,
-    /// Events fetched per replay batch for one Silicon stream.
-    pub replay_batch_size: NonZeroU32,
-    /// Fallback poll interval when no notification arrives.
-    pub poll_interval: Duration,
-    /// Maximum Silicon streams one connection may subscribe to.
-    pub max_silicons_per_connection: NonZeroUsize,
-}
-
-impl RealtimeSettings {
-    /// Contract heartbeat: a ping every 30 seconds, closed after two minutes.
-    pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
-    /// Contract heartbeat timeout.
-    pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(120);
-}
-
 /// Retention maintenance policy.
 #[derive(Clone, Debug)]
 pub struct MaintenanceSettings {
@@ -351,25 +320,20 @@ impl ApiSettings {
         let server = ServerSettings::load(source, environment)?;
         let shutdown = ShutdownSettings::load(source)?;
         let database = DatabaseSettings::runtime(source, environment)?;
-        let test_database =
-            test_database(source, environment, &database, "HOOK_TEST_DATABASE_URL")?;
         let crypto = CryptoSettings::load(source)?;
         let iam = IamSettings::load(source, environment)?;
         let ting = TingSettings::load(source, environment)?;
         let policy = PolicySettings::load(source)?;
-        let realtime = RealtimeSettings::load(source)?;
 
         Ok(Self {
             process,
             server,
             shutdown,
             database,
-            test_database,
             crypto,
             iam,
             ting,
             policy,
-            realtime,
         })
     }
 }
@@ -391,15 +355,12 @@ impl WorkerProcessSettings {
         let environment = process.environment;
         let shutdown = ShutdownSettings::load(source)?;
         let database = DatabaseSettings::runtime(source, environment)?;
-        let test_database =
-            test_database(source, environment, &database, "HOOK_TEST_DATABASE_URL")?;
         let maintenance = MaintenanceSettings::load(source)?;
 
         Ok(Self {
             process,
             shutdown,
             database,
-            test_database,
             maintenance,
         })
     }
@@ -430,45 +391,8 @@ impl MigrationSettings {
             statement_timeout: source
                 .positive_duration_seconds("HOOK_MIGRATION_STATEMENT_TIMEOUT_SECONDS", 300)?,
         };
-        let test_database = test_database(
-            source,
-            environment,
-            &database,
-            "HOOK_TEST_MIGRATOR_DATABASE_URL",
-        )?;
-        Ok(Self {
-            process,
-            database,
-            test_database,
-        })
+        Ok(Self { process, database })
     }
-}
-
-fn test_database(
-    source: &impl ConfigurationSource,
-    environment: RuntimeEnvironment,
-    production: &DatabaseSettings,
-    name: &'static str,
-) -> Result<Option<DatabaseSettings>, SettingsError> {
-    let Some(raw) = source.optional(name) else {
-        return Ok(None);
-    };
-    validate_database_url(environment, &raw, name)?;
-    let parsed = Url::parse(&raw).map_err(|_| invalid(name, "invalid database URL"))?;
-    let prod = Url::parse(production.url.expose_secret())
-        .map_err(|_| invalid(name, "invalid database URL"))?;
-    if parsed.host_str() == prod.host_str()
-        && parsed.port_or_known_default() == prod.port_or_known_default()
-        && parsed.path() == prod.path()
-    {
-        return Err(invalid(
-            name,
-            "the shared test database must be distinct from production",
-        ));
-    }
-    let mut settings = production.clone();
-    settings.url = SecretString::from(raw);
-    Ok(Some(settings))
 }
 
 impl ProcessSettings {
@@ -777,51 +701,6 @@ impl PolicySettings {
             secret_replay_ttl,
             deletion_retention,
             log_retention,
-        })
-    }
-}
-
-impl RealtimeSettings {
-    fn load(source: &impl ConfigurationSource) -> Result<Self, SettingsError> {
-        let heartbeat_interval = source.bounded_duration_seconds(
-            "HOOK_REALTIME_HEARTBEAT_INTERVAL_SECONDS",
-            30,
-            30,
-            30,
-        )?;
-        let heartbeat_timeout = source.bounded_duration_seconds(
-            "HOOK_REALTIME_HEARTBEAT_TIMEOUT_SECONDS",
-            120,
-            120,
-            120,
-        )?;
-        let replay_batch_size: NonZeroU32 =
-            source.parse_or("HOOK_REALTIME_REPLAY_BATCH_SIZE", "100")?;
-        if replay_batch_size.get() > 1_000 {
-            return Err(invalid(
-                "HOOK_REALTIME_REPLAY_BATCH_SIZE",
-                "must be between 1 and 1000",
-            ));
-        }
-        let max_silicons_per_connection: NonZeroUsize =
-            source.parse_or("HOOK_REALTIME_MAX_SILICONS_PER_CONNECTION", "64")?;
-        if max_silicons_per_connection.get() > MAX_SILICONS_PER_CONNECTION {
-            return Err(invalid(
-                "HOOK_REALTIME_MAX_SILICONS_PER_CONNECTION",
-                format!("must be between 1 and {MAX_SILICONS_PER_CONNECTION}"),
-            ));
-        }
-        Ok(Self {
-            heartbeat_interval,
-            heartbeat_timeout,
-            replay_batch_size,
-            poll_interval: source.bounded_duration_millis(
-                "HOOK_REALTIME_POLL_INTERVAL_MS",
-                1_000,
-                100,
-                60_000,
-            )?,
-            max_silicons_per_connection,
         })
     }
 }
@@ -1281,8 +1160,6 @@ mod tests {
         assert_eq!(settings.crypto.encryption_keys.len(), 1);
         assert!(!settings.iam.local_auth_enabled());
         assert_eq!(settings.server.trusted_proxy_hops, 0);
-        assert_eq!(settings.realtime.heartbeat_interval.as_secs(), 30);
-        assert_eq!(settings.realtime.heartbeat_timeout.as_secs(), 120);
         assert_eq!(settings.policy.log_retention.as_secs(), 14 * 86_400);
         let debug = format!("{settings:?}");
         assert!(!debug.contains("a-production-length-iam-secret"));
@@ -1520,8 +1397,6 @@ mod tests {
             ("HOOK_SECRET_REPLAY_TTL_SECONDS", "599"),
             ("HOOK_DELETION_RETENTION_SECONDS", "3888001"),
             ("HOOK_LOG_RETENTION_SECONDS", "1209599"),
-            ("HOOK_REALTIME_HEARTBEAT_INTERVAL_SECONDS", "31"),
-            ("HOOK_REALTIME_HEARTBEAT_TIMEOUT_SECONDS", "119"),
             ("HOOK_TRUSTED_PROXY_HOPS", "9"),
         ] {
             let mut environment = valid_api_environment("production");
@@ -1552,22 +1427,6 @@ mod tests {
             environment.0.insert(name, value);
             assert!(matches!(
                 WorkerProcessSettings::load(&environment),
-                Err(SettingsError::Invalid { name: rejected, .. }) if rejected == name
-            ));
-        }
-    }
-
-    #[test]
-    fn realtime_batch_and_subscription_bounds_are_enforced() {
-        for (name, value) in [
-            ("HOOK_REALTIME_REPLAY_BATCH_SIZE", "1001"),
-            ("HOOK_REALTIME_MAX_SILICONS_PER_CONNECTION", "257"),
-            ("HOOK_REALTIME_POLL_INTERVAL_MS", "50"),
-        ] {
-            let mut environment = valid_api_environment("production");
-            environment.0.insert(name, value.to_owned());
-            assert!(matches!(
-                ApiSettings::load(&environment),
                 Err(SettingsError::Invalid { name: rejected, .. }) if rejected == name
             ));
         }

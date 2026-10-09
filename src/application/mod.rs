@@ -2,8 +2,6 @@
 
 mod clock;
 mod commands;
-mod deliveries;
-pub mod environments;
 mod error;
 mod history;
 mod hooks;
@@ -12,11 +10,10 @@ mod service;
 
 pub use clock::{Clock, SystemClock};
 pub use commands::{
-    AcknowledgeDeliveriesCommand, BindIamHookSecretCommand, ConnectIamHookCommand,
-    CreateHookCommand, DeleteHookCommand, DeliveryBatch, HistoryPage, HookMutationCommand,
-    HookPatch, HookWithSecret, ListHistoryCommand, ManagementContext, PullDeliveriesCommand,
-    ReceiveOutcome, ReceiveRequestCommand, SetHooksEnabledCommand, SigningInput, SigningPatch,
-    UpdateHookCommand,
+    BindIamHookSecretCommand, ConnectIamHookCommand, CreateHookCommand, DeleteHookCommand,
+    HistoryPage, HookMutationCommand, HookPatch, HookWithSecret, ListHistoryCommand,
+    ManagementContext, ReceiveOutcome, ReceiveRequestCommand, SetHooksEnabledCommand, SigningInput,
+    SigningPatch, UpdateHookCommand,
 };
 pub use error::ApplicationError;
-pub use service::{HookApplication, StreamAccess};
+pub use service::HookApplication;

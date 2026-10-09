@@ -9,8 +9,6 @@ use url::{Host, Url};
 
 use super::iam::{IamClient, IamError};
 
-pub(crate) mod receiver;
-
 /// Ting's limit for the entire serialized send request, including its wrapper.
 pub const MAX_TING_SEND_BYTES: usize = 256 * 1024;
 const MAX_RESPONSE_BYTES: usize = 1024 * 1024;
@@ -24,7 +22,6 @@ pub(crate) struct TingTestingCredentials {
 pub(crate) struct TingProof {
     pub(crate) token: SecretString,
     pub(crate) testing: Option<TingTestingCredentials>,
-    pub(crate) expires_at: OffsetDateTime,
 }
 
 /// Redacted delivery failure. Provider bodies and credentials are never retained.
@@ -643,7 +640,6 @@ mod tests {
         TingProof {
             token: SecretString::from("fixture-proof"),
             testing: None,
-            expires_at: OffsetDateTime::now_utc() + time::Duration::seconds(30),
         }
     }
 

@@ -3,18 +3,15 @@
 mod contracts;
 mod delivery;
 mod dto;
-mod environments;
 mod extractors;
 mod handlers;
-mod lifecycle;
 mod middleware;
-mod receivers;
 mod routes;
+mod scope;
 mod state;
 mod subscriptions;
 mod telemetry_events;
 mod version;
-mod ws;
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -29,21 +26,15 @@ use crate::{
     infrastructure::{
         crypto::{CursorCodec, SecretCipher, SecretKey, SecretKeyring},
         iam::IamClient,
-        postgres::{
-            DeliveryWakeups, PostgresStore, connect, connect_options, spawn_delivery_listener,
-        },
+        postgres::{PostgresStore, connect},
     },
     shutdown,
 };
 
 pub use dto::{CapturedRequestResponse, EventResponse};
 pub use version::{API_VERSION_HEADER, SUPPORTED_API_VERSIONS, SUPPORTED_API_VERSIONS_HEADER};
-pub use ws::{
-    ClientFrame, EventData, HEARTBEAT_CLOSE_CODE, HEARTBEAT_CLOSE_REASON, PROTOCOL_VERSION,
-    ServerFrame,
-};
 
-use crate::config::{RealtimeSettings, ServerSettings};
+use crate::config::ServerSettings;
 
 /// Everything the HTTP router needs, so embedders and end-to-end tests can
 /// build it without a running process.
@@ -51,18 +42,12 @@ use crate::config::{RealtimeSettings, ServerSettings};
 pub struct ApiDependencies {
     /// Application services over PostgreSQL.
     pub application: HookApplication,
-    /// Shared test database control plane, when configured.
-    pub environments: Option<crate::application::environments::EnvironmentService>,
     /// Online IAM adapter.
     pub iam: IamClient,
     /// Internal Ting HTTP boundary; never accepts a caller-selected origin.
     pub ting: crate::infrastructure::ting::TingClient,
     /// Trusted reverse-proxy hops for client address resolution.
     pub trusted_proxy_hops: u8,
-    /// WebSocket delivery policy.
-    pub realtime: RealtimeSettings,
-    /// Local fan-out of delivery notifications.
-    pub wakeups: DeliveryWakeups,
 }
 
 /// Builds the complete HTTP router.
@@ -71,12 +56,9 @@ pub fn router(mut dependencies: ApiDependencies, server: &ServerSettings) -> axu
     routes::router(
         ApiState {
             application: dependencies.application,
-            environments: dependencies.environments,
             iam: dependencies.iam,
             ting: dependencies.ting,
             trusted_proxy_hops: dependencies.trusted_proxy_hops,
-            realtime: dependencies.realtime,
-            wakeups: dependencies.wakeups,
         },
         server,
     )
@@ -92,21 +74,12 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
         .await
         .context("failed to connect API database pool")?;
     let store = PostgresStore::new(pool.clone());
-    let wakeups = DeliveryWakeups::new();
-    let dependencies = build_dependencies(&settings, store, wakeups.clone()).await?;
-    let activity_service = dependencies.environments.clone();
+    let dependencies = build_dependencies(&settings, store).await?;
     let publisher = crate::delivery::publisher::Publisher::new(
         dependencies.application.clone(),
         dependencies.iam.clone(),
         dependencies.ting.clone(),
     );
-    let test_publication = dependencies.environments.clone().map(|service| {
-        (
-            dependencies.application.clone(),
-            service,
-            dependencies.ting.clone(),
-        )
-    });
     let app = router(dependencies, &settings.server);
     let listener = tokio::net::TcpListener::bind(settings.server.bind_addr)
         .await
@@ -127,31 +100,6 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
         settings.ting.poll_interval,
         shutdown_receiver.clone(),
     ));
-    let mut test_publisher_task = test_publication.map(|(application, service, ting)| {
-        tokio::spawn(crate::delivery::publisher::run_tests(
-            application,
-            service,
-            ting,
-            settings.ting.poll_interval,
-            shutdown_receiver.clone(),
-        ))
-    });
-    let listener_options = connect_options(&settings.database, "silicon-hook-listener")?;
-    let mut notification_task = tokio::spawn(spawn_delivery_listener(
-        listener_options,
-        wakeups.clone(),
-        shutdown_receiver.clone(),
-    ));
-    let mut test_notification_task = if let Some(database) = &settings.test_database {
-        Some(tokio::spawn(spawn_delivery_listener(
-            connect_options(database, "silicon-hook-test-listener")?,
-            wakeups,
-            shutdown_receiver.clone(),
-        )))
-    } else {
-        None
-    };
-    let activity_task = tokio::spawn(report_activity(activity_service, shutdown_receiver.clone()));
     let mut server_task = spawn_server(listener, app, shutdown_receiver);
 
     let result = tokio::select! {
@@ -178,15 +126,6 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
 
     let _stopped = shutdown_sender.send(true);
     stop_task(settings.shutdown.timeout, &mut publisher_task).await;
-    if let Some(task) = &mut test_publisher_task {
-        stop_task(settings.shutdown.timeout, task).await;
-    }
-    stop_task(settings.shutdown.timeout, &mut notification_task).await;
-    if let Some(task) = &mut test_notification_task {
-        stop_task(settings.shutdown.timeout, task).await;
-    }
-    activity_task.abort();
-    let _ = activity_task.await;
     pool.close().await;
     result
 }
@@ -232,43 +171,12 @@ fn flatten_server_result(
 async fn build_dependencies(
     settings: &ApiSettings,
     store: PostgresStore,
-    wakeups: DeliveryWakeups,
 ) -> anyhow::Result<ApiDependencies> {
     let cipher = Arc::new(build_secret_cipher(&settings.crypto)?);
     let iam = IamClient::connect(&settings.iam)
         .await
         .context("failed to connect to Silicon IAM")?
         .with_ting_grants(store.clone(), cipher.clone());
-    let mut environments = if let Some(database) = &settings.test_database {
-        Some(
-            crate::application::environments::EnvironmentService::connect(
-                database.clone(),
-                cipher.clone(),
-                iam.clone(),
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    if let Ok(token) = std::env::var("HOOK_HONEYCOMB_SERVICE_TOKEN") {
-        let service = environments
-            .take()
-            .context("Honeycomb lifecycle requires HOOK_TEST_DATABASE_URL")?;
-        environments = Some(
-            service.with_honeycomb_control(
-                secrecy::SecretString::from(token),
-                settings
-                    .iam
-                    .app_id
-                    .clone()
-                    .context("Honeycomb lifecycle requires IAM application ID")?,
-                std::env::var("HOOK_HONEYCOMB_URL")
-                    .unwrap_or_else(|_| "https://backend.honeycomb.teamofsilicons.com".into())
-                    .parse()?,
-            )?,
-        );
-    }
     Ok(ApiDependencies {
         application: HookApplication::new(
             store,
@@ -285,10 +193,7 @@ async fn build_dependencies(
             settings.ting.request_timeout,
         )?,
         iam,
-        environments,
         trusted_proxy_hops: settings.server.trusted_proxy_hops,
-        realtime: settings.realtime,
-        wakeups,
     })
 }
 
@@ -307,22 +212,4 @@ fn build_secret_cipher(settings: &CryptoSettings) -> anyhow::Result<SecretCipher
         .collect::<anyhow::Result<Vec<_>>>()?;
     let keyring = SecretKeyring::new(current_key_id, entries)?;
     Ok(SecretCipher::new(keyring))
-}
-
-async fn report_activity(
-    service: Option<crate::application::environments::EnvironmentService>,
-    mut stop: tokio::sync::watch::Receiver<bool>,
-) {
-    let Some(service) = service else {
-        return;
-    };
-    let mut timer = tokio::time::interval(std::time::Duration::from_secs(30));
-    loop {
-        tokio::select! {
-            _ = stop.changed() => break,
-            _ = timer.tick() => if let Err(error) = service.report_activity().await {
-                tracing::warn!(%error, "test activity report remains pending");
-            }
-        }
-    }
 }

@@ -93,11 +93,6 @@ pub(super) async fn register_recipient(
         "for": authorization.actor().id(),
     }))
     .map_err(AppError::internal)?;
-    let _guard = state
-        .application
-        .delivery_guard()
-        .await
-        .map_err(map_application_error)?;
     let subscription = state
         .ting
         .register_recipient(&state.iam, &token, &prepared)
@@ -143,11 +138,6 @@ pub(super) async fn publication_status(
     if !authorize(&authorization, Action::ReadEvents, &silicon_id).is_allowed() {
         return Err(AppError::NotFound);
     }
-    let guard = state
-        .application
-        .delivery_guard()
-        .await
-        .map_err(map_application_error)?;
     let status = state
         .application
         .store()
@@ -160,7 +150,6 @@ pub(super) async fn publication_status(
         .await
         .map_err(|_| AppError::ProviderUnavailable)?
         .ok_or(AppError::NotFound)?;
-    drop(guard);
     let (recipient_receipt, recipient_status_error) = if let Some(id) = &status.ting_id {
         match recipient_receipt(
             &state,
@@ -215,11 +204,6 @@ async fn recipient_receipt(
             .await
             .map_err(|_| "publisher_unavailable")?;
         let result = {
-            let _guard = state
-                .application
-                .delivery_guard()
-                .await
-                .map_err(|_| "recipient_status_unavailable")?;
             state
                 .ting
                 .receipt(
@@ -235,8 +219,7 @@ async fn recipient_receipt(
         match result {
             Ok(receipt) => return Ok(receipt),
             Err(TingError::Iam(IamError::InvalidCredential)) if attempt == 0 => {
-                // Release the lifecycle guard before the credential write. A
-                // newer token installed by another request remains untouched.
+                // A newer token installed by another request remains untouched.
                 credentials
                     .invalidate_access_token(org, &token)
                     .await

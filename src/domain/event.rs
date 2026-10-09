@@ -370,17 +370,6 @@ impl BlockedRequest {
     }
 }
 
-/// A consumer's acknowledged position in one Silicon's delivery stream.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct DeliveryCursor {
-    /// Stream owner.
-    pub silicon_id: SiliconId,
-    /// Highest sequence the consumer has acknowledged; zero before any.
-    pub acknowledged_through: i64,
-    /// Time of the most recent acknowledgment, if any.
-    pub updated_at: Option<OffsetDateTime>,
-}
-
 #[cfg(test)]
 mod tests {
     use time::macros::datetime;

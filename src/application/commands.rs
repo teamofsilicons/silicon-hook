@@ -5,8 +5,8 @@ use std::net::IpAddr;
 use bytes::Bytes;
 
 use crate::domain::{
-    AuthorizationContext, BlockedRequest, BlockedRequestId, DeliveryCursor, EndpointKey, EventId,
-    EventRecord, Hook, HookDescription, HookId, HookName, HookTimeZone, SigningSecret, SiliconId,
+    AuthorizationContext, BlockedRequest, BlockedRequestId, EndpointKey, EventId, EventRecord,
+    Hook, HookDescription, HookId, HookName, HookTimeZone, SigningSecret, SiliconId,
     signature::{
         Expression, SecretEncoding, SignatureAlgorithm, SignatureConfig, SignatureEncoding,
     },
@@ -293,41 +293,6 @@ pub struct HistoryPage<T> {
     pub items: Vec<T>,
     /// Opaque cursor for the next page.
     pub next_cursor: Option<String>,
-}
-
-/// Authorized pull of ordered deliveries.
-#[derive(Clone, Debug)]
-pub struct PullDeliveriesCommand {
-    /// IAM-derived authorization facts for this request.
-    pub authorization: AuthorizationContext,
-    /// Target Silicon stream.
-    pub silicon_id: SiliconId,
-    /// Explicit stream position; the consumer's acknowledged cursor when absent.
-    pub after_sequence: Option<i64>,
-    /// Number of events, from 1 through 1,000.
-    pub limit: u32,
-}
-
-/// Ordered deliveries after a position.
-#[derive(Clone, Debug)]
-pub struct DeliveryBatch {
-    /// Events in ascending sequence order.
-    pub items: Vec<EventRecord>,
-    /// The consumer's acknowledged position.
-    pub cursor: DeliveryCursor,
-    /// Highest sequence allocated for the Silicon.
-    pub latest_sequence: i64,
-}
-
-/// Authorized acknowledgment of ordered deliveries.
-#[derive(Clone, Debug)]
-pub struct AcknowledgeDeliveriesCommand {
-    /// IAM-derived authorization facts for this request.
-    pub authorization: AuthorizationContext,
-    /// Target Silicon stream.
-    pub silicon_id: SiliconId,
-    /// Highest sequence the consumer has processed.
-    pub through_sequence: i64,
 }
 
 /// Hook metadata paired with its bounded one-time signing credential.

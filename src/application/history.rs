@@ -24,12 +24,9 @@ impl HookApplication {
         expected_environment: Option<(uuid::Uuid, i64)>,
     ) -> Result<EventRecord, ApplicationError> {
         authorize_action(authorization, Action::ReadEvents, silicon_id)?;
-        if let Some((expected_id, _)) = expected_environment
-            && expected_id != self.environment.map_or(uuid::Uuid::nil(), |(id, _)| id)
-        {
+        if expected_environment.is_some_and(|(id, _)| !id.is_nil()) {
             return Err(ApplicationError::NotFound);
         }
-        let _guard = self.delivery_guard().await?;
         self.store
             .get_event(
                 authorization.organization_id(),
@@ -98,8 +95,7 @@ impl HookApplication {
             command.silicon_id.clone(),
             collection,
             filter.clone(),
-        )
-        .with_environment(self.environment_identity());
+        );
         let cursor = command
             .cursor
             .as_deref()

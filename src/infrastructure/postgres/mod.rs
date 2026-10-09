@@ -4,12 +4,10 @@
 //! runtime-checked `SQLx` APIs so builds never require a live database or an
 //! offline query cache.
 
-mod deliveries;
 mod error;
 mod events;
 mod hooks;
 mod idempotency;
-mod listener;
 mod maintenance;
 mod models;
 mod readiness;
@@ -32,9 +30,6 @@ use crate::config::DatabaseSettings;
 use crate::domain::ActorKind;
 
 pub use error::{Result, StoreError};
-pub use listener::{
-    AUTHORIZATION_CHANNEL, DELIVERY_CHANNEL, DeliveryWakeups, spawn_delivery_listener,
-};
 pub use readiness::RuntimeDatabaseRole;
 pub use types::{
     AcceptEvent, AuditAction, AuditContext, BatchHookActivation, CreateHook, CreateHookOutcome,
@@ -56,8 +51,6 @@ pub const SECRET_REPLAY_WINDOW: time::Duration = time::Duration::minutes(10);
 pub const HISTORY_PAGE_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 /// Largest number of history records one request may ask for.
 pub const MAX_HISTORY_LIMIT: u32 = 10_000;
-/// Largest number of deliveries one pull may ask for.
-pub const MAX_DELIVERY_BATCH: u32 = 1_000;
 
 /// A cheap, cloneable handle to the PostgreSQL persistence adapter.
 #[derive(Clone, Debug)]
@@ -119,8 +112,7 @@ pub async fn connect(
     Ok(pool)
 }
 
-/// Builds connection options for a dedicated (non-pooled) connection such as
-/// the notification listener.
+/// Builds connection options for a dedicated (non-pooled) connection.
 ///
 /// # Errors
 ///

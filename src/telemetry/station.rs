@@ -17,32 +17,15 @@ struct Pending {
 }
 
 fn table_key(environment: Uuid) -> Option<SecretString> {
-    if environment.is_nil() {
-        std::env::var("HOOK_TELEMETRY_TABLE_KEY")
-            .ok()
-            .filter(|key| !key.is_empty())
-            .map(SecretString::from)
-    } else {
-        // Each sandbox needs an explicit separate destination; never fall back to production.
-        let raw = std::env::var("HOOK_TEST_TELEMETRY_KEYS").ok()?;
-        let keys: std::collections::BTreeMap<Uuid, String> = serde_json::from_str(&raw).ok()?;
-        let key = keys.get(&environment)?;
-        let prefix = key.rsplit_once('-')?.0;
-        if prefix == "table-siliconhook"
-            || keys
-                .values()
-                .filter(|other| {
-                    other
-                        .rsplit_once('-')
-                        .is_some_and(|(candidate, _)| candidate == prefix)
-                })
-                .count()
-                != 1
-        {
-            return None;
-        }
-        Some(SecretString::from(key.clone()))
+    // Only production rows (the nil environment) are exported. Rows left over
+    // from retired test environments are never sent anywhere.
+    if !environment.is_nil() {
+        return None;
     }
+    std::env::var("HOOK_TELEMETRY_TABLE_KEY")
+        .ok()
+        .filter(|key| !key.is_empty())
+        .map(SecretString::from)
 }
 
 pub(crate) async fn export_pending(pool: &PgPool) -> anyhow::Result<()> {

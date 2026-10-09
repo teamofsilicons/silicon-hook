@@ -11,8 +11,7 @@ use serde::de::DeserializeOwned;
 
 use super::{
     dto::{
-        AcknowledgeRequest, BlockedRequestResponse, CreateHookRequest, DeliveriesQuery,
-        DeliveryBatchResponse, DeliveryCursorResponse, EventResponse, HealthResponse,
+        BlockedRequestResponse, CreateHookRequest, EventResponse, HealthResponse,
         HistoryPageResponse, HistoryQuery, HookPageResponse, HookResponse, HookWithSecretResponse,
         IamHookResponse, IamWebhookResponse, ListHooksQuery, LoginRequest, OneTimeSecret,
         ReceiptResponse, RefreshRequest, SetHooksEnabledRequest, SigningSecretResponse,
@@ -23,9 +22,8 @@ use super::{
 };
 use crate::{
     application::{
-        AcknowledgeDeliveriesCommand, ApplicationError, BindIamHookSecretCommand,
-        ConnectIamHookCommand, CreateHookCommand, DeleteHookCommand, HookMutationCommand,
-        HookPatch, ListHistoryCommand, ManagementContext, PullDeliveriesCommand,
+        ApplicationError, BindIamHookSecretCommand, ConnectIamHookCommand, CreateHookCommand,
+        DeleteHookCommand, HookMutationCommand, HookPatch, ListHistoryCommand, ManagementContext,
         ReceiveRequestCommand, SetHooksEnabledCommand, UpdateHookCommand,
     },
     domain::{
@@ -437,76 +435,6 @@ async fn history_command(
     })
 }
 
-pub(super) async fn pull_deliveries(
-    Extension(state): Extension<ApiState>,
-    Path(silicon_id): Path<String>,
-    query: Result<Query<DeliveriesQuery>, QueryRejection>,
-    headers: HeaderMap,
-) -> Result<Json<DeliveryBatchResponse>, AppError> {
-    let silicon_id = parse_silicon_id(silicon_id)?;
-    let Query(query) = query.map_err(|_| AppError::validation("invalid_query"))?;
-    let authorization =
-        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
-    let batch = state
-        .application
-        .pull_deliveries(PullDeliveriesCommand {
-            authorization,
-            silicon_id,
-            after_sequence: query.after_sequence,
-            limit: query.limit,
-        })
-        .await
-        .map_err(map_application_error)?;
-    Ok(Json(DeliveryBatchResponse {
-        items: batch.items.iter().map(EventResponse::from).collect(),
-        cursor: DeliveryCursorResponse::from(&batch.cursor),
-        latest_sequence: batch.latest_sequence,
-    }))
-}
-
-pub(super) async fn acknowledge_deliveries(
-    Extension(state): Extension<ApiState>,
-    Path(silicon_id): Path<String>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<Json<DeliveryCursorResponse>, AppError> {
-    extractors::require_json(&headers)?;
-    let silicon_id = parse_silicon_id(silicon_id)?;
-    let request: AcknowledgeRequest = parse_json(&body)?;
-    let authorization =
-        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
-    let cursor = state
-        .application
-        .acknowledge_deliveries(AcknowledgeDeliveriesCommand {
-            authorization,
-            silicon_id,
-            through_sequence: request.through_sequence,
-        })
-        .await
-        .map_err(map_application_error)?;
-    Ok(Json(DeliveryCursorResponse::from(&cursor)))
-}
-
-pub(super) async fn delivery_cursor(
-    Extension(state): Extension<ApiState>,
-    Path(silicon_id): Path<String>,
-    headers: HeaderMap,
-) -> Result<Json<DeliveryCursorResponse>, AppError> {
-    let silicon_id = parse_silicon_id(silicon_id)?;
-    let authorization =
-        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
-    let access = state
-        .application
-        .authorize_stream(&authorization, &silicon_id)
-        .map_err(map_application_error)?;
-    let cursor = state
-        .application
-        .stream_cursor(&access)
-        .await
-        .map_err(map_application_error)?;
-    Ok(Json(DeliveryCursorResponse::from(&cursor)))
-}
-
 pub(super) async fn receive(
     Extension(state): Extension<ApiState>,
     Path((silicon_id, endpoint_key)): Path<(String, String)>,
@@ -808,55 +736,17 @@ pub(super) async fn connect_iam_hook(
 }
 
 /// Receives Hook's own Application webhook from IAM. Deliveries are
-/// authenticated with the official IAM verifier before changing state. The
-/// test key is only a routing hint until verification succeeds. Verified events
-/// invalidate retained WebSocket authority locally and across API replicas.
+/// authenticated with the official IAM verifier before they are logged.
 pub(super) async fn receive_iam_event(
     Extension(state): Extension<ApiState>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<StatusCode, AppError> {
-    let envelope: serde_json::Value =
-        serde_json::from_slice(&body).map_err(|_| AppError::bad_request("invalid_json"))?;
-    let test_context = if let Some(test) = envelope.get("test") {
-        let key = test
-            .get("testing_key")
-            .and_then(serde_json::Value::as_str)
-            .ok_or(AppError::Forbidden)?;
-        Some(
-            state
-                .environments
-                .as_ref()
-                .ok_or(AppError::Forbidden)?
-                .resolve_iam_key(key)
-                .await?,
-        )
-    } else {
-        None
-    };
-    let iam = test_context
-        .as_ref()
-        .map_or(&state.iam, |context| &context.iam);
-    let verified = iam
+    let verified = state
+        .iam
         .verify_application_webhook(&headers, &body)
         .map_err(AppError::from)?;
-    let store = test_context
-        .as_ref()
-        .map_or(state.application.store(), |context| &context.store);
-    sqlx::query("SELECT pg_notify($1, '')")
-        .bind(crate::infrastructure::postgres::AUTHORIZATION_CHANNEL)
-        .execute(store.pool())
-        .await
-        .map_err(AppError::internal)?;
-    state.wakeups.invalidate_authorization();
     let event = verified.event();
-    if let Some(context) = &test_context
-        && let Some(service) = &state.environments
-    {
-        service
-            .touch(context.environment.id, context.environment.generation)
-            .await?;
-    }
     tracing::info!(
         event_id = %event.event_id,
         event_type = %event.event_type,
