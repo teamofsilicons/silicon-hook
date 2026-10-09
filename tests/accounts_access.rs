@@ -437,3 +437,126 @@ async fn routes_that_reveal_secrets_or_change_access_confirm_the_token_is_still_
     }
     Ok(())
 }
+
+#[tokio::test]
+#[allow(clippy::too_many_lines, reason = "one table of every route family")]
+async fn every_route_family_refuses_outsiders_and_lets_viewers_only_read() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let p = people(&api);
+    let open = json!({"name": "Open", "signature": {"required": false}});
+    let (_, hook) = api
+        .call(
+            Method::POST,
+            "/api/v3/silicons/si:cos/hooks",
+            Some(&p.cos),
+            Some(&open),
+        )
+        .await?;
+    let hook_id = hook["id"].as_str().unwrap_or_default().to_owned();
+    let key = hook["endpoint_key"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(
+        api.deliver(&format!("/silicon/si:cos/{key}"), &[], b"{}")
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    let event_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM hook.events")
+        .fetch_one(api.owner.pool())
+        .await?;
+    assert_eq!(
+        grant(&api, &p.alice, "c:bob", "view").await?.0,
+        StatusCode::OK
+    );
+
+    let base = "/api/v3/silicons/si:cos";
+    let reads = [
+        format!("{base}/hooks"),
+        format!("{base}/hooks/{hook_id}"),
+        format!("{base}/hooks/{hook_id}/events"),
+        format!("{base}/hooks/{hook_id}/blocked-requests"),
+        format!("{base}/events"),
+        format!("{base}/events/{event_id}"),
+        format!("{base}/events/{event_id}/publication"),
+        format!("{base}/blocked-requests"),
+        format!("{base}/access"),
+    ];
+    for path in &reads {
+        let (status, body) = api.call(Method::GET, path, Some(&p.carol), None).await?;
+        assert_eq!(
+            (status, body["error"]["code"].clone()),
+            (StatusCode::FORBIDDEN, json!("no_access")),
+            "{path}"
+        );
+        let (status, body) = api.call(Method::GET, path, Some(&p.bob), None).await?;
+        assert_eq!(status, StatusCode::OK, "viewer reads {path}: {body}");
+    }
+    let writes = [
+        (
+            Method::PATCH,
+            format!("{base}/hooks/{hook_id}"),
+            Some(json!({"name": "Renamed"})),
+        ),
+        (
+            Method::PATCH,
+            format!("{base}/hooks"),
+            Some(json!({"hook_ids": [hook_id], "enabled": false})),
+        ),
+        (
+            Method::POST,
+            format!("{base}/hooks"),
+            Some(json!({"name": "New"})),
+        ),
+        (
+            Method::POST,
+            format!("{base}/hooks/{hook_id}/secret/rotate"),
+            None,
+        ),
+        (
+            Method::POST,
+            format!("{base}/hooks/{hook_id}/endpoint/rotate"),
+            None,
+        ),
+        (
+            Method::POST,
+            format!("{base}/hooks/{hook_id}/restore"),
+            None,
+        ),
+        (Method::DELETE, format!("{base}/hooks/{hook_id}"), None),
+        (Method::POST, format!("{base}/hooks/accounts"), None),
+        (
+            Method::PUT,
+            format!("{base}/access/c:carol"),
+            Some(json!({"level": "view"})),
+        ),
+        (Method::GET, format!("{base}/allow-list"), None),
+        (Method::PUT, format!("{base}/allow-list/c:carol"), None),
+        (Method::DELETE, format!("{base}/access/c:alice"), None),
+    ];
+    for (method, path, body) in &writes {
+        for (who, token) in [("outsider", &p.carol), ("viewer", &p.bob)] {
+            let (status, response) = api
+                .call(method.clone(), path, Some(token), body.as_ref())
+                .await?;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{who} {method} {path}: {response}"
+            );
+        }
+    }
+    let (status, hooks) = api
+        .call(
+            Method::GET,
+            &format!("{base}/hooks/{hook_id}"),
+            Some(&p.cos),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        (status, hooks["name"].clone(), hooks["status"].clone()),
+        (StatusCode::OK, json!("Open"), json!("active"))
+    );
+    Ok(())
+}

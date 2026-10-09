@@ -86,7 +86,7 @@ async fn retired_api_version() -> AppError {
     AppError::refused(
         http::StatusCode::GONE,
         "api_version_sunset",
-        "Hook API v1 and v2 used Silicon IAM sign-in and are retired. Use /api/v3 with a Silicon Accounts access token issued to Hook (Authorization: Bearer). See https://docs.hook.teamofsilicons.com/api/.",
+        "Hook API v1 and v2 are retired. Use /api/v3 with a Silicon Accounts access token issued to Hook (Authorization: Bearer). See https://docs.hook.teamofsilicons.com/api/.",
     )
 }
 
