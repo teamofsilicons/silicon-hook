@@ -167,6 +167,14 @@ impl HookApplication {
                 ),
             ));
         }
+        if kind == ActorKind::Silicon && record.custodian_checked_at.is_none() {
+            // Tokens do not name a Silicon's custodian. Learn it once, so the
+            // custodian's list of Silicons includes this one; a failure here
+            // only delays that.
+            if let Err(error) = self.look_up(uuid.as_str(), false).await {
+                tracing::info!(%error, "could not learn a new Silicon's custodian yet");
+            }
+        }
         Ok(Actor::new(
             uuid,
             kind,

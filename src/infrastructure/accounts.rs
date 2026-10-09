@@ -28,12 +28,15 @@ use crate::config::AccountsSettings;
 /// rotated key is picked up at once, while tokens with made-up key ids cannot
 /// make Hook fetch the key set more than once a second.
 pub const JWKS_REFETCH_INTERVAL: Duration = Duration::from_secs(1);
-/// Longest time an introspection answer is reused.
-pub const INTROSPECTION_CACHE_TTL: Duration = Duration::from_secs(30);
+/// How long a token Silicon Accounts called inactive is refused without
+/// asking again (a revoked token never becomes active, and access tokens live
+/// 30 minutes). An active answer is never reused: the routes that introspect
+/// must see a sign-out at once.
+pub const INACTIVE_TOKEN_MEMORY: Duration = Duration::from_mins(30);
 /// Account lookups this process makes per minute at most: half of the 600
 /// Silicon Accounts allows one app, leaving room for other replicas.
 pub const LOOKUPS_PER_MINUTE: u32 = 300;
-const MAX_CACHED_INTROSPECTIONS: usize = 10_000;
+const MAX_REMEMBERED_INACTIVE_TOKENS: usize = 10_000;
 
 /// Why an access token was refused, with a message that says what to do.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -129,7 +132,7 @@ struct Inner {
     webhook_secrets: Vec<SecretString>,
     jwks: RwLock<JwksState>,
     jwks_fetch: tokio::sync::Mutex<()>,
-    introspections: Mutex<HashMap<[u8; 32], (bool, Instant)>>,
+    inactive_tokens: Mutex<HashMap<[u8; 32], Instant>>,
     lookups: Mutex<(Instant, u32)>,
 }
 
@@ -171,7 +174,7 @@ impl AccountsGateway {
                 webhook_secrets: settings.webhook_secrets.clone(),
                 jwks: RwLock::new(JwksState::default()),
                 jwks_fetch: tokio::sync::Mutex::new(()),
-                introspections: Mutex::new(HashMap::new()),
+                inactive_tokens: Mutex::new(HashMap::new()),
                 lookups: Mutex::new((Instant::now(), 0)),
             }),
         })
@@ -255,19 +258,21 @@ impl AccountsGateway {
         Ok(keys)
     }
 
-    /// Asks Silicon Accounts whether a token is still active (sees sign-outs at
-    /// once). Answers are reused for at most [`INTROSPECTION_CACHE_TTL`].
+    /// Asks Silicon Accounts whether a token is still active, so a sign-out
+    /// is seen at once. Only inactive answers are remembered (for
+    /// [`INACTIVE_TOKEN_MEMORY`]).
     ///
     /// # Errors
     ///
     /// Returns an error when Accounts cannot answer.
     pub async fn introspect_active(&self, token: &str) -> Result<bool, AccountsError> {
         let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-        if let Ok(cache) = self.inner.introspections.lock()
-            && let Some((active, at)) = cache.get(&digest)
-            && at.elapsed() < INTROSPECTION_CACHE_TTL
+        if let Ok(remembered) = self.inner.inactive_tokens.lock()
+            && remembered
+                .get(&digest)
+                .is_some_and(|at| at.elapsed() < INACTIVE_TOKEN_MEMORY)
         {
-            return Ok(*active);
+            return Ok(false);
         }
         let answer = self.app().introspect(token).await?;
         let active = answer.active
@@ -275,14 +280,14 @@ impl AccountsGateway {
                 .client_id
                 .as_deref()
                 .is_none_or(|app| app == self.app_id());
-        if let Ok(mut cache) = self.inner.introspections.lock() {
-            if cache.len() >= MAX_CACHED_INTROSPECTIONS {
-                cache.retain(|_, (_, at)| at.elapsed() < INTROSPECTION_CACHE_TTL);
-                if cache.len() >= MAX_CACHED_INTROSPECTIONS {
-                    cache.clear();
+        if !active && let Ok(mut remembered) = self.inner.inactive_tokens.lock() {
+            if remembered.len() >= MAX_REMEMBERED_INACTIVE_TOKENS {
+                remembered.retain(|_, at| at.elapsed() < INACTIVE_TOKEN_MEMORY);
+                if remembered.len() >= MAX_REMEMBERED_INACTIVE_TOKENS {
+                    remembered.clear();
                 }
             }
-            cache.insert(digest, (active, Instant::now()));
+            remembered.insert(digest, Instant::now());
         }
         Ok(active)
     }
@@ -407,7 +412,7 @@ impl AccountsGateway {
                     return Err(WebhookRejection::Body(error));
                 }
                 Err(WebhookError::SignatureMismatch) => {
-                    last = Some(WebhookError::SignatureMismatch)
+                    last = Some(WebhookError::SignatureMismatch);
                 }
                 Err(error) => return Err(WebhookRejection::Signature(error)),
             }

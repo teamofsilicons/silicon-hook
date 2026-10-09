@@ -137,7 +137,7 @@ impl StubAccounts {
     pub fn rename(&self, uuid: &str, new_id: &str) {
         self.with_state(|state| {
             if let Some(account) = state.accounts.get_mut(uuid) {
-                account.id = new_id.to_owned();
+                new_id.clone_into(&mut account.id);
             }
         });
     }

@@ -144,7 +144,7 @@ const REQUIRED_COLUMNS: &[&str] = &[
     "hook_private.audit_log.actor_uuid|text|false",
     "hook_private.ting_outbox.observer_subscription_id|uuid|false",
     "hook_private.accounts.uuid|text|true",
-    "hook_private.accounts.kind|text|true",
+    "hook_private.accounts.kind|text|false",
     "hook_private.accounts.public_id|text|false",
     "hook_private.accounts.public_id_at|timestamp with time zone|false",
     "hook_private.accounts.display_name|text|false",

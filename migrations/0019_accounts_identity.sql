@@ -134,7 +134,9 @@ CREATE INDEX audit_log_by_silicon_uuid
 
 CREATE TABLE hook_private.accounts (
     uuid text PRIMARY KEY,
-    kind text NOT NULL,
+    -- NULL until Hook meets the account: a sign-out or deletion can arrive
+    -- before the account ever used Hook, and must still apply to its tokens.
+    kind text,
     -- Current public id (`c:...`/`si:...`); NULL once the account is deleted.
     public_id text,
     -- When public_id became current (token iat, lookup time or event time).

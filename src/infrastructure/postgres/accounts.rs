@@ -174,7 +174,8 @@ impl PostgresStore {
     /// Returns a PostgreSQL failure or a corrupt row.
     pub async fn account(&self, uuid: &AccountUuid) -> Result<Option<AccountRecord>, StoreError> {
         sqlx::query_as::<_, AccountRow>(sqlx::AssertSqlSafe(format!(
-            "SELECT {ACCOUNT_COLUMNS} FROM hook_private.accounts WHERE uuid = $1"
+            "SELECT {ACCOUNT_COLUMNS} FROM hook_private.accounts
+             WHERE uuid = $1 AND kind IS NOT NULL"
         )))
         .bind(uuid.as_str())
         .fetch_optional(&self.pool)
@@ -195,7 +196,7 @@ impl PostgresStore {
     ) -> Result<Option<AccountRecord>, StoreError> {
         sqlx::query_as::<_, AccountRow>(sqlx::AssertSqlSafe(format!(
             "SELECT {ACCOUNT_COLUMNS} FROM hook_private.accounts
-             WHERE public_id = $1 AND deleted_at IS NULL
+             WHERE public_id = $1 AND deleted_at IS NULL AND kind IS NOT NULL
              ORDER BY public_id_at DESC NULLS LAST, updated_at DESC LIMIT 1"
         )))
         .bind(id.as_str())
@@ -224,6 +225,7 @@ impl PostgresStore {
             "INSERT INTO hook_private.accounts (uuid, kind, public_id, public_id_at)
              VALUES ($1, $2, $3, CASE WHEN $3::text IS NULL THEN NULL ELSE $4 END)
              ON CONFLICT (uuid) DO UPDATE SET
+                 kind = COALESCE(accounts.kind, EXCLUDED.kind),
                  public_id = CASE
                      WHEN accounts.deleted_at IS NULL AND $3::text IS NOT NULL
                       AND (accounts.public_id_at IS NULL OR accounts.public_id_at < $4)
@@ -274,12 +276,18 @@ impl PostgresStore {
                  (uuid, kind, public_id, public_id_at, custodian_uuid, custodian_checked_at)
              VALUES ($1, $2, $3, $4, $5, CASE WHEN $2 = 'silicon' THEN $4 END)
              ON CONFLICT (uuid) DO UPDATE SET
-                 public_id = COALESCE($3, accounts.public_id),
-                 public_id_at = CASE WHEN $3::text IS NULL THEN accounts.public_id_at ELSE $4 END,
-                 custodian_uuid = CASE WHEN accounts.kind = 'silicon' THEN $5 ELSE NULL END,
-                 custodian_checked_at = CASE WHEN accounts.kind = 'silicon' THEN $4 END,
+                 kind = COALESCE(accounts.kind, EXCLUDED.kind),
+                 public_id = CASE WHEN accounts.deleted_at IS NULL
+                     THEN COALESCE($3, accounts.public_id) ELSE accounts.public_id END,
+                 public_id_at = CASE WHEN accounts.deleted_at IS NULL AND $3::text IS NOT NULL
+                     THEN $4 ELSE accounts.public_id_at END,
+                 custodian_uuid = CASE
+                     WHEN accounts.deleted_at IS NOT NULL THEN accounts.custodian_uuid
+                     WHEN COALESCE(accounts.kind, EXCLUDED.kind) = 'silicon' THEN $5 END,
+                 custodian_checked_at = CASE
+                     WHEN accounts.deleted_at IS NOT NULL THEN accounts.custodian_checked_at
+                     WHEN COALESCE(accounts.kind, EXCLUDED.kind) = 'silicon' THEN $4 END,
                  updated_at = clock_timestamp()
-             WHERE accounts.deleted_at IS NULL
              RETURNING {ACCOUNT_COLUMNS}"
         )))
         .bind(view.uuid.as_str())
@@ -318,11 +326,12 @@ impl PostgresStore {
         at: OffsetDateTime,
     ) -> Result<(), StoreError> {
         sqlx::query(
-            "UPDATE hook_private.accounts
-             SET deleted_at = COALESCE(deleted_at, $2), public_id = NULL,
-                 revoked_before = GREATEST(COALESCE(revoked_before, $2), $2),
-                 updated_at = clock_timestamp()
-             WHERE uuid = $1",
+            "INSERT INTO hook_private.accounts (uuid, deleted_at, revoked_before)
+             VALUES ($1, $2, $2)
+             ON CONFLICT (uuid) DO UPDATE SET
+                 deleted_at = COALESCE(accounts.deleted_at, $2), public_id = NULL,
+                 revoked_before = GREATEST(COALESCE(accounts.revoked_before, $2), $2),
+                 updated_at = clock_timestamp()",
         )
         .bind(uuid.as_str())
         .bind(at)
@@ -361,7 +370,8 @@ impl PostgresStore {
     pub async fn accounts(&self, uuids: &[AccountUuid]) -> Result<Vec<AccountRecord>, StoreError> {
         let uuids = uuids.iter().map(AccountUuid::as_str).collect::<Vec<_>>();
         sqlx::query_as::<_, AccountRow>(sqlx::AssertSqlSafe(format!(
-            "SELECT {ACCOUNT_COLUMNS} FROM hook_private.accounts WHERE uuid = ANY($1)"
+            "SELECT {ACCOUNT_COLUMNS} FROM hook_private.accounts
+             WHERE uuid = ANY($1) AND kind IS NOT NULL"
         )))
         .bind(&uuids)
         .fetch_all(&self.pool)
@@ -402,6 +412,7 @@ pub(super) async fn upsert_known_account(
         "INSERT INTO hook_private.accounts (uuid, kind, public_id, public_id_at)
          VALUES ($1, $2, $3, CASE WHEN $3::text IS NULL THEN NULL ELSE $4 END)
          ON CONFLICT (uuid) DO UPDATE SET
+             kind = COALESCE(accounts.kind, EXCLUDED.kind),
              public_id = CASE
                  WHEN accounts.deleted_at IS NULL AND $3::text IS NOT NULL
                   AND (accounts.public_id_at IS NULL OR accounts.public_id_at < $4)

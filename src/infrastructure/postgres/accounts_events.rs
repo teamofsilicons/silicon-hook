@@ -197,7 +197,8 @@ async fn ensure_account(
     kind: ActorKind,
 ) -> Result<(), StoreError> {
     sqlx::query(
-        "INSERT INTO hook_private.accounts (uuid, kind) VALUES ($1, $2) ON CONFLICT (uuid) DO NOTHING",
+        "INSERT INTO hook_private.accounts (uuid, kind) VALUES ($1, $2)
+         ON CONFLICT (uuid) DO UPDATE SET kind = EXCLUDED.kind WHERE accounts.kind IS NULL",
     )
     .bind(uuid.as_str())
     .bind(kind.as_str())
@@ -345,16 +346,18 @@ async fn custodian_changed(
 }
 
 /// Ends the account's sign-ins as of `at` and the delivery work Hook holds for
-/// it: its observer subscriptions (and their queued sends) go.
+/// it: its observer subscriptions (and their queued sends) go. An account Hook
+/// has not met yet is recorded too, so its earlier tokens never work here.
 async fn revoke(
     transaction: &mut Tx<'_>,
     uuid: &AccountUuid,
     at: OffsetDateTime,
 ) -> Result<(), StoreError> {
     sqlx::query(
-        "UPDATE hook_private.accounts
-         SET revoked_before = GREATEST(COALESCE(revoked_before, $2), $2), updated_at = clock_timestamp()
-         WHERE uuid = $1",
+        "INSERT INTO hook_private.accounts (uuid, revoked_before) VALUES ($1, $2)
+         ON CONFLICT (uuid) DO UPDATE SET
+             revoked_before = GREATEST(COALESCE(accounts.revoked_before, $2), $2),
+             updated_at = clock_timestamp()",
     )
     .bind(uuid.as_str())
     .bind(at)
@@ -376,16 +379,18 @@ async fn deleted(
     uuid: &AccountUuid,
     at: OffsetDateTime,
 ) -> Result<(), StoreError> {
-    let kind = sqlx::query_scalar::<_, String>(
-        "UPDATE hook_private.accounts
-         SET deleted_at = COALESCE(deleted_at, $2), public_id = NULL, display_name = NULL,
-             pfp_url = NULL, revoked_before = GREATEST(COALESCE(revoked_before, $2), $2),
+    let kind = sqlx::query_scalar::<_, Option<String>>(
+        "INSERT INTO hook_private.accounts (uuid, deleted_at, revoked_before) VALUES ($1, $2, $2)
+         ON CONFLICT (uuid) DO UPDATE SET
+             deleted_at = COALESCE(accounts.deleted_at, $2), public_id = NULL,
+             display_name = NULL, pfp_url = NULL,
+             revoked_before = GREATEST(COALESCE(accounts.revoked_before, $2), $2),
              updated_at = clock_timestamp()
-         WHERE uuid = $1 RETURNING kind",
+         RETURNING kind",
     )
     .bind(uuid.as_str())
     .bind(at)
-    .fetch_optional(&mut **transaction)
+    .fetch_one(&mut **transaction)
     .await?;
     for statement in [
         "DELETE FROM hook_private.silicon_grants WHERE silicon_uuid = $1 OR grantee_uuid = $1",
