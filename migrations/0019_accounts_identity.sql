@@ -303,6 +303,9 @@ CREATE TABLE hook_private.identity_links (
     -- 'inventory' when this migration found the id in Hook's data,
     -- 'mapping:<sha256 of the file>' once link-identities applied a mapping.
     source text NOT NULL,
+    -- Whether Hook's data references the id (found by this migration). Ids
+    -- that only a mapping file named are false.
+    in_hook_data boolean NOT NULL DEFAULT false,
     CONSTRAINT identity_links_public_id_format CHECK (
         char_length(iam_public_id) BETWEEN 3 AND 255 AND iam_public_id ~ '^(c|si):[!-~]+$'
     ),
@@ -321,8 +324,8 @@ CREATE UNIQUE INDEX identity_links_one_iam_id_per_account
 COMMENT ON TABLE hook_private.identity_links IS
     'Every IAM-era public id stored in Hook and the Silicon Accounts uuid an operator mapped it to.';
 
-INSERT INTO hook_private.identity_links (iam_public_id, kind, source)
-SELECT DISTINCT id, CASE WHEN id LIKE 'si:%' THEN 'silicon' ELSE 'carbon' END, 'inventory'
+INSERT INTO hook_private.identity_links (iam_public_id, kind, source, in_hook_data)
+SELECT DISTINCT id, CASE WHEN id LIKE 'si:%' THEN 'silicon' ELSE 'carbon' END, 'inventory', true
 FROM (
     SELECT silicon_id AS id FROM hook.hooks
     UNION SELECT created_by_id FROM hook.hooks

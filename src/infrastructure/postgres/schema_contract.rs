@@ -186,6 +186,7 @@ const REQUIRED_COLUMNS: &[&str] = &[
     "hook_private.identity_links.accounts_uuid|text|false",
     "hook_private.identity_links.linked_at|timestamp with time zone|false",
     "hook_private.identity_links.source|text|true",
+    "hook_private.identity_links.in_hook_data|boolean|true",
 ];
 
 const REQUIRED_CONSTRAINTS: &[&str] = &[
@@ -388,6 +389,7 @@ const REQUIRED_DEFAULTS: &[&str] = &[
     "hook_private.silicon_grants.created_at|clock_timestamp()",
     "hook_private.accounts_events.received_at|clock_timestamp()",
     "hook_private.observer_subscriptions.created_at|clock_timestamp()",
+    "hook_private.identity_links.in_hook_data|false",
 ];
 
 const MISSING_COLUMNS_SQL: &str = "

@@ -493,8 +493,7 @@ async fn report(
     let not_in_hook_data = sqlx::query_scalar::<_, String>(
         "SELECT id FROM unnest($1::text[]) AS mapped(id)
          WHERE NOT EXISTS (SELECT 1 FROM hook_private.identity_links AS link
-                           WHERE link.iam_public_id = mapped.id AND link.source = 'inventory')
-           AND NOT EXISTS (SELECT 1 FROM hook.hooks WHERE silicon_id = mapped.id OR created_by_id = mapped.id)
+                           WHERE link.iam_public_id = mapped.id AND link.in_hook_data)
          ORDER BY id",
     )
     .bind(ids)
@@ -502,7 +501,7 @@ async fn report(
     .await?;
     let unmatched_in_hook_data = sqlx::query_scalar::<_, String>(
         "SELECT iam_public_id FROM hook_private.identity_links
-         WHERE accounts_uuid IS NULL ORDER BY iam_public_id",
+         WHERE in_hook_data AND accounts_uuid IS NULL ORDER BY iam_public_id",
     )
     .fetch_all(&mut **transaction)
     .await?;

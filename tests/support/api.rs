@@ -30,6 +30,7 @@ use silicon_hook::{
         ting::TingClient,
     },
 };
+use sqlx::PgPool;
 use tower::ServiceExt as _;
 use url::Url;
 
@@ -56,7 +57,7 @@ pub struct TestApi {
     pub application: HookApplication,
     /// The schema owner's store, for assertions and fixtures.
     pub owner: PostgresStore,
-    _database: TestDatabase,
+    database: TestDatabase,
 }
 
 impl TestApi {
@@ -67,11 +68,15 @@ impl TestApi {
 
     /// Starts Hook; `ting` is the Ting origin (`HOOK_TING_URL`) or `None`.
     pub async fn start_with_ting(ting: Option<&str>) -> Result<Option<Self>> {
-        let Some(mut database) = TestDatabase::create().await? else {
+        let Some(database) = TestDatabase::create().await? else {
             return Ok(None);
         };
         let owner = database.connect(4).await?;
         migrate(&owner).await?;
+        Self::build(database, owner, ting).await.map(Some)
+    }
+
+    async fn build(mut database: TestDatabase, owner: PgPool, ting: Option<&str>) -> Result<Self> {
         let roles = database.runtime_roles().await?;
         let api_pool = TestDatabase::connect_as(&roles.api, 8).await?;
         let accounts = StubAccounts::start().await;
@@ -119,13 +124,19 @@ impl TestApi {
             },
             &settings,
         );
-        Ok(Some(Self {
+        Ok(Self {
             router,
             accounts,
             application,
             owner: PostgresStore::new(owner),
-            _database: database,
-        }))
+            database,
+        })
+    }
+
+    /// The URL of the throwaway database (the schema owner's login).
+    #[must_use]
+    pub fn database_url(&self) -> &str {
+        self.database.url()
     }
 
     /// Sends one request from [`PROVIDER_IP`].
@@ -209,6 +220,39 @@ impl TestApi {
         }
         let (status, _, body) = self.send(request.body(Body::from(body.to_vec()))?).await?;
         Ok((status, body))
+    }
+}
+
+/// A database migrated only up to an earlier version, to be filled with
+/// older data and then upgraded.
+pub struct Upgrade {
+    database: TestDatabase,
+    owner: PgPool,
+}
+
+impl Upgrade {
+    /// Creates a database and applies migrations up to `version`.
+    pub async fn at(version: i64) -> Result<Option<Self>> {
+        let Some(database) = TestDatabase::create().await? else {
+            return Ok(None);
+        };
+        let owner = database.connect(4).await?;
+        sqlx::migrate!("./migrations")
+            .run_to(version, &owner)
+            .await?;
+        Ok(Some(Self { database, owner }))
+    }
+
+    /// The schema owner's pool, for writing the older fixture.
+    #[must_use]
+    pub const fn pool(&self) -> &PgPool {
+        &self.owner
+    }
+
+    /// Applies the remaining migrations and starts Hook on the result.
+    pub async fn finish(self, ting: Option<&str>) -> Result<TestApi> {
+        migrate(&self.owner).await?;
+        TestApi::build(self.database, self.owner, ting).await
     }
 }
 
