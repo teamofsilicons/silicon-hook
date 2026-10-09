@@ -4,10 +4,14 @@
 //! runtime-checked `SQLx` APIs so builds never require a live database or an
 //! offline query cache.
 
+mod access;
+mod accounts;
+mod accounts_events;
 mod error;
 mod events;
 mod hooks;
 mod idempotency;
+pub mod identity_links;
 mod maintenance;
 mod models;
 mod readiness;
@@ -15,7 +19,9 @@ mod safety;
 mod schema_contract;
 mod ting;
 mod types;
-pub(crate) use ting::enqueue_ting_for_subscription;
+pub use accounts::{AccountRecord, AccountView, AllowRecord, GrantRecord};
+pub use accounts_events::{AccountsChange, AccountsEvent, EventOutcome};
+pub(crate) use ting::enqueue_ting;
 pub use ting::{TingOutboxClaim, TingOutboxStatus, TingSendFailure};
 
 use std::str::FromStr as _;
@@ -33,13 +39,18 @@ pub use error::{Result, StoreError};
 pub use readiness::RuntimeDatabaseRole;
 pub use types::{
     AcceptEvent, AuditAction, AuditContext, BatchHookActivation, CreateHook, CreateHookOutcome,
-    EndpointResolution, HistoryPage, HistoryPageRequest, HookMutation, IdempotencyScope,
-    MaintenanceResult, PersistedResponse, RecordBlockedRequest, RestoreHook, RestoreHookOutcome,
-    RotateEndpoint, RotateEndpointOutcome, RotateSecret, RotateSecretOutcome, UpdateHook,
+    EndpointResolution, EventDelivery, HistoryPage, HistoryPageRequest, HookMutation,
+    IdempotencyScope, MaintenanceResult, PersistedResponse, RecordBlockedRequest, RestoreHook,
+    RestoreHookOutcome, RotateEndpoint, RotateEndpointOutcome, RotateSecret, RotateSecretOutcome,
+    UpdateHook,
 };
 pub(crate) use types::{MaintenanceBatch, MaintenanceTask};
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+/// Value of the legacy organization column on rows written since Silicon
+/// Accounts (the column is no longer read; see migration 0019).
+pub(crate) const ACCOUNTS_ERA_ORG: &str = "accounts";
 
 /// Maximum interval in which an encrypted one-time secret may be replayed.
 pub const SECRET_REPLAY_WINDOW: time::Duration = time::Duration::minutes(10);

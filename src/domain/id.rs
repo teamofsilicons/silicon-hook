@@ -7,9 +7,7 @@ use uuid::Uuid;
 
 use super::DomainError;
 
-/// Maximum encoded size of an organization identifier.
-pub const MAX_ORGANIZATION_ID_BYTES: usize = 100;
-/// Maximum encoded size of other external opaque IAM identifiers.
+/// Maximum encoded size of stored external identifiers.
 pub const MAX_EXTERNAL_ID_BYTES: usize = 255;
 
 fn validate_external_id(value: &str, field: &'static str, max: usize) -> Result<(), DomainError> {
@@ -96,23 +94,35 @@ macro_rules! external_id {
 }
 
 external_id!(
-    /// Organization identifier issued by Silicon IAM.
-    OrganizationId,
-    "org_id",
-    MAX_ORGANIZATION_ID_BYTES
-);
-external_id!(
-    /// Global Silicon identifier issued by Silicon IAM.
+    /// Stored namespace key of a hook's Silicon: the owning Silicon's Accounts
+    /// uuid for hooks created since Silicon Accounts, the IAM-era public id
+    /// (`si:...`) for older hooks.
     SiliconId,
     "silicon_id",
     MAX_EXTERNAL_ID_BYTES
 );
 external_id!(
-    /// Opaque identifier for an authenticated actor.
+    /// Stored attribution key of an actor (an Accounts uuid, or an IAM-era public id).
     ActorId,
     "actor_id",
     MAX_EXTERNAL_ID_BYTES
 );
+
+impl SiliconId {
+    /// The storage key of a Silicon created since Silicon Accounts: its uuid.
+    #[must_use]
+    pub fn from_account_uuid(uuid: &super::AccountUuid) -> Self {
+        Self(uuid.as_str().to_owned())
+    }
+}
+
+impl ActorId {
+    /// The attribution key of an Accounts-era actor: its uuid.
+    #[must_use]
+    pub fn from_account_uuid(uuid: &super::AccountUuid) -> Self {
+        Self(uuid.as_str().to_owned())
+    }
+}
 
 macro_rules! uuid_id {
     ($(#[$meta:meta])* $name:ident) => {
@@ -208,16 +218,11 @@ mod tests {
 
     #[test]
     fn external_identifiers_reject_control_and_whitespace() {
-        assert!(OrganizationId::new("").is_err());
-        assert!(OrganizationId::new(" org").is_err());
-        assert!(OrganizationId::new("org\nother").is_err());
-    }
-
-    #[test]
-    fn organization_identifier_enforces_its_contract_boundary() {
-        assert!(OrganizationId::new("o".repeat(100)).is_ok());
-        assert!(OrganizationId::new("o".repeat(101)).is_err());
-        assert!(SiliconId::new("s".repeat(101)).is_ok());
+        assert!(SiliconId::new("").is_err());
+        assert!(SiliconId::new(" si:cos").is_err());
+        assert!(SiliconId::new("si:cos\nother").is_err());
+        assert!(SiliconId::new("s".repeat(255)).is_ok());
+        assert!(SiliconId::new("s".repeat(256)).is_err());
     }
 
     #[test]

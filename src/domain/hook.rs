@@ -7,7 +7,7 @@ use time::{Duration, OffsetDateTime};
 use zeroize::Zeroizing;
 
 use super::{
-    ActorRef, DomainError, EntropyError, HookId, OrganizationId, SiliconId, TransitionError,
+    AccountUuid, ActorRef, DomainError, EntropyError, HookId, SiliconId, TransitionError,
     signature::{MAX_SECRET_BYTES, SignatureConfig},
 };
 
@@ -534,10 +534,10 @@ impl SigningPolicy {
 pub struct NewHook {
     /// Preallocated `UUIDv7`.
     pub id: HookId,
-    /// Owning organization.
-    pub organization_id: OrganizationId,
-    /// Owning Silicon.
+    /// Stored namespace key (the owning Silicon's uuid for new hooks).
     pub silicon_id: SiliconId,
+    /// Owning Silicon's Silicon Accounts uuid.
+    pub silicon_uuid: AccountUuid,
     /// Display and provider name.
     pub name: HookName,
     /// Optional description.
@@ -559,10 +559,12 @@ pub struct NewHook {
 pub struct HookSnapshot {
     /// Public hook ID.
     pub id: HookId,
-    /// Owning organization.
-    pub organization_id: OrganizationId,
-    /// Owning Silicon.
+    /// Stored namespace key: the IAM-era public id of an old hook, the owning
+    /// Silicon's uuid for a hook created since Silicon Accounts.
     pub silicon_id: SiliconId,
+    /// Owning Silicon's Silicon Accounts uuid; `None` for an IAM-era hook not
+    /// yet linked to an account.
+    pub silicon_uuid: Option<AccountUuid>,
     /// Display and provider name.
     pub name: HookName,
     /// Optional description.
@@ -604,8 +606,8 @@ impl Hook {
         Self {
             snapshot: HookSnapshot {
                 id: new.id,
-                organization_id: new.organization_id,
                 silicon_id: new.silicon_id,
+                silicon_uuid: Some(new.silicon_uuid),
                 name: new.name,
                 description: new.description,
                 endpoint_key: new.endpoint_key,
@@ -669,16 +671,16 @@ impl Hook {
         self.snapshot.id
     }
 
-    /// Returns the owning organization.
-    #[must_use]
-    pub const fn organization_id(&self) -> &OrganizationId {
-        &self.snapshot.organization_id
-    }
-
-    /// Returns the owning Silicon.
+    /// Returns the stored namespace key.
     #[must_use]
     pub const fn silicon_id(&self) -> &SiliconId {
         &self.snapshot.silicon_id
+    }
+
+    /// Returns the owning Silicon's Silicon Accounts uuid, when linked.
+    #[must_use]
+    pub const fn silicon_uuid(&self) -> Option<&AccountUuid> {
+        self.snapshot.silicon_uuid.as_ref()
     }
 
     /// Returns the display and provider name.
@@ -1004,7 +1006,7 @@ mod tests {
     use time::macros::datetime;
 
     use super::*;
-    use crate::domain::{ActorId, ActorKind};
+    use crate::domain::{AccountUuid, ActorKind};
 
     fn encrypted(byte: u8) -> Result<EncryptedSecret, DomainError> {
         EncryptedSecret::new(
@@ -1025,14 +1027,14 @@ mod tests {
     fn hook() -> Result<Hook, Box<dyn std::error::Error>> {
         Ok(Hook::create(NewHook {
             id: HookId::new(),
-            organization_id: OrganizationId::new("org:test")?,
-            silicon_id: SiliconId::new("si:test")?,
+            silicon_id: SiliconId::new("8HV")?,
+            silicon_uuid: AccountUuid::new("8HV")?,
             name: HookName::new("GitHub")?,
             description: HookDescription::optional(Some("Source events".to_owned()))?,
             endpoint_key: EndpointKey::parse("A0B1C2D3")?,
             signing: policy(1)?,
             time_zone: HookTimeZone::default(),
-            created_by: ActorRef::new(ActorKind::Carbon, ActorId::new("c:test")?),
+            created_by: ActorRef::account(ActorKind::Carbon, AccountUuid::new("b97")?),
             created_at: datetime!(2026-01-01 0:00 UTC),
         }))
     }

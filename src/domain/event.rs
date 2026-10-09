@@ -11,7 +11,7 @@ use std::fmt;
 use time::{Duration, OffsetDateTime};
 
 use super::{
-    BlockedRequestId, DomainError, EventId, Hook, HookId, HookName, HookTimeZone, OrganizationId,
+    AccountUuid, BlockedRequestId, DomainError, EventId, Hook, HookId, HookName, HookTimeZone,
     SiliconId, request::CapturedRequest, signature::RejectionReason,
 };
 
@@ -78,10 +78,10 @@ pub fn delivery_summary(provider: &HookName, at: OffsetDateTime, zone: &HookTime
 pub struct EventRecordSnapshot {
     /// Stable `UUIDv7` event ID.
     pub id: EventId,
-    /// Owning organization.
-    pub organization_id: OrganizationId,
-    /// Destination Silicon.
+    /// The receiving hook's stored namespace key.
     pub silicon_id: SiliconId,
+    /// Destination Silicon's Silicon Accounts uuid, when linked.
+    pub silicon_uuid: Option<AccountUuid>,
     /// Receiving hook.
     pub hook_id: HookId,
     /// Hook name at receipt, shown as the provider.
@@ -115,8 +115,8 @@ impl EventRecord {
         Self {
             snapshot: EventRecordSnapshot {
                 id,
-                organization_id: hook.organization_id().clone(),
                 silicon_id: hook.silicon_id().clone(),
+                silicon_uuid: hook.silicon_uuid().cloned(),
                 hook_id: hook.id(),
                 provider: hook.name().clone(),
                 summary: delivery_summary(hook.name(), received_at, hook.time_zone()),
@@ -145,16 +145,16 @@ impl EventRecord {
         self.snapshot.id
     }
 
-    /// Returns the owning organization.
-    #[must_use]
-    pub const fn organization_id(&self) -> &OrganizationId {
-        &self.snapshot.organization_id
-    }
-
-    /// Returns the destination Silicon.
+    /// Returns the receiving hook's stored namespace key.
     #[must_use]
     pub const fn silicon_id(&self) -> &SiliconId {
         &self.snapshot.silicon_id
+    }
+
+    /// Returns the destination Silicon's Silicon Accounts uuid, when linked.
+    #[must_use]
+    pub const fn silicon_uuid(&self) -> Option<&AccountUuid> {
+        self.snapshot.silicon_uuid.as_ref()
     }
 
     /// Returns the receiving hook.
@@ -281,10 +281,10 @@ fn bounded_detail(detail: &str) -> String {
 pub struct BlockedRequestSnapshot {
     /// Stable `UUIDv7` identifier.
     pub id: BlockedRequestId,
-    /// Owning organization.
-    pub organization_id: OrganizationId,
-    /// Destination Silicon.
+    /// The receiving hook's stored namespace key.
     pub silicon_id: SiliconId,
+    /// Destination Silicon's Silicon Accounts uuid, when linked.
+    pub silicon_uuid: Option<AccountUuid>,
     /// Receiving hook.
     pub hook_id: HookId,
     /// Hook name at receipt.
@@ -316,8 +316,8 @@ impl BlockedRequest {
         Self {
             snapshot: BlockedRequestSnapshot {
                 id,
-                organization_id: hook.organization_id().clone(),
                 silicon_id: hook.silicon_id().clone(),
+                silicon_uuid: hook.silicon_uuid().cloned(),
                 hook_id: hook.id(),
                 provider: hook.name().clone(),
                 request,

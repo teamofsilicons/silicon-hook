@@ -14,7 +14,7 @@ use crate::{error::AppError, request_context};
 
 const REQUEST_ID_HEADER: http::HeaderName = http::HeaderName::from_static("x-request-id");
 const MAX_REQUEST_ID_BYTES: usize = 64;
-const MANAGEMENT_VARY: &str = "authorization, x-org-id";
+const MANAGEMENT_VARY: &str = "authorization";
 
 pub(super) async fn request_scope(mut request: Request, next: Next) -> Response {
     let contains_management_data = is_management_path(request.uri().path());
@@ -62,8 +62,10 @@ pub(super) async fn request_scope(mut request: Request, next: Next) -> Response 
 
 fn is_management_path(path: &str) -> bool {
     super::version::split_path(path).is_some_and(|(_, relative)| {
-        relative.starts_with("silicons/")
+        relative == "silicons"
+            || relative.starts_with("silicons/")
             || relative.starts_with("auth/")
+            || relative == "delivery"
             || relative.starts_with("delivery/")
     })
 }
@@ -197,14 +199,14 @@ mod tests {
     -> Result<(), Box<dyn std::error::Error>> {
         let app = Router::new()
             .route(
-                "/api/v2/silicons/{silicon_id}/hooks",
+                "/api/v3/silicons/{silicon_id}/hooks",
                 get(|| async { StatusCode::UNAUTHORIZED }),
             )
             .layer(middleware::from_fn(request_scope));
         let response = app
             .oneshot(
                 Request::builder()
-                    .uri("/api/v2/silicons/acme/hooks")
+                    .uri("/api/v3/silicons/acme/hooks")
                     .body(Body::empty())?,
             )
             .await?;

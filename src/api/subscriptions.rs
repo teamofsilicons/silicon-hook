@@ -1,81 +1,100 @@
-//! Current Carbon actors can request compact references for visible Silicons.
+//! Carbons observing a Silicon's events through Ting.
 
 use axum::{Extension, Json, body::Bytes, extract::Path};
 use http::{HeaderMap, StatusCode};
 use serde::Serialize;
 
 use super::{
-    delivery::ting_error,
-    extractors,
-    handlers::{authorize_management, secret_response_headers},
+    auth::{self, Check},
+    delivery::{delivery, delivery_error},
+    handlers::{map_application_error, require_empty_body, secret_response_headers},
     state::ApiState,
 };
 use crate::{
-    delivery::subscriptions::{self, ReceivingSubscription, SubscriptionError},
-    domain::SiliconId,
+    delivery::subscriptions::{self, ObserverSubscription, SubscriptionError},
+    domain::{Action, authorize},
     error::AppError,
+    infrastructure::ting::TingRecipient,
 };
 
 #[derive(Serialize)]
 pub(super) struct SubscriptionResponse {
     receiving: bool,
-    subscription: Option<ReceivingSubscription>,
+    subscription: Option<ObserverSubscription>,
 }
 
+fn subscription_error(error: &SubscriptionError) -> AppError {
+    match error {
+        SubscriptionError::LimitReached => AppError::refused(
+            StatusCode::CONFLICT,
+            "observer_limit_reached",
+            "This Silicon already has the maximum of 100 observers.",
+        ),
+        SubscriptionError::Store(_) => AppError::ProviderUnavailable,
+    }
+}
+
+fn require_observer(context: &crate::domain::AuthorizationContext) -> Result<(), AppError> {
+    match authorize(context, Action::Observe) {
+        crate::domain::AuthorizationDecision::Allowed => Ok(()),
+        crate::domain::AuthorizationDecision::Forbidden(reason) => Err(AppError::refused(
+            StatusCode::FORBIDDEN,
+            "forbidden",
+            format!("{reason}."),
+        )),
+    }
+}
+
+/// `GET /api/v3/silicons/{s}/delivery/subscription`.
 pub(super) async fn get(
     Extension(state): Extension<ApiState>,
-    Path(silicon): Path<SiliconId>,
+    Path(silicon): Path<String>,
     headers: HeaderMap,
 ) -> Result<(HeaderMap, Json<SubscriptionResponse>), AppError> {
-    let authorization =
-        authorize_management(&state, &headers, std::slice::from_ref(&silicon)).await?;
-    subscriptions::authorize_subscription(&authorization, &silicon)
-        .map_err(|error| subscription_error(&error))?;
-    let subscription = subscriptions::get(state.application.store(), &authorization, &silicon)
-        .await
-        .map_err(|error| subscription_error(&error))?;
+    let (_, context) = auth::authorize(&state, &headers, &silicon, Check::Local).await?;
+    require_observer(&context)?;
+    let subscription = subscriptions::get(
+        state.application.store(),
+        context.silicon().uuid(),
+        context.actor().uuid(),
+    )
+    .await
+    .map_err(|error| subscription_error(&error))?;
     Ok((
         secret_response_headers(),
         Json(SubscriptionResponse {
-            receiving: subscription.is_some(),
+            receiving: subscription.is_some() && state.application.delivery().is_some(),
             subscription,
         }),
     ))
 }
 
+/// `POST /api/v3/silicons/{s}/delivery/subscription`: receive copies of the
+/// Silicon's future events. Enrols the caller with Ting first.
 pub(super) async fn subscribe(
     Extension(state): Extension<ApiState>,
-    Path(silicon): Path<SiliconId>,
+    Path(silicon): Path<String>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Result<(HeaderMap, Json<SubscriptionResponse>), AppError> {
-    require_empty(&body)?;
-    let authorization =
-        authorize_management(&state, &headers, std::slice::from_ref(&silicon)).await?;
-    subscriptions::authorize_subscription(&authorization, &silicon)
-        .map_err(|error| subscription_error(&error))?;
-    let token = extractors::bearer_token(&headers)?;
-    let app_id = state
-        .iam
-        .application_id()
-        .ok_or(AppError::ProviderUnavailable)?;
-    let prepared = serde_json::to_vec(&serde_json::json!({
-        "org_id": authorization.organization_id(),
-        "app_id": app_id,
-        "for": authorization.actor().id(),
-    }))
-    .map_err(AppError::internal)?;
-    state
-        .ting
-        .register_recipient(&state.iam, &token, &prepared)
+    require_empty_body(&body)?;
+    let ting = delivery(&state)?;
+    let (caller, context) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    require_observer(&context)?;
+    let recipient = TingRecipient {
+        uuid: caller.actor.uuid().as_str().to_owned(),
+        id: caller.actor.id().map(|id| id.as_str().to_owned()),
+    };
+    ting.enrol(&caller.token, &recipient)
         .await
-        .map_err(|error| ting_error(&error))?;
-    let subscription = state
-        .application
-        .observer_authorities(state.iam.clone())
-        .subscribe(&authorization, &silicon, &token)
-        .await
-        .map_err(|error| subscription_error(&error))?;
+        .map_err(|error| delivery_error(&error))?;
+    let subscription = subscriptions::subscribe(
+        state.application.store(),
+        context.silicon().uuid(),
+        caller.actor.uuid(),
+    )
+    .await
+    .map_err(|error| subscription_error(&error))?;
     Ok((
         secret_response_headers(),
         Json(SubscriptionResponse {
@@ -85,36 +104,27 @@ pub(super) async fn subscribe(
     ))
 }
 
+/// `DELETE /api/v3/silicons/{s}/delivery/subscription`: stop receiving copies.
+/// Works even after the caller lost access to the Silicon.
 pub(super) async fn unsubscribe(
     Extension(state): Extension<ApiState>,
-    Path(silicon): Path<SiliconId>,
+    Path(silicon): Path<String>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<(HeaderMap, StatusCode), AppError> {
-    require_empty(&body)?;
-    // A caller who lost access must still be able to stop its own notifications.
-    // No target read is needed: deletion remains scoped to the authenticated actor.
-    let authorization = authorize_management(&state, &headers, &[]).await?;
-    subscriptions::unsubscribe(state.application.store(), &authorization, &silicon)
+) -> Result<StatusCode, AppError> {
+    require_empty_body(&body)?;
+    let caller = auth::authenticate(&state, &headers, Check::Local).await?;
+    let silicon = state
+        .application
+        .resolve_silicon(&silicon)
         .await
-        .map_err(|error| subscription_error(&error))?;
-    Ok((secret_response_headers(), StatusCode::NO_CONTENT))
-}
-
-fn require_empty(body: &Bytes) -> Result<(), AppError> {
-    if !body.is_empty() {
-        return Err(AppError::bad_request("unexpected_body"));
-    }
-    Ok(())
-}
-
-fn subscription_error(error: &SubscriptionError) -> AppError {
-    match error {
-        SubscriptionError::CarbonRequired => AppError::Forbidden,
-        SubscriptionError::NotVisible => AppError::NotFound,
-        SubscriptionError::LimitReached => AppError::conflict("receiving_subscription_limit"),
-        SubscriptionError::Store(_) | SubscriptionError::AuthorityUnavailable => {
-            AppError::ProviderUnavailable
-        }
-    }
+        .map_err(map_application_error)?;
+    subscriptions::unsubscribe(
+        state.application.store(),
+        &silicon.uuid,
+        caller.actor.uuid(),
+    )
+    .await
+    .map_err(|error| subscription_error(&error))?;
+    Ok(StatusCode::NO_CONTENT)
 }

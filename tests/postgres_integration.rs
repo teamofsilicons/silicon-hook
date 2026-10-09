@@ -15,19 +15,19 @@ use hmac::{Hmac, Mac as _};
 use sha2::Sha256;
 use silicon_hook::{
     application::{
-        ApplicationError, BindIamHookSecretCommand, Clock, ConnectIamHookCommand,
-        CreateHookCommand, DeleteHookCommand, HookApplication, HookMutationCommand, HookPatch,
-        HookWithSecret, ListHistoryCommand, ManagementContext, ReceiveOutcome,
-        ReceiveRequestCommand, SigningPatch, UpdateHookCommand,
+        ApplicationError, Clock, ConnectAccountsHookCommand, CreateHookCommand, DeleteHookCommand,
+        HookApplication, HookMutationCommand, HookPatch, HookWithSecret, ListHistoryCommand,
+        ManagementContext, ReceiveOutcome, ReceiveRequestCommand, SigningPatch, UpdateHookCommand,
     },
+    config::AccountsSettings,
     domain::{
-        ActorKind, ActorRef, AuthorizationContext, EncryptionKeyId, EndpointKey, EventRecord,
-        HookName, HookStatus, HookTimeZone, OrganizationId, OrganizationRole, SigningSecret,
-        SiliconId,
+        Access, AccountUuid, Actor, ActorKind, AuthorizationContext, EncryptionKeyId, EndpointKey,
+        EventRecord, HookName, HookStatus, HookTimeZone, PublicId, SigningSecret, SiliconRef,
         safety::UNVERIFIED_REQUESTS_PER_BLOCK,
         signature::{Expression, SecretEncoding, SignatureEncoding},
     },
     infrastructure::{
+        accounts::AccountsGateway,
         crypto::{CursorCodec, SecretCipher, SecretKey, SecretKeyring},
         postgres::{
             EndpointResolution, HISTORY_PAGE_BYTE_BUDGET, PostgresStore, RuntimeDatabaseRole,
@@ -98,29 +98,36 @@ impl Clock for FixedClock {
     }
 }
 
+/// The Silicon every test acts as: it owns the hooks it creates.
 #[derive(Clone)]
 struct FixtureIdentity {
-    organization_id: OrganizationId,
-    silicon_id: SiliconId,
-    actor: ActorRef,
+    silicon_uuid: AccountUuid,
+    public_id: PublicId,
+    /// The URL segment tests post to (the uuid always routes to the hook).
+    segment: String,
 }
 
 impl FixtureIdentity {
     fn new() -> Result<Self> {
-        let silicon_id = SiliconId::new("silicon:integration")?;
+        let silicon_uuid = AccountUuid::new("Int9")?;
         Ok(Self {
-            organization_id: OrganizationId::new("org:integration")?,
-            actor: ActorRef::try_new(ActorKind::Silicon, silicon_id.as_str())?,
-            silicon_id,
+            segment: silicon_uuid.as_str().to_owned(),
+            public_id: PublicId::new("si:integration")?,
+            silicon_uuid,
         })
     }
 
     fn authorization(&self) -> AuthorizationContext {
         AuthorizationContext::new(
-            self.organization_id.clone(),
-            self.actor.clone(),
-            OrganizationRole::Member,
-            std::iter::empty::<SiliconId>(),
+            Actor::new(
+                self.silicon_uuid.clone(),
+                ActorKind::Silicon,
+                Some(self.public_id.clone()),
+                Vec::new(),
+                None,
+            ),
+            SiliconRef::new(self.silicon_uuid.clone(), Some(self.public_id.clone())),
+            Access::Own,
         )
     }
 
@@ -139,12 +146,23 @@ fn application(store: PostgresStore, now: OffsetDateTime) -> Result<HookApplicat
         encryption_key_id.clone(),
         [(encryption_key_id, SecretKey::from_bytes([17; 32]))],
     )?;
+    // These tests act with fixed authorization contexts; nothing calls Accounts.
+    let accounts = AccountsGateway::new(&AccountsSettings {
+        public_url: Url::parse("http://127.0.0.1:9")?,
+        api_url: Url::parse("http://127.0.0.1:9")?,
+        app_id: "hook".to_owned(),
+        app_secret: secrecy::SecretString::from("unused-test-app-secret"),
+        webhook_secrets: Vec::new(),
+        request_timeout: StdDuration::from_secs(1),
+    })
+    .map_err(|error| anyhow::anyhow!("{error}"))?;
     Ok(HookApplication::new(
         store,
         Arc::new(SecretCipher::new(keyring)),
         Arc::new(CursorCodec::new(SecretKey::from_bytes([29; 32]))),
         Arc::new(FixedClock(now)),
         Url::parse(PUBLIC_BASE_URL)?,
+        accounts,
     ))
 }
 
@@ -166,7 +184,6 @@ async fn create_hook(
     Ok(application
         .create_hook(CreateHookCommand {
             context: identity.context(idempotency_key),
-            silicon_id: identity.silicon_id.clone(),
             name: HookName::new(name)?,
             description: None,
             time_zone: HookTimeZone::new("Asia/Kolkata")?,
@@ -211,14 +228,10 @@ async fn receive(
 ) -> Result<ReceiveOutcome, ApplicationError> {
     application
         .receive_request(ReceiveRequestCommand {
-            silicon_id: identity.silicon_id.clone(),
+            silicon_segment: identity.segment.clone(),
             endpoint_key: endpoint_key.clone(),
             method: "POST".to_owned(),
-            path: format!(
-                "/silicon/{}/{}",
-                identity.silicon_id.as_str(),
-                endpoint_key.as_str()
-            ),
+            path: format!("/silicon/{}/{}", identity.segment, endpoint_key.as_str()),
             query: None,
             headers,
             body: Bytes::from_static(body),
@@ -295,7 +308,7 @@ async fn migrations_apply_and_readiness_proves_the_schema_contract() -> Result<(
     let applied = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM _sqlx_migrations")
         .fetch_one(pool)
         .await?;
-    assert_eq!(applied, 18);
+    assert_eq!(applied, 19);
 
     let mut absent_environment = pool.begin().await?;
     sqlx::query("SELECT set_config('hook.environment_id', $1, true)")
@@ -403,7 +416,7 @@ async fn assert_hook_activity_and_history(
     hook_id: silicon_hook::domain::HookId,
 ) -> Result<()> {
     let hooks = application
-        .list_hooks(&identity.authorization(), &identity.silicon_id, false)
+        .list_hooks(&identity.authorization(), false)
         .await?;
     assert_eq!(hooks.len(), 1);
     assert!(hooks[0].last_received_at().is_some());
@@ -412,7 +425,6 @@ async fn assert_hook_activity_and_history(
     let history = application
         .list_events(ListHistoryCommand {
             authorization: identity.authorization(),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: Some(hook_id),
             limit: 10,
             cursor: None,
@@ -467,7 +479,6 @@ async fn assert_blocked_log_and_history(
     let blocked_log = application
         .list_blocked_requests(ListHistoryCommand {
             authorization: identity.authorization(),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: None,
             limit: 100,
             cursor: None,
@@ -480,7 +491,6 @@ async fn assert_blocked_log_and_history(
     let events = application
         .list_events(ListHistoryCommand {
             authorization: identity.authorization(),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: None,
             limit: 100,
             cursor: None,
@@ -492,7 +502,7 @@ async fn assert_blocked_log_and_history(
         "only the verified request is history"
     );
     let hook = application
-        .get_hook(&identity.authorization(), &identity.silicon_id, hook_id)
+        .get_hook(&identity.authorization(), hook_id)
         .await?;
     assert!(hook.last_blocked_at().is_some());
     Ok(())
@@ -652,7 +662,6 @@ async fn endpoint_rotation_retires_the_previous_key_forever() -> Result<()> {
     let rotated = application
         .rotate_hook_endpoint(HookMutationCommand {
             context: identity.context("rotate-endpoint-0001"),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: created.hook.id(),
         })
         .await?;
@@ -661,7 +670,6 @@ async fn endpoint_rotation_retires_the_previous_key_forever() -> Result<()> {
     let replay = application
         .rotate_hook_endpoint(HookMutationCommand {
             context: identity.context("rotate-endpoint-0001"),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: created.hook.id(),
         })
         .await?;
@@ -703,14 +711,14 @@ async fn endpoint_rotation_retires_the_previous_key_forever() -> Result<()> {
     assert!(matches!(
         database
             .store
-            .resolve_endpoint(&identity.silicon_id, &original_key)
+            .resolve_endpoint(&identity.segment, &original_key)
             .await?,
         EndpointResolution::Retired
     ));
     assert!(matches!(
         database
             .store
-            .resolve_endpoint(&identity.silicon_id, rotated.endpoint_key())
+            .resolve_endpoint(&identity.segment, rotated.endpoint_key())
             .await?,
         EndpointResolution::Unknown
     ));
@@ -737,7 +745,6 @@ async fn secret_rotation_invalidates_the_previous_secret_immediately() -> Result
     let rotated = application
         .rotate_hook_secret(HookMutationCommand {
             context: identity.context("rotate-secret-0001"),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: created.hook.id(),
         })
         .await?;
@@ -746,7 +753,6 @@ async fn secret_rotation_invalidates_the_previous_secret_immediately() -> Result
     let replayed = application
         .rotate_hook_secret(HookMutationCommand {
             context: identity.context("rotate-secret-0001"),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: created.hook.id(),
         })
         .await?;
@@ -794,34 +800,32 @@ async fn retention_purges_logs_after_fourteen_days_and_forgets_stale_blocks() ->
     let pool = database.store.pool();
     for (sequence, age_days) in [(1_i64, 15_i64), (2, 13), (3, 15)] {
         sqlx::query(
-            "INSERT INTO hook.events (id, hook_id, org_id, silicon_id, provider, summary, \
-             delivery_sequence, method, url, path, query_string, headers, body, remote_ip, \
-             received_at, expires_at) \
-             VALUES (gen_random_uuid(), $1, $2, $3, 'Shopify', 'summary', $5, 'POST', $4, \
-             '/silicon/x/A', '', '[]'::jsonb, ''::bytea, '203.0.113.10'::inet, \
-             now() - ($6 * INTERVAL '1 day'), \
-             now() - ($6 * INTERVAL '1 day') + INTERVAL '14 days')",
+            "INSERT INTO hook.events (id, hook_id, org_id, silicon_id, silicon_uuid, provider, \
+             summary, delivery_sequence, method, url, path, query_string, headers, body, \
+             remote_ip, received_at, expires_at) \
+             SELECT gen_random_uuid(), hook.id, hook.org_id, hook.silicon_id, hook.silicon_uuid, \
+             'Shopify', 'summary', $3, 'POST', $2, '/silicon/x/A', '', '[]'::jsonb, ''::bytea, \
+             '203.0.113.10'::inet, now() - ($4 * INTERVAL '1 day'), \
+             now() - ($4 * INTERVAL '1 day') + INTERVAL '14 days' \
+             FROM hook.hooks AS hook WHERE hook.id = $1",
         )
         .bind(created.hook.id().as_uuid())
-        .bind(identity.organization_id.as_str())
-        .bind(identity.silicon_id.as_str())
         .bind(format!("{PUBLIC_BASE_URL}silicon/x/A"))
         .bind(sequence)
         .bind(age_days)
         .execute(pool)
         .await?;
         sqlx::query(
-            "INSERT INTO hook.blocked_requests (id, hook_id, org_id, silicon_id, provider, \
-             reason_code, reason_detail, method, url, path, query_string, headers, body, \
-             remote_ip, received_at, expires_at) \
-             VALUES (gen_random_uuid(), $1, $2, $3, 'Shopify', 'signature_mismatch', \
-             'signature mismatch', 'POST', $4, '/silicon/x/A', '', '[]'::jsonb, ''::bytea, \
-             '203.0.113.10'::inet, now() - ($5 * INTERVAL '1 day'), \
-             now() - ($5 * INTERVAL '1 day') + INTERVAL '14 days')",
+            "INSERT INTO hook.blocked_requests (id, hook_id, org_id, silicon_id, silicon_uuid, \
+             provider, reason_code, reason_detail, method, url, path, query_string, headers, \
+             body, remote_ip, received_at, expires_at) \
+             SELECT gen_random_uuid(), hook.id, hook.org_id, hook.silicon_id, hook.silicon_uuid, \
+             'Shopify', 'signature_mismatch', 'signature mismatch', 'POST', $2, '/silicon/x/A', \
+             '', '[]'::jsonb, ''::bytea, '203.0.113.10'::inet, now() - ($3 * INTERVAL '1 day'), \
+             now() - ($3 * INTERVAL '1 day') + INTERVAL '14 days' \
+             FROM hook.hooks AS hook WHERE hook.id = $1",
         )
         .bind(created.hook.id().as_uuid())
-        .bind(identity.organization_id.as_str())
-        .bind(identity.silicon_id.as_str())
         .bind(format!("{PUBLIC_BASE_URL}silicon/x/A"))
         .bind(age_days)
         .execute(pool)
@@ -855,7 +859,6 @@ async fn retention_purges_logs_after_fourteen_days_and_forgets_stale_blocks() ->
     let history = application
         .list_events(ListHistoryCommand {
             authorization: identity.authorization(),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: None,
             limit: 10,
             cursor: None,
@@ -917,7 +920,6 @@ async fn history_page_budget_preserves_keyset_continuation() -> Result<()> {
         let page = application
             .list_events(ListHistoryCommand {
                 authorization: identity.authorization(),
-                silicon_id: identity.silicon_id.clone(),
                 hook_id: Some(created.hook.id()),
                 limit: 10_000,
                 cursor: cursor.clone(),
@@ -951,7 +953,6 @@ async fn history_page_budget_preserves_keyset_continuation() -> Result<()> {
     let wrong_collection = application
         .list_blocked_requests(ListHistoryCommand {
             authorization: identity.authorization(),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: Some(created.hook.id()),
             limit: 10,
             cursor: Some(cursor),
@@ -1056,7 +1057,7 @@ async fn ingress_uses_database_time_even_when_the_process_clock_is_wrong() -> Re
 }
 
 #[tokio::test]
-async fn connecting_the_iam_hook_is_idempotent_and_verifies_iam_signing() -> Result<()> {
+async fn connecting_the_accounts_hook_is_idempotent_and_verifies_accounts_signing() -> Result<()> {
     let Some(database) = TestDatabase::start().await? else {
         return Ok(());
     };
@@ -1069,82 +1070,114 @@ async fn connecting_the_iam_hook_is_idempotent_and_verifies_iam_signing() -> Res
     };
 
     let prepared = application
-        .prepare_iam_hook(ConnectIamHookCommand {
-            context: context("iam-connect-0001"),
-            silicon_id: identity.silicon_id.clone(),
+        .prepare_accounts_hook(ConnectAccountsHookCommand {
+            context: context("accounts-connect-0001"),
         })
         .await?;
-    assert_eq!(prepared.name().as_str(), "Silicon IAM");
+    assert_eq!(prepared.name().as_str(), "Silicon Accounts");
     let again = application
-        .prepare_iam_hook(ConnectIamHookCommand {
-            context: context("iam-connect-0002"),
-            silicon_id: identity.silicon_id.clone(),
+        .prepare_accounts_hook(ConnectAccountsHookCommand {
+            context: context("accounts-connect-0002"),
         })
         .await?;
     assert_eq!(
         again.id(),
         prepared.id(),
-        "a Silicon has exactly one IAM hook"
+        "a Silicon has exactly one Silicon Accounts hook"
     );
 
-    let iam_secret = format!("swhs_{}", "F".repeat(43));
-    let bound = application
-        .bind_iam_hook_secret(BindIamHookSecretCommand {
-            context: context("iam-bind-0001"),
-            silicon_id: identity.silicon_id.clone(),
-            hook_id: prepared.id(),
-            signing_secret: SigningSecret::from_text(iam_secret.clone())?,
-        })
-        .await?;
+    // Silicon Accounts creates the whsec_ secret when the webhook is set; the
+    // Silicon stores it on the hook (bring your own secret).
+    let accounts_secret = format!("whsec_{}", "F".repeat(43));
+    let bound = store_secret(&application, &identity, prepared.id(), &accounts_secret).await?;
     assert_eq!(bound.id(), prepared.id());
+    assert_eq!(bound.endpoint_key(), prepared.endpoint_key());
 
-    let body = br#"{"spec_version":"1.0","event_type":"organization.silicon.updated.v1"}"#;
+    let body = br#"{"event_id":"evt_01","type":"account.updated","data":{}}"#;
     let timestamp = "1700000000";
-    let mut mac = <Hmac<Sha256> as hmac::Mac>::new_from_slice(iam_secret.as_bytes())
-        .context("HMAC accepts any key length")?;
-    mac.update(format!("{timestamp}.").as_bytes());
-    mac.update(body);
-    let signature = format!("v1={}", hex::encode(mac.finalize().into_bytes()));
+    let signed = |secret: &str| -> Result<String> {
+        let mut mac = <Hmac<Sha256> as hmac::Mac>::new_from_slice(secret.as_bytes())
+            .context("HMAC accepts any key length")?;
+        mac.update(format!("{timestamp}.").as_bytes());
+        mac.update(body);
+        Ok(format!("v1={}", hex::encode(mac.finalize().into_bytes())))
+    };
+    let headers = |signature: String| {
+        vec![
+            ("content-type".to_owned(), "application/json".to_owned()),
+            ("X-Accounts-Timestamp".to_owned(), timestamp.to_owned()),
+            ("X-Accounts-Signature".to_owned(), signature),
+        ]
+    };
     let outcome = receive(
         &application,
         &identity,
         bound.endpoint_key(),
-        vec![
-            ("content-type".to_owned(), "application/json".to_owned()),
-            ("X-Silicon-IAM-Timestamp".to_owned(), timestamp.to_owned()),
-            ("X-Silicon-IAM-Key-Version".to_owned(), "1".to_owned()),
-            ("X-Silicon-IAM-Signature".to_owned(), signature),
-        ],
+        headers(signed(&accounts_secret)?),
         body,
         PROVIDER_IP,
     )
     .await?;
     assert!(
         matches!(outcome, ReceiveOutcome::Accepted(_)),
-        "the IAM hook verifies IAM's own signing convention with the IAM-issued secret"
+        "the hook verifies Silicon Accounts' signing convention with the stored secret"
+    );
+    let forged = receive(
+        &application,
+        &identity,
+        bound.endpoint_key(),
+        headers(signed("whsec_not-the-secret")?),
+        body,
+        PROVIDER_IP,
+    )
+    .await?;
+    assert!(
+        matches!(forged, ReceiveOutcome::Blocked(_)),
+        "a delivery signed with another secret is withheld"
     );
 
     application
         .delete_hook(DeleteHookCommand {
             authorization: identity.authorization(),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: prepared.id(),
             request_id: None,
         })
         .await?;
     let restored = application
-        .prepare_iam_hook(ConnectIamHookCommand {
-            context: context("iam-connect-0003"),
-            silicon_id: identity.silicon_id.clone(),
+        .prepare_accounts_hook(ConnectAccountsHookCommand {
+            context: context("accounts-connect-0003"),
         })
         .await?;
     assert_eq!(
         restored.id(),
         prepared.id(),
-        "connecting again restores the deleted IAM hook"
+        "connecting again restores the deleted Silicon Accounts hook"
     );
     assert_eq!(restored.status(), HookStatus::Active);
     Ok(())
+}
+
+/// Stores a secret the Silicon brought on one of its hooks.
+async fn store_secret(
+    application: &HookApplication,
+    identity: &FixtureIdentity,
+    hook_id: silicon_hook::domain::HookId,
+    secret: &str,
+) -> Result<silicon_hook::domain::Hook> {
+    Ok(application
+        .update_hook(UpdateHookCommand {
+            authorization: identity.authorization(),
+            hook_id,
+            patch: HookPatch {
+                signing: Some(SigningPatch {
+                    secret: Some(SigningSecret::from_text(secret.to_owned())?),
+                    ..SigningPatch::default()
+                }),
+                ..HookPatch::default()
+            },
+            request_id: None,
+        })
+        .await?)
 }
 
 #[tokio::test]
@@ -1203,11 +1236,7 @@ async fn concurrent_disable_wins_before_event_acceptance_commits() -> Result<()>
     assert_eq!(counts, (0, 0));
     let hook = database
         .store
-        .get_hook(
-            &identity.organization_id,
-            &identity.silicon_id,
-            created.hook.id(),
-        )
+        .get_hook(&identity.silicon_uuid, created.hook.id())
         .await?
         .context("hook disappeared")?;
     assert_eq!(hook.status(), HookStatus::Disabled);
@@ -1269,21 +1298,18 @@ async fn exercise_api_role(
     application
         .rotate_hook_secret(HookMutationCommand {
             context: identity.context("roles-rotate-secret"),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: signed.hook.id(),
         })
         .await?;
     application
         .rotate_hook_endpoint(HookMutationCommand {
             context: identity.context("roles-rotate-endpoint"),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: signed.hook.id(),
         })
         .await?;
     application
         .delete_hook(DeleteHookCommand {
             authorization: identity.authorization(),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: open.hook.id(),
             request_id: None,
         })
@@ -1291,24 +1317,21 @@ async fn exercise_api_role(
     application
         .restore_hook(HookMutationCommand {
             context: identity.context("roles-restore"),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: open.hook.id(),
         })
         .await?;
-    let iam = application
-        .prepare_iam_hook(ConnectIamHookCommand {
-            context: identity.context("roles-iam-connect"),
-            silicon_id: identity.silicon_id.clone(),
+    let accounts = application
+        .prepare_accounts_hook(ConnectAccountsHookCommand {
+            context: identity.context("roles-accounts-connect"),
         })
         .await?;
-    application
-        .bind_iam_hook_secret(BindIamHookSecretCommand {
-            context: identity.context("roles-iam-bind"),
-            silicon_id: identity.silicon_id.clone(),
-            hook_id: iam.id(),
-            signing_secret: SigningSecret::from_text(format!("swhs_{}", "G".repeat(43)))?,
-        })
-        .await?;
+    store_secret(
+        application,
+        identity,
+        accounts.id(),
+        &format!("whsec_{}", "G".repeat(43)),
+    )
+    .await?;
 
     Ok((signed, open))
 }
@@ -1344,7 +1367,6 @@ async fn exercise_ingress_and_delivery(
 
     let history = ListHistoryCommand {
         authorization: identity.authorization(),
-        silicon_id: identity.silicon_id.clone(),
         hook_id: None,
         limit: 10,
         cursor: None,
@@ -1373,30 +1395,28 @@ async fn age_records(
     open: &HookWithSecret,
 ) -> Result<()> {
     sqlx::query(
-        "INSERT INTO hook.events (id, hook_id, org_id, silicon_id, provider, summary, \
-         delivery_sequence, method, url, path, query_string, headers, body, remote_ip, \
-         received_at, expires_at) \
-         VALUES (gen_random_uuid(), $1, $2, $3, 'GitHub', 'summary', 99, 'POST', $4, \
-         '/silicon/x/A', '', '[]'::jsonb, ''::bytea, '203.0.113.10'::inet, \
-         now() - INTERVAL '15 days', now() - INTERVAL '1 day')",
+        "INSERT INTO hook.events (id, hook_id, org_id, silicon_id, silicon_uuid, provider, \
+         summary, delivery_sequence, method, url, path, query_string, headers, body, \
+         remote_ip, received_at, expires_at) \
+         SELECT gen_random_uuid(), hook.id, hook.org_id, hook.silicon_id, hook.silicon_uuid, \
+         'GitHub', 'summary', 99, 'POST', $2, '/silicon/x/A', '', '[]'::jsonb, ''::bytea, \
+         '203.0.113.10'::inet, now() - INTERVAL '15 days', now() - INTERVAL '1 day' \
+         FROM hook.hooks AS hook WHERE hook.id = $1",
     )
     .bind(signed.hook.id().as_uuid())
-    .bind(identity.organization_id.as_str())
-    .bind(identity.silicon_id.as_str())
     .bind(format!("{PUBLIC_BASE_URL}silicon/x/A"))
     .execute(pool)
     .await?;
     sqlx::query(
-        "INSERT INTO hook.blocked_requests (id, hook_id, org_id, silicon_id, provider, \
-         reason_code, reason_detail, method, url, path, query_string, headers, body, \
+        "INSERT INTO hook.blocked_requests (id, hook_id, org_id, silicon_id, silicon_uuid, \
+         provider, reason_code, reason_detail, method, url, path, query_string, headers, body, \
          remote_ip, received_at, expires_at) \
-         VALUES (gen_random_uuid(), $1, $2, $3, 'GitHub', 'signature_missing', 'missing', \
-         'POST', $4, '/silicon/x/A', '', '[]'::jsonb, ''::bytea, '203.0.113.10'::inet, \
-         now() - INTERVAL '15 days', now() - INTERVAL '1 day')",
+         SELECT gen_random_uuid(), hook.id, hook.org_id, hook.silicon_id, hook.silicon_uuid, \
+         'GitHub', 'signature_missing', 'missing', 'POST', $2, '/silicon/x/A', '', \
+         '[]'::jsonb, ''::bytea, '203.0.113.10'::inet, now() - INTERVAL '15 days', \
+         now() - INTERVAL '1 day' FROM hook.hooks AS hook WHERE hook.id = $1",
     )
     .bind(signed.hook.id().as_uuid())
-    .bind(identity.organization_id.as_str())
-    .bind(identity.silicon_id.as_str())
     .bind(format!("{PUBLIC_BASE_URL}silicon/x/A"))
     .execute(pool)
     .await?;
@@ -1411,11 +1431,10 @@ async fn age_records(
     sqlx::query(
         "INSERT INTO hook_private.management_idempotency (operation, actor_kind, actor_id, \
          org_id, target_id, idempotency_key, request_digest, created_at, expires_at) \
-         VALUES ('hook.create', 'silicon', $1, $2, $1, 'expired-key-0001', \
+         VALUES ('hook.create', 'silicon', $1, 'accounts', $1, 'expired-key-0001', \
          decode(repeat('00', 32), 'hex'), now() - INTERVAL '2 days', now() - INTERVAL '1 day')",
     )
-    .bind(identity.silicon_id.as_str())
-    .bind(identity.organization_id.as_str())
+    .bind(identity.silicon_uuid.as_str())
     .execute(pool)
     .await?;
     sqlx::query(
@@ -1454,7 +1473,6 @@ async fn byos_can_be_set_after_creation_and_replaced_without_changing_the_endpoi
         let updated = application
             .update_hook(UpdateHookCommand {
                 authorization: identity.authorization(),
-                silicon_id: identity.silicon_id.clone(),
                 hook_id: created.hook.id(),
                 patch: HookPatch {
                     signing: Some(SigningPatch {
@@ -1494,7 +1512,6 @@ async fn byos_can_be_set_after_creation_and_replaced_without_changing_the_endpoi
     let invalid = application
         .update_hook(UpdateHookCommand {
             authorization: identity.authorization(),
-            silicon_id: identity.silicon_id.clone(),
             hook_id: created.hook.id(),
             patch: HookPatch {
                 enabled: Some(false),
@@ -1513,11 +1530,7 @@ async fn byos_can_be_set_after_creation_and_replaced_without_changing_the_endpoi
     ));
     let stored = database
         .store
-        .get_hook(
-            &identity.organization_id,
-            &identity.silicon_id,
-            created.hook.id(),
-        )
+        .get_hook(&identity.silicon_uuid, created.hook.id())
         .await?
         .context("hook exists")?;
     assert_eq!(stored.status(), HookStatus::Active);
@@ -1554,7 +1567,6 @@ async fn encoded_secrets_verify_after_creation_and_rotation() -> Result<()> {
         let rotated = application
             .rotate_hook_secret(HookMutationCommand {
                 context: identity.context(&format!("encoded-rotate-{index}")),
-                silicon_id: identity.silicon_id.clone(),
                 hook_id: created.hook.id(),
             })
             .await?;
@@ -1587,40 +1599,42 @@ async fn deprecated_contract_sunsets_only_after_seven_request_free_days() -> Res
         return Ok(());
     };
     let pool = database.store.pool();
-    let status: String =
-        sqlx::query_scalar("SELECT status FROM hook_private.contract_status('v1',true)")
+    let status = |major: &'static str, record: bool| {
+        sqlx::query_scalar::<_, String>("SELECT status FROM hook_private.contract_status($1, $2)")
+            .bind(major)
+            .bind(record)
             .fetch_one(pool)
-            .await?;
-    assert_eq!(status, "deprecated");
-    sqlx::query("UPDATE hook_private.contract_versions SET status='deprecated', deprecated_at=clock_timestamp()-INTERVAL '8 days', last_requested_at=clock_timestamp()-INTERVAL '6 days' WHERE major='v1'").execute(pool).await?;
-    assert_eq!(
-        sqlx::query_scalar::<_, String>(
-            "SELECT status FROM hook_private.contract_status('v1',false)"
-        )
-        .fetch_one(pool)
-        .await?,
-        "deprecated"
-    );
-    sqlx::query("SELECT * FROM hook_private.contract_status('v1',true)")
-        .execute(pool)
-        .await?;
-    let recent: bool = sqlx::query_scalar("SELECT last_requested_at > clock_timestamp()-INTERVAL '1 minute' FROM hook_private.contract_versions WHERE major='v1'").fetch_one(pool).await?;
-    assert!(recent);
-    sqlx::query("UPDATE hook_private.contract_versions SET last_requested_at=clock_timestamp()-INTERVAL '7 days' WHERE major='v1'").execute(pool).await?;
-    assert_eq!(
-        sqlx::query_scalar::<_, String>(
-            "SELECT status FROM hook_private.contract_status('v1',true)"
-        )
-        .fetch_one(pool)
-        .await?,
-        "sunset"
-    );
-    let count: i64 = sqlx::query_scalar(
-        "SELECT request_count FROM hook_private.contract_versions WHERE major='v1'",
+    };
+    // v1 and v2 used Silicon IAM sign-in: they are sunset outright and calls
+    // to them are not counted.
+    for major in ["v1", "v2"] {
+        assert_eq!(status(major, true).await?, "sunset", "{major} is retired");
+    }
+    let retired_calls: i64 = sqlx::query_scalar(
+        "SELECT COALESCE(sum(request_count), 0)::bigint FROM hook_private.contract_versions \
+         WHERE major IN ('v1', 'v2')",
     )
     .fetch_one(pool)
     .await?;
-    assert_eq!(count, 2, "rejected calls cannot revive a sunset contract");
+    assert_eq!(retired_calls, 0);
+    assert_eq!(status("v3", true).await?, "active");
+
+    // The deprecation lifecycle still applies to the current major.
+    sqlx::query("UPDATE hook_private.contract_versions SET status='deprecated', deprecated_at=clock_timestamp()-INTERVAL '8 days', last_requested_at=clock_timestamp()-INTERVAL '6 days', request_count=0 WHERE major='v3'").execute(pool).await?;
+    assert_eq!(status("v3", false).await?, "deprecated");
+    sqlx::query("SELECT * FROM hook_private.contract_status('v3',true)")
+        .execute(pool)
+        .await?;
+    let recent: bool = sqlx::query_scalar("SELECT last_requested_at > clock_timestamp()-INTERVAL '1 minute' FROM hook_private.contract_versions WHERE major='v3'").fetch_one(pool).await?;
+    assert!(recent);
+    sqlx::query("UPDATE hook_private.contract_versions SET last_requested_at=clock_timestamp()-INTERVAL '7 days' WHERE major='v3'").execute(pool).await?;
+    assert_eq!(status("v3", true).await?, "sunset");
+    let count: i64 = sqlx::query_scalar(
+        "SELECT request_count FROM hook_private.contract_versions WHERE major='v3'",
+    )
+    .fetch_one(pool)
+    .await?;
+    assert_eq!(count, 1, "rejected calls cannot revive a sunset contract");
     Ok(())
 }
 
@@ -1715,12 +1729,28 @@ async fn public_identifier_cutover_preserves_hook_credentials_and_history_keys()
     .await?;
     sqlx::raw_sql("CREATE FUNCTION schema_trigger_probe() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$; CREATE TRIGGER schema_disabled AFTER UPDATE ON hook.hooks FOR EACH ROW EXECUTE FUNCTION schema_trigger_probe(); ALTER TABLE hook.hooks DISABLE TRIGGER schema_disabled; CREATE TRIGGER schema_replica AFTER UPDATE ON hook.hooks FOR EACH ROW EXECUTE FUNCTION schema_trigger_probe(); ALTER TABLE hook.hooks ENABLE REPLICA TRIGGER schema_replica; CREATE TRIGGER schema_always AFTER UPDATE ON hook.hooks FOR EACH ROW EXECUTE FUNCTION schema_trigger_probe(); ALTER TABLE hook.hooks ENABLE ALWAYS TRIGGER schema_always; ").execute(pool).await?;
     migrate(pool).await?;
-    let after: serde_json::Value = sqlx::query_scalar(
+    let mut after: serde_json::Value = sqlx::query_scalar(
         "SELECT to_jsonb(h)-'silicon_id'-'created_by_id' FROM hook.hooks h WHERE id=$1",
     )
     .bind(id)
     .fetch_one(pool)
     .await?;
+    // Silicon Accounts identity columns are additive and stay empty until an
+    // operator links the IAM-era ids; every older column keeps its value.
+    let added = ["silicon_uuid", "created_by_uuid", "is_accounts_default"].map(|column| {
+        after
+            .as_object_mut()
+            .and_then(|row| row.remove(column))
+            .unwrap_or(serde_json::Value::String("missing".to_owned()))
+    });
+    assert_eq!(
+        added,
+        [
+            serde_json::Value::Null,
+            serde_json::Value::Null,
+            serde_json::Value::Bool(false)
+        ]
+    );
     assert_eq!(
         before, after,
         "UUID, endpoint key, ciphertext, nonce, version and timestamps must remain exact"

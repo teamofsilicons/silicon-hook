@@ -10,36 +10,25 @@ const REQUIRED_RELATIONS: &[&str] = &[
     "hook.hooks",
     "hook_private.audit_log",
     "hook_private.ting_outbox",
-    "hook_private.ting_publisher_credentials",
-    "hook_private.ting_authorizations",
-    "hook_private.ting_obo_credentials",
-    "hook_private.ting_recipient_bindings",
     "hook_private.telemetry_events",
     "hook_private.contract_versions",
-    "hook_private.delivery_cursors",
     "hook_private.delivery_sequences",
     "hook_private.ip_blocks",
     "hook_private.management_idempotency",
     "hook_private.retired_endpoint_keys",
-    "hook_control.environments",
-    "hook_control.endpoint_routes",
-    "hook_control.mutation_results",
-    "hook_control.lifecycle_operations",
-    "hook_control.activity_reports",
+    "hook_private.accounts",
+    "hook_private.account_ids",
+    "hook_private.silicon_grants",
+    "hook_private.silicon_allowances",
+    "hook_private.accounts_events",
+    "hook_private.observer_subscriptions",
+    "hook_private.identity_links",
 ];
 
-const REQUIRED_SCHEMAS: &[&str] = &["hook|USAGE", "hook_private|USAGE", "hook_control|USAGE"];
+const REQUIRED_SCHEMAS: &[&str] = &["hook|USAGE", "hook_private|USAGE"];
 
 const API_TABLE_PRIVILEGES: &[&str] = &[
     "public._sqlx_migrations|SELECT",
-    "hook_private.ting_obo_credentials|DELETE",
-    "hook_private.ting_obo_credentials|UPDATE",
-    "hook_private.ting_obo_credentials|INSERT",
-    "hook_private.ting_obo_credentials|SELECT",
-    "hook_private.ting_authorizations|DELETE",
-    "hook_private.ting_authorizations|UPDATE",
-    "hook_private.ting_authorizations|INSERT",
-    "hook_private.ting_authorizations|SELECT",
     "hook.hooks|SELECT",
     "hook.hooks|INSERT",
     "hook.hooks|UPDATE",
@@ -52,9 +41,6 @@ const API_TABLE_PRIVILEGES: &[&str] = &[
     "hook_private.delivery_sequences|SELECT",
     "hook_private.delivery_sequences|INSERT",
     "hook_private.delivery_sequences|UPDATE",
-    "hook_private.delivery_cursors|SELECT",
-    "hook_private.delivery_cursors|INSERT",
-    "hook_private.delivery_cursors|UPDATE",
     "hook_private.ip_blocks|SELECT",
     "hook_private.ip_blocks|INSERT",
     "hook_private.ip_blocks|UPDATE",
@@ -66,30 +52,30 @@ const API_TABLE_PRIVILEGES: &[&str] = &[
     "hook_private.telemetry_events|INSERT",
     "hook_private.ting_outbox|SELECT",
     "hook_private.ting_outbox|INSERT",
-    "hook_private.ting_publisher_credentials|SELECT",
-    "hook_private.ting_publisher_credentials|INSERT",
-    "hook_private.ting_recipient_bindings|SELECT",
-    "hook_private.ting_recipient_bindings|INSERT",
-    "hook_private.ting_recipient_bindings|DELETE",
-    "hook_control.environments|SELECT",
-    "hook_control.environments|INSERT",
-    "hook_control.environments|UPDATE",
-    "hook_control.endpoint_routes|SELECT",
-    "hook_control.mutation_results|SELECT",
-    "hook_control.mutation_results|INSERT",
-    "hook_control.mutation_results|UPDATE",
-    "hook_control.mutation_results|DELETE",
-    "hook_control.lifecycle_operations|SELECT",
-    "hook_control.lifecycle_operations|INSERT",
-    "hook_control.lifecycle_operations|UPDATE",
+    "hook_private.accounts|SELECT",
+    "hook_private.accounts|INSERT",
+    "hook_private.accounts|UPDATE",
+    "hook_private.account_ids|SELECT",
+    "hook_private.account_ids|INSERT",
+    "hook_private.account_ids|UPDATE",
+    "hook_private.silicon_grants|SELECT",
+    "hook_private.silicon_grants|INSERT",
+    "hook_private.silicon_grants|UPDATE",
+    "hook_private.silicon_grants|DELETE",
+    "hook_private.silicon_allowances|SELECT",
+    "hook_private.silicon_allowances|INSERT",
+    "hook_private.silicon_allowances|UPDATE",
+    "hook_private.silicon_allowances|DELETE",
+    "hook_private.accounts_events|SELECT",
+    "hook_private.accounts_events|INSERT",
+    "hook_private.observer_subscriptions|SELECT",
+    "hook_private.observer_subscriptions|INSERT",
+    "hook_private.observer_subscriptions|DELETE",
 ];
 
-// Publication may advance progress or rotate encrypted sessions, but may not
-// rewrite an event's prepared body, producer key, destination, or tenant scope.
+// Publication may advance progress, but may not rewrite an event's prepared
+// body, producer key, recipient or Silicon.
 const API_COLUMN_PRIVILEGES: &[&str] = &[
-    "hook_private.ting_recipient_bindings|encrypted_authority|UPDATE",
-    "hook_private.ting_recipient_bindings|authority_version|UPDATE",
-    "hook_private.ting_outbox|environment_generation|UPDATE",
     "hook_private.ting_outbox|next_attempt_at|UPDATE",
     "hook_private.ting_outbox|attempts|UPDATE",
     "hook_private.ting_outbox|last_attempt_at|UPDATE",
@@ -99,19 +85,6 @@ const API_COLUMN_PRIVILEGES: &[&str] = &[
     "hook_private.ting_outbox|accepted_at|UPDATE",
     "hook_private.ting_outbox|ting_id|UPDATE",
     "hook_private.ting_outbox|silent|UPDATE",
-    "hook_private.ting_publisher_credentials|environment_generation|UPDATE",
-    "hook_private.ting_publisher_credentials|provision_request_hash|UPDATE",
-    "hook_private.ting_publisher_credentials|provision_input_hash|UPDATE",
-    "hook_private.ting_publisher_credentials|encrypted_credentials|UPDATE",
-    "hook_private.ting_publisher_credentials|actor_id|UPDATE",
-    "hook_private.ting_publisher_credentials|expires_at|UPDATE",
-    "hook_private.ting_publisher_credentials|validated|UPDATE",
-    "hook_private.ting_publisher_credentials|rejected|UPDATE",
-    "hook_private.ting_publisher_credentials|operation_key|UPDATE",
-    "hook_private.ting_publisher_credentials|operation_started_at|UPDATE",
-    "hook_private.ting_publisher_credentials|lease_id|UPDATE",
-    "hook_private.ting_publisher_credentials|lease_until|UPDATE",
-    "hook_private.ting_publisher_credentials|updated_at|UPDATE",
 ];
 
 const WORKER_TABLE_PRIVILEGES: &[&str] = &[
@@ -129,18 +102,14 @@ const WORKER_TABLE_PRIVILEGES: &[&str] = &[
     "hook_private.ip_blocks|DELETE",
     "hook_private.management_idempotency|SELECT",
     "hook_private.management_idempotency|DELETE",
-    "hook_control.environments|SELECT",
-    "hook_control.environments|UPDATE",
-    "hook_control.environments|DELETE",
-    "hook_control.endpoint_routes|SELECT",
-    "hook_control.mutation_results|SELECT",
-    "hook_control.mutation_results|DELETE",
+    "hook_private.accounts_events|SELECT",
+    "hook_private.accounts_events|DELETE",
 ];
 
 /// Runtime process whose exact PostgreSQL grants must be available.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum RuntimeDatabaseRole {
-    /// HTTP management, ingress, and realtime delivery process.
+    /// HTTP management, ingress, webhook and Ting publication process.
     Api,
     /// Retention maintenance process.
     Worker,
@@ -249,7 +218,6 @@ impl PostgresStore {
             &[
                 "hook_private.environment_id()|EXECUTE",
                 "hook_private.environment_is_available()|EXECUTE",
-                "hook_control.clean_environment(uuid)|EXECUTE",
                 "hook_private.contract_status(text,boolean)|EXECUTE",
             ],
             MISSING_FUNCTION_PRIVILEGES_SQL,

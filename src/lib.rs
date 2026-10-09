@@ -25,3 +25,7 @@ pub mod worker;
 #[cfg(test)]
 #[path = "../tests/support/postgres.rs"]
 pub(crate) mod test_postgres;
+
+#[cfg(test)]
+#[path = "../tests/support/accounts.rs"]
+pub(crate) mod test_accounts;

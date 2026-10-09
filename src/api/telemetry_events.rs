@@ -1,5 +1,8 @@
 //! Structured, bounded, private operational events with explicit consent.
-use super::{handlers::authorize_management, state::ApiState};
+use super::{
+    auth::{self, Check},
+    state::ApiState,
+};
 use crate::{
     error::AppError,
     telemetry::events::{Event, enabled, record},
@@ -71,11 +74,9 @@ pub(super) async fn ingest(
     event
         .validate_external()
         .map_err(|()| AppError::validation("invalid_telemetry_event"))?;
-    let actor = authorize_management(&state, &headers, &[]).await?;
-    let subject = hex::encode(Sha256::digest(
-        serde_json::to_vec(&(actor.organization_id(), actor.actor()))
-            .map_err(AppError::internal)?,
-    ));
+    let caller = auth::authenticate(&state, &headers, Check::Local).await?;
+    // Telemetry never stores who sent it, only an opaque digest of the account.
+    let subject = hex::encode(Sha256::digest(caller.actor.uuid().as_str().as_bytes()));
     record(
         state.application.store().pool().clone(),
         event,

@@ -1,33 +1,44 @@
-//! Internal Ting publication and authorized event hydration.
+//! Delivery of accepted events through Ting, and authorized hydration.
 //!
 //! Raw provider requests remain in Hook. Ting carries a compact, immutable
-//! reference so every accepted Hook request fits Ting's smaller send limit.
+//! reference so every accepted request fits Ting's smaller send limit; the
+//! recipient fetches the full request from Hook with its own access token.
+//!
+//! Delivery is optional: it runs only when `HOOK_TING_URL` is set. Without it
+//! Hook still receives, verifies and stores every event, and queues nothing.
 
-pub mod credentials;
-pub mod observer_authority;
+pub mod adapter;
 pub mod publisher;
 pub mod subscriptions;
 
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 use time::OffsetDateTime;
-use uuid::Uuid;
 
-use crate::domain::{EventId, EventRecord, HookId};
+use crate::{
+    domain::{EventId, EventRecord, HookId},
+    infrastructure::ting::{EVENT_TYPE_SUFFIX, TingDeliveryMode, TingRecipient},
+};
 
-/// Ting type suffix owned by the configured Hook application.
-pub const EVENT_TYPE_SUFFIX: &str = ".webhook.received";
+/// The Silicon a delivered event belongs to.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ReferencedSilicon {
+    /// Permanent Silicon Accounts uuid; use it to fetch the event.
+    pub uuid: String,
+    /// The Silicon's public id when the event was accepted (display only).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub id: Option<String>,
+}
 
-/// Generation-bound pointer to a retained, authenticated Hook event.
+/// Pointer to a retained, verified Hook event.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct EventReference {
     /// Immutable Hook event identifier, also used for consumer deduplication.
     pub id: EventId,
-    /// Organization owning the original request.
-    pub org_id: String,
-    /// Silicon whose webhook received the request.
-    pub silicon_id: String,
+    /// The Silicon whose webhook received the request.
+    pub silicon: ReferencedSilicon,
     /// Receiving webhook.
     pub hook_id: HookId,
     /// Original Hook stream sequence; arrival order is not implied.
@@ -37,44 +48,35 @@ pub struct EventReference {
     pub received_at: OffsetDateTime,
     /// Provider and original trigger time formatted in the hook's IANA time zone.
     pub summary: String,
-    /// Production is the nil UUID; tests use their isolated environment UUID.
-    pub environment_id: Uuid,
-    /// Original event generation, retained across credential rotations; production is zero.
-    pub environment_generation: i64,
 }
 
 /// Serializes one complete Ting send exactly once, before committing its outbox row.
 ///
-/// The caller persists these bytes and reuses them with a fresh IAM proof on
-/// every retry. No provider body, captured credentials or remote URL is included.
+/// The caller persists these bytes and reuses them with a fresh proof on every
+/// retry. No provider body, captured credential or remote URL is included. The
+/// event envelope keeps the documented shape: `type: new_event` and
+/// `data: {sender, metadata}`.
 ///
 /// # Errors
-/// Returns serialization failures. Application identity and recipient authority
-/// are validated by configuration and IAM, not inferred from this envelope.
+/// Returns serialization failures.
 pub fn prepare_event(
     app_id: &str,
     event: &EventRecord,
-    recipient: &str,
-    environment_id: Uuid,
-    environment_generation: i64,
-    delivery: crate::infrastructure::ting::TingDeliveryMode,
+    silicon: &ReferencedSilicon,
+    recipient: &TingRecipient,
+    delivery: TingDeliveryMode,
 ) -> Result<Vec<u8>, serde_json::Error> {
     let reference = EventReference {
         id: event.id(),
-        org_id: event.organization_id().as_str().to_owned(),
-        silicon_id: event.silicon_id().as_str().to_owned(),
+        silicon: silicon.clone(),
         hook_id: event.hook_id(),
         delivery_sequence: event.delivery_sequence().get(),
         received_at: event.received_at(),
         summary: event.summary().to_owned(),
-        environment_id,
-        environment_generation,
     };
-    // Hash the recipient so even the longest valid actor ID fits Ting's
-    // 200-byte producer-key limit. Event IDs never repeat after a test clean.
-    let recipient_digest = hex::encode(Sha256::digest(recipient.as_bytes()));
+    // Hash the recipient so the producer key stays short and stable.
+    let recipient_digest = hex::encode(Sha256::digest(recipient.uuid.as_bytes()));
     let mut body = serde_json::json!({
-        "org_id": event.organization_id().as_str(),
         "type": format!("{app_id}{EVENT_TYPE_SUFFIX}"),
         "for": recipient,
         "key": format!("hook:{}:{recipient_digest}", event.id()),
@@ -87,7 +89,7 @@ pub fn prepare_event(
         },
         "metadata": {},
     });
-    if delivery == crate::infrastructure::ting::TingDeliveryMode::Required {
+    if delivery == TingDeliveryMode::Required {
         body["delivery"] = serde_json::json!("required");
     }
     serde_json::to_vec(&body)

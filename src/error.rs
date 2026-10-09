@@ -28,18 +28,9 @@ pub enum AppError {
     /// Credential is absent, invalid, expired, or revoked.
     #[error("authentication is required")]
     Unauthenticated,
-    /// This feature requires an independent IAM grant.
-    #[error("Ting requires separate IAM authorization")]
-    TingAuthorizationRequired,
     /// Authenticated actor lacks authority for this action.
     #[error("the actor is not authorized for this action")]
     Forbidden,
-    /// IAM or the actor declined a sign-in at the authorization endpoint.
-    #[error("the sign-in was not granted")]
-    LoginDenied {
-        /// OAuth protocol error code such as `access_denied`.
-        code: String,
-    },
     /// The client address is blocked for the endpoint.
     #[error("the client address is blocked for this endpoint")]
     Blocked {
@@ -88,6 +79,16 @@ pub enum AppError {
     /// Unexpected failure whose details must never cross the API boundary.
     #[error("internal service error")]
     Internal(#[source] anyhow::Error),
+    /// A request refused for a reason the caller can act on, explained exactly.
+    #[error("{message}")]
+    Refused {
+        /// HTTP status.
+        status: StatusCode,
+        /// Stable machine-readable code.
+        code: Cow<'static, str>,
+        /// What was refused, why, and what to do instead.
+        message: String,
+    },
 }
 
 /// Documented top-level JSON error envelope.
@@ -146,6 +147,20 @@ impl AppError {
         Self::Gone { code: code.into() }
     }
 
+    /// Creates a refusal with an exact explanation.
+    #[must_use]
+    pub fn refused(
+        status: StatusCode,
+        code: impl Into<Cow<'static, str>>,
+        message: impl Into<String>,
+    ) -> Self {
+        Self::Refused {
+            status,
+            code: code.into(),
+            message: message.into(),
+        }
+    }
+
     /// Wraps an unexpected internal error for redacted presentation.
     #[must_use]
     pub fn internal(error: impl Into<anyhow::Error>) -> Self {
@@ -159,10 +174,8 @@ impl AppError {
             Self::BadRequest { .. } => StatusCode::BAD_REQUEST,
             Self::Validation { .. } => StatusCode::UNPROCESSABLE_ENTITY,
             Self::Unauthenticated => StatusCode::UNAUTHORIZED,
-            Self::TingAuthorizationRequired => StatusCode::PRECONDITION_REQUIRED,
-            Self::Forbidden | Self::LoginDenied { .. } | Self::Blocked { .. } => {
-                StatusCode::FORBIDDEN
-            }
+            Self::Forbidden | Self::Blocked { .. } => StatusCode::FORBIDDEN,
+            Self::Refused { status, .. } => *status,
             Self::NotFound => StatusCode::NOT_FOUND,
             Self::Gone { .. } => StatusCode::GONE,
             Self::Conflict { .. } => StatusCode::CONFLICT,
@@ -185,27 +198,18 @@ impl AppError {
                 Cow::Borrowed("The request contains invalid data."),
                 details,
             ),
-            Self::TingAuthorizationRequired => (
-                Cow::Borrowed("ting_authorization_required"),
+            Self::Unauthenticated => (
+                Cow::Borrowed("unauthenticated"),
                 Cow::Borrowed(
-                    "Approve Ting separately in Settings or run hook receiving authorize.",
+                    "Authentication is required: send Authorization: Bearer <access token> with a Silicon Accounts access token issued to Hook.",
                 ),
                 None,
             ),
-            Self::Unauthenticated => (
-                Cow::Borrowed("unauthenticated"),
-                Cow::Borrowed("Authentication is required."),
-                None,
-            ),
+            Self::Refused { code, message, .. } => (code, Cow::Owned(message), None),
             Self::Forbidden => (
                 Cow::Borrowed("forbidden"),
                 Cow::Borrowed("The actor is not authorized for this action."),
                 None,
-            ),
-            Self::LoginDenied { code } => (
-                Cow::Borrowed("login_denied"),
-                Cow::Borrowed("Silicon IAM did not grant the sign-in."),
-                Some(code),
             ),
             Self::Blocked { .. } => (
                 Cow::Borrowed("ip_blocked"),

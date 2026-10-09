@@ -12,28 +12,19 @@ use crate::{
 };
 
 impl HookApplication {
-    /// Hydrates a retained Ting reference using current authority and its original generation.
+    /// Hydrates a delivered Ting reference: the full retained request, read
+    /// with the caller's current access.
     ///
     /// # Errors
-    /// Rejects invisible, expired or cleaned events and mismatched environments.
+    /// Rejects inaccessible or expired events.
     pub async fn get_event(
         &self,
         authorization: &crate::domain::AuthorizationContext,
-        silicon_id: &crate::domain::SiliconId,
         event_id: crate::domain::EventId,
-        expected_environment: Option<(uuid::Uuid, i64)>,
     ) -> Result<EventRecord, ApplicationError> {
-        authorize_action(authorization, Action::ReadEvents, silicon_id)?;
-        if expected_environment.is_some_and(|(id, _)| !id.is_nil()) {
-            return Err(ApplicationError::NotFound);
-        }
+        authorize_action(authorization, Action::ReadEvents)?;
         self.store
-            .get_event(
-                authorization.organization_id(),
-                silicon_id,
-                event_id,
-                expected_environment.map(|(_, generation)| generation),
-            )
+            .get_event(authorization.silicon().uuid(), event_id)
             .await
             .map_err(map_store_error)?
             .ok_or(ApplicationError::NotFound)
@@ -81,21 +72,13 @@ impl HookApplication {
         command: &ListHistoryCommand,
         collection: HistoryCollection,
     ) -> Result<(HistoryPageRequest, HistoryCursorScope), ApplicationError> {
-        authorize_action(
-            &command.authorization,
-            Action::ReadEvents,
-            &command.silicon_id,
-        )?;
+        authorize_action(&command.authorization, Action::ReadEvents)?;
+        let silicon_uuid = command.authorization.silicon().uuid().clone();
         if command.limit == 0 || command.limit > MAX_HISTORY_LIMIT {
             return Err(ApplicationError::Validation { field: "limit" });
         }
         let filter = HistoryFilter::new(command.hook_id);
-        let scope = HistoryCursorScope::new(
-            command.authorization.organization_id().clone(),
-            command.silicon_id.clone(),
-            collection,
-            filter.clone(),
-        );
+        let scope = HistoryCursorScope::new(silicon_uuid.clone(), collection, filter.clone());
         let cursor = command
             .cursor
             .as_deref()
@@ -104,8 +87,7 @@ impl HookApplication {
             .map_err(|_| ApplicationError::Validation { field: "cursor" })?;
         Ok((
             HistoryPageRequest {
-                organization_id: command.authorization.organization_id().clone(),
-                silicon_id: command.silicon_id.clone(),
+                silicon_uuid,
                 filter,
                 cursor,
                 limit: command.limit,

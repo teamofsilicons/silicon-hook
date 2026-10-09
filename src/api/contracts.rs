@@ -81,13 +81,15 @@ pub(super) async fn catalog(
     Extension(state): Extension<ApiState>,
 ) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
     let mut contracts = Vec::new();
-    for &major in super::version::SUPPORTED_API_VERSIONS {
+    // v1 and v2 are listed so clients can see they ended (they used Silicon IAM).
+    for major in ["v3", "v2", "v1"] {
         let contract = status_major(&state, major, false).await?;
         contracts.push(serde_json::json!({
             "api_version": major,
             "status": contract.status,
             "deprecated_at": contract.deprecated_at.map(time::OffsetDateTime::unix_timestamp),
             "sunset_at": contract.sunset_at.map(time::OffsetDateTime::unix_timestamp),
+            "identity": if major == "v3" { "silicon_accounts" } else { "silicon_iam" },
             "delivery_transport": "ting",
         }));
     }

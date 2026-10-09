@@ -3,8 +3,8 @@
 use time::OffsetDateTime;
 
 use crate::domain::{
-    ActorRef, BlockReason, BlockedRequestId, EncryptedSecret, EndpointKey, EventId, HistoryCursor,
-    HistoryFilter, Hook, HookId, HookUpdate, OrganizationId, SiliconId, request::CapturedRequest,
+    AccountUuid, ActorRef, BlockReason, BlockedRequestId, EncryptedSecret, EndpointKey, EventId,
+    HistoryCursor, HistoryFilter, Hook, HookId, HookUpdate, request::CapturedRequest,
 };
 
 /// Stable scope and content binding for a management idempotency key.
@@ -12,10 +12,8 @@ use crate::domain::{
 pub struct IdempotencyScope {
     /// Stable operation name, such as `hook.create`.
     pub operation: String,
-    /// Authenticated IAM actor.
+    /// Authenticated actor (keyed by its Accounts uuid).
     pub actor: ActorRef,
-    /// Organization in which the operation is performed.
-    pub organization_id: OrganizationId,
     /// Stable operation-specific target identity.
     pub target_id: String,
     /// Caller-supplied visible-ASCII idempotency key.
@@ -43,7 +41,7 @@ pub struct PersistedResponse {
 /// Actor and request facts written to the append-only audit trail.
 #[derive(Clone, Debug)]
 pub struct AuditContext {
-    /// Authenticated IAM actor.
+    /// Authenticated actor.
     pub actor: ActorRef,
     /// Correlation identifier assigned by the API.
     pub request_id: Option<String>,
@@ -61,9 +59,11 @@ pub enum EndpointResolution {
     },
     /// The key belongs to a disabled or deleted hook.
     Inactive,
-    /// The key was rotated away and is permanently retired for this Silicon.
+    /// The key was rotated away and is permanently retired.
     Retired,
-    /// No hook has ever used the key for this Silicon.
+    /// The key belongs to a Silicon whose account was deleted.
+    AccountDeleted,
+    /// No hook uses the key under this URL.
     Unknown,
 }
 
@@ -88,6 +88,16 @@ pub enum AuditAction {
     EndpointRotated,
     /// The Silicon's IAM hook was created for registration with IAM.
     IamConnected,
+    /// The Silicon's "Silicon Accounts updates" hook was created.
+    AccountsConnected,
+    /// Access to a Silicon's hooks was granted or changed.
+    AccessGranted,
+    /// Access to a Silicon's hooks was revoked or left.
+    AccessRevoked,
+    /// An account was added to a Silicon's allow-list.
+    AllowListAdded,
+    /// An account was removed from a Silicon's allow-list.
+    AllowListRemoved,
 }
 
 impl AuditAction {
@@ -102,6 +112,11 @@ impl AuditAction {
             Self::SecretRotated => "hook.secret_rotated",
             Self::EndpointRotated => "hook.endpoint_rotated",
             Self::IamConnected => "hook.iam_connected",
+            Self::AccountsConnected => "hook.accounts_connected",
+            Self::AccessGranted => "access.granted",
+            Self::AccessRevoked => "access.revoked",
+            Self::AllowListAdded => "allow_list.added",
+            Self::AllowListRemoved => "allow_list.removed",
         }
     }
 }
@@ -111,8 +126,8 @@ impl AuditAction {
 pub struct CreateHook {
     /// Fully validated active hook aggregate to insert.
     pub hook: Hook,
-    /// Whether this is IAM's unique default hook.
-    pub is_iam_default: bool,
+    /// Whether this is the Silicon's unique "Silicon Accounts updates" hook.
+    pub is_accounts_default: bool,
     /// Management idempotency scope.
     pub idempotency: IdempotencyScope,
     /// Response stored for content-identical replay.
@@ -140,10 +155,8 @@ pub enum CreateHookOutcome {
 /// Scope and attribution for a soft-delete transition.
 #[derive(Clone, Debug)]
 pub struct HookMutation {
-    /// Organization owning the hook.
-    pub organization_id: OrganizationId,
     /// Silicon owning the hook.
-    pub silicon_id: SiliconId,
+    pub silicon_uuid: AccountUuid,
     /// Hook to mutate.
     pub hook_id: HookId,
     /// Audit attribution.
@@ -155,10 +168,8 @@ pub struct HookMutation {
 /// Non-idempotency-keyed metadata and signing-policy replacement.
 #[derive(Clone, Debug)]
 pub struct UpdateHook {
-    /// Organization owning the hook.
-    pub organization_id: OrganizationId,
     /// Silicon owning the hook.
-    pub silicon_id: SiliconId,
+    pub silicon_uuid: AccountUuid,
     /// Hook to update.
     pub hook_id: HookId,
     /// Fields to replace.
@@ -172,10 +183,8 @@ pub struct UpdateHook {
 /// Atomic desired-state activation mutation for one or more hooks.
 #[derive(Clone, Debug)]
 pub struct BatchHookActivation {
-    /// Organization owning every target hook.
-    pub organization_id: OrganizationId,
     /// Silicon owning every target hook.
-    pub silicon_id: SiliconId,
+    pub silicon_uuid: AccountUuid,
     /// Unique hooks to lock and mutate as one transaction.
     pub hook_ids: Vec<HookId>,
     /// Desired ingress state: `true` enables and `false` disables.
@@ -189,10 +198,8 @@ pub struct BatchHookActivation {
 /// Atomic signing-secret replacement.
 #[derive(Clone, Debug)]
 pub struct RotateSecret {
-    /// Organization owning the hook.
-    pub organization_id: OrganizationId,
     /// Silicon owning the hook.
-    pub silicon_id: SiliconId,
+    pub silicon_uuid: AccountUuid,
     /// Hook whose secret is replaced.
     pub hook_id: HookId,
     /// Newly encrypted secret material.
@@ -224,10 +231,8 @@ pub enum RotateSecretOutcome {
 /// Atomic endpoint-key replacement.
 #[derive(Clone, Debug)]
 pub struct RotateEndpoint {
-    /// Organization owning the hook.
-    pub organization_id: OrganizationId,
     /// Silicon owning the hook.
-    pub silicon_id: SiliconId,
+    pub silicon_uuid: AccountUuid,
     /// Hook whose endpoint is replaced.
     pub hook_id: HookId,
     /// Freshly generated replacement key.
@@ -259,10 +264,8 @@ pub enum RotateEndpointOutcome {
 /// Idempotent restore command.
 #[derive(Clone, Debug)]
 pub struct RestoreHook {
-    /// Organization owning the hook.
-    pub organization_id: OrganizationId,
     /// Silicon owning the hook.
-    pub silicon_id: SiliconId,
+    pub silicon_uuid: AccountUuid,
     /// Hook to restore.
     pub hook_id: HookId,
     /// Management idempotency scope.
@@ -292,14 +295,22 @@ pub enum RestoreHookOutcome {
 /// A verified request to append to a hook's log and its Silicon's stream.
 #[derive(Clone, Debug)]
 pub struct AcceptEvent {
-    /// IAM application owning the outgoing Ting type.
-    pub delivery_app_id: String,
+    /// Ting delivery to queue with the event; `None` while delivery is off or
+    /// the hook's Silicon is not linked to an account yet.
+    pub delivery: Option<EventDelivery>,
     /// Preallocated stable event identifier.
     pub event_id: EventId,
     /// Receiving hook as resolved for this request.
     pub hook: Hook,
     /// Exact captured request.
     pub request: CapturedRequest,
+}
+
+/// Ting delivery queued in the same transaction as an accepted event.
+#[derive(Clone, Debug)]
+pub struct EventDelivery {
+    /// App owning the outgoing Ting type (`{app_id}.webhook.received`).
+    pub app_id: String,
 }
 
 /// An unverified request to append to a hook's blocked log.
@@ -318,10 +329,8 @@ pub struct RecordBlockedRequest {
 /// Authorized keyset request for retained history.
 #[derive(Clone, Debug)]
 pub struct HistoryPageRequest {
-    /// Organization boundary.
-    pub organization_id: OrganizationId,
     /// Silicon boundary.
-    pub silicon_id: SiliconId,
+    pub silicon_uuid: AccountUuid,
     /// Optional hook restriction.
     pub filter: HistoryFilter,
     /// Exclusive descending keyset boundary.
@@ -350,6 +359,8 @@ pub struct MaintenanceResult {
     pub hooks_purged: u64,
     /// Expired management idempotency rows removed.
     pub idempotency_rows_purged: u64,
+    /// Accounts webhook dedupe rows older than 30 days removed.
+    pub accounts_events_purged: u64,
     /// Inactive, non-permanent address blocks removed.
     pub ip_blocks_purged: u64,
 }
@@ -367,16 +378,19 @@ pub(crate) enum MaintenanceTask {
     ExpiredIdempotency,
     /// Remove stale temporary address blocks.
     StaleIpBlocks,
+    /// Remove Accounts webhook dedupe rows older than 30 days.
+    ExpiredAccountsEvents,
 }
 
 impl MaintenanceTask {
     /// Fair scheduling order used for every maintenance cycle.
-    pub(crate) const ALL: [Self; 5] = [
+    pub(crate) const ALL: [Self; 6] = [
         Self::ExpiredEvents,
         Self::ExpiredBlockedRequests,
         Self::ExpiredHooks,
         Self::ExpiredIdempotency,
         Self::StaleIpBlocks,
+        Self::ExpiredAccountsEvents,
     ];
 
     /// Stable, non-sensitive diagnostic name.
@@ -387,6 +401,7 @@ impl MaintenanceTask {
             Self::ExpiredHooks => "expired_hooks",
             Self::ExpiredIdempotency => "expired_idempotency",
             Self::StaleIpBlocks => "stale_ip_blocks",
+            Self::ExpiredAccountsEvents => "expired_accounts_events",
         }
     }
 }

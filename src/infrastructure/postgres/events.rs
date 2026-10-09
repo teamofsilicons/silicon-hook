@@ -58,30 +58,40 @@ impl PostgresStore {
             DeliverySequence::new(sequence).map_err(|error| StoreError::corrupt("event", error))?;
         let event = EventRecord::accept(command.event_id, &command.hook, command.request, sequence);
         insert_event(&mut transaction, &event).await?;
-        let (environment_id, environment_generation): (Uuid, i64) = sqlx::query_as(
-            "SELECT hook_private.environment_id(), COALESCE(NULLIF(current_setting('hook.environment_generation', true), ''), '0')::bigint",
-        )
-        .fetch_one(&mut *transaction)
-        .await?;
-        let body = crate::delivery::prepare_event(
-            &command.delivery_app_id,
-            &event,
-            event.silicon_id().as_str(),
-            environment_id,
-            environment_generation,
-            crate::infrastructure::ting::TingDeliveryMode::Required,
-        )
-        .map_err(|error| StoreError::corrupt("ting_outbox", error))?;
-        super::ting::enqueue_ting(&mut transaction, &event, event.silicon_id().as_str(), &body)
+        if let (Some(delivery), Some(silicon_uuid)) = (&command.delivery, event.silicon_uuid()) {
+            let public_id = sqlx::query_scalar::<_, Option<String>>(
+                "SELECT public_id FROM hook_private.accounts WHERE uuid = $1",
+            )
+            .bind(silicon_uuid.as_str())
+            .fetch_optional(&mut *transaction)
+            .await?
+            .flatten();
+            let silicon = crate::delivery::ReferencedSilicon {
+                uuid: silicon_uuid.as_str().to_owned(),
+                id: public_id,
+            };
+            let recipient = crate::infrastructure::ting::TingRecipient {
+                uuid: silicon_uuid.as_str().to_owned(),
+                id: silicon.id.clone(),
+            };
+            let body = crate::delivery::prepare_event(
+                &delivery.app_id,
+                &event,
+                &silicon,
+                &recipient,
+                crate::infrastructure::ting::TingDeliveryMode::Required,
+            )
+            .map_err(|error| StoreError::corrupt("ting_outbox", error))?;
+            super::ting::enqueue_ting(&mut transaction, &event, silicon_uuid, &body, None).await?;
+            crate::delivery::subscriptions::enqueue_observers(
+                &mut transaction,
+                &event,
+                silicon_uuid,
+                &silicon,
+                &delivery.app_id,
+            )
             .await?;
-        crate::delivery::subscriptions::enqueue_observers(
-            &mut transaction,
-            &event,
-            &command.delivery_app_id,
-            environment_id,
-            environment_generation,
-        )
-        .await?;
+        }
         transaction.commit().await?;
         Ok(event)
     }
@@ -173,26 +183,20 @@ impl PostgresStore {
     /// Returns database or stored-domain validation failures.
     pub async fn get_event(
         &self,
-        org_id: &crate::domain::OrganizationId,
-        silicon_id: &crate::domain::SiliconId,
+        silicon_uuid: &crate::domain::AccountUuid,
         event_id: crate::domain::EventId,
-        expected_source_generation: Option<i64>,
     ) -> Result<Option<EventRecord>, StoreError> {
         let row: Option<EventRow> = sqlx::query_as(
-            "SELECT event.id, event.hook_id, event.org_id, event.silicon_id, event.provider,
+            "SELECT event.id, event.hook_id, event.silicon_id, event.silicon_uuid, event.provider,
                     event.summary, event.delivery_sequence, event.method, event.url, event.path,
                     event.query_string, event.headers, event.body, event.remote_ip, event.received_at
-             FROM hook.events AS event JOIN hook.hooks AS hook
-               ON hook.id=event.hook_id AND hook.org_id=event.org_id AND hook.silicon_id=event.silicon_id
-             WHERE event.org_id=$1 AND event.silicon_id=$2 AND event.id=$3
-               AND ($4::bigint IS NULL OR event.source_generation=$4)
+             FROM hook.events AS event JOIN hook.hooks AS hook ON hook.id = event.hook_id
+             WHERE hook.silicon_uuid = $1 AND event.id = $2
                AND event.expires_at > clock_timestamp()
                AND (hook.deleted_at IS NULL OR hook.deleted_at >= clock_timestamp() - INTERVAL '45 days')",
         )
-        .bind(org_id.as_str())
-        .bind(silicon_id.as_str())
+        .bind(silicon_uuid.as_str())
         .bind(event_id.as_uuid())
-        .bind(expected_source_generation)
         .fetch_optional(&self.pool)
         .await?;
         row.map(EventRecord::try_from).transpose()
@@ -220,8 +224,7 @@ where
 {
     let hook_id = request.filter.hook_id().map(HookId::as_uuid);
     sqlx::query_as::<_, Row>(sql)
-        .bind(request.organization_id.as_str())
-        .bind(request.silicon_id.as_str())
+        .bind(request.silicon_uuid.as_str())
         .bind(hook_id)
         .bind(request.cursor.map(HistoryCursor::received_at))
         .bind(request.cursor.map(HistoryCursor::id))
@@ -265,50 +268,44 @@ where
     })
 }
 
+// Events of hooks linked to the Silicon after the migration carry the uuid
+// themselves; the hook's owner decides in every case.
 const EVENT_HISTORY_SQL: &str = "
     WITH history_clock AS MATERIALIZED (SELECT clock_timestamp() AS now)
-    SELECT event.id, event.hook_id, event.org_id, event.silicon_id, event.provider,
+    SELECT event.id, event.hook_id, event.silicon_id, event.silicon_uuid, event.provider,
            event.summary, event.delivery_sequence,
            event.method, event.url, event.path, event.query_string, event.headers,
            event.body, event.remote_ip, event.received_at
     FROM hook.events AS event
-    JOIN hook.hooks AS hook
-      ON hook.id = event.hook_id
-     AND hook.org_id = event.org_id
-     AND hook.silicon_id = event.silicon_id
+    JOIN hook.hooks AS hook ON hook.id = event.hook_id
     CROSS JOIN history_clock
-    WHERE event.org_id = $1
-      AND event.silicon_id = $2
-      AND ($3::uuid IS NULL OR event.hook_id = $3)
+    WHERE hook.silicon_uuid = $1
+      AND ($2::uuid IS NULL OR event.hook_id = $2)
       AND event.expires_at > history_clock.now
       AND (hook.deleted_at IS NULL
-           OR hook.deleted_at >= history_clock.now - ($7 * INTERVAL '1 day'))
-      AND ($4::timestamptz IS NULL OR (event.received_at, event.id) < ($4, $5))
+           OR hook.deleted_at >= history_clock.now - ($6 * INTERVAL '1 day'))
+      AND ($3::timestamptz IS NULL OR (event.received_at, event.id) < ($3, $4))
     ORDER BY event.received_at DESC, event.id DESC
-    LIMIT $6
+    LIMIT $5
 ";
 
 const BLOCKED_HISTORY_SQL: &str = "
     WITH history_clock AS MATERIALIZED (SELECT clock_timestamp() AS now)
-    SELECT blocked.id, blocked.hook_id, blocked.org_id, blocked.silicon_id, blocked.provider,
+    SELECT blocked.id, blocked.hook_id, blocked.silicon_id, blocked.silicon_uuid, blocked.provider,
            blocked.reason_code, blocked.reason_detail,
            blocked.method, blocked.url, blocked.path, blocked.query_string, blocked.headers,
            blocked.body, blocked.remote_ip, blocked.received_at
     FROM hook.blocked_requests AS blocked
-    JOIN hook.hooks AS hook
-      ON hook.id = blocked.hook_id
-     AND hook.org_id = blocked.org_id
-     AND hook.silicon_id = blocked.silicon_id
+    JOIN hook.hooks AS hook ON hook.id = blocked.hook_id
     CROSS JOIN history_clock
-    WHERE blocked.org_id = $1
-      AND blocked.silicon_id = $2
-      AND ($3::uuid IS NULL OR blocked.hook_id = $3)
+    WHERE hook.silicon_uuid = $1
+      AND ($2::uuid IS NULL OR blocked.hook_id = $2)
       AND blocked.expires_at > history_clock.now
       AND (hook.deleted_at IS NULL
-           OR hook.deleted_at >= history_clock.now - ($7 * INTERVAL '1 day'))
-      AND ($4::timestamptz IS NULL OR (blocked.received_at, blocked.id) < ($4, $5))
+           OR hook.deleted_at >= history_clock.now - ($6 * INTERVAL '1 day'))
+      AND ($3::timestamptz IS NULL OR (blocked.received_at, blocked.id) < ($3, $4))
     ORDER BY blocked.received_at DESC, blocked.id DESC
-    LIMIT $6
+    LIMIT $5
 ";
 
 async fn insert_event(
@@ -316,18 +313,19 @@ async fn insert_event(
     event: &EventRecord,
 ) -> Result<(), StoreError> {
     let request = event.request();
-    bind_capture(
+    let inserted = bind_capture(
+        // The legacy org and namespace columns are copied from the hook so
+        // the composite foreign key holds for old and new hooks alike.
         sqlx::query(concat!(
-            "INSERT INTO hook.events (id, hook_id, org_id, silicon_id, provider, summary, ",
-            "delivery_sequence, ",
+            "INSERT INTO hook.events (id, hook_id, org_id, silicon_id, silicon_uuid, provider, ",
+            "summary, delivery_sequence, ",
             capture_columns!(),
-            ", expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, ",
-            "$14, $15, $16, $16 + INTERVAL '14 days')"
+            ", expires_at) SELECT $1, hook.id, hook.org_id, hook.silicon_id, hook.silicon_uuid, ",
+            "$3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14 + INTERVAL '14 days' ",
+            "FROM hook.hooks AS hook WHERE hook.id = $2"
         ))
         .bind(event.id().as_uuid())
         .bind(event.hook_id().as_uuid())
-        .bind(event.organization_id().as_str())
-        .bind(event.silicon_id().as_str())
         .bind(event.provider().as_str())
         .bind(event.summary())
         .bind(event.delivery_sequence().get()),
@@ -335,6 +333,9 @@ async fn insert_event(
     )
     .execute(&mut **transaction)
     .await?;
+    if inserted.rows_affected() != 1 {
+        return Err(StoreError::NotFound { entity: "hook" });
+    }
     Ok(())
 }
 
@@ -343,18 +344,17 @@ async fn insert_blocked_request(
     blocked: &BlockedRequest,
 ) -> Result<(), StoreError> {
     let snapshot = blocked.snapshot();
-    bind_capture(
+    let inserted = bind_capture(
         sqlx::query(concat!(
-            "INSERT INTO hook.blocked_requests (id, hook_id, org_id, silicon_id, provider, ",
-            "reason_code, reason_detail, ",
+            "INSERT INTO hook.blocked_requests (id, hook_id, org_id, silicon_id, silicon_uuid, ",
+            "provider, reason_code, reason_detail, ",
             capture_columns!(),
-            ", expires_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, ",
-            "$14, $15, $16, $16 + INTERVAL '14 days')"
+            ", expires_at) SELECT $1, hook.id, hook.org_id, hook.silicon_id, hook.silicon_uuid, ",
+            "$3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $14 + INTERVAL '14 days' ",
+            "FROM hook.hooks AS hook WHERE hook.id = $2"
         ))
         .bind(snapshot.id.as_uuid())
         .bind(snapshot.hook_id.as_uuid())
-        .bind(snapshot.organization_id.as_str())
-        .bind(snapshot.silicon_id.as_str())
         .bind(snapshot.provider.as_str())
         .bind(snapshot.reason.code())
         .bind(snapshot.reason.detail()),
@@ -362,6 +362,9 @@ async fn insert_blocked_request(
     )
     .execute(&mut **transaction)
     .await?;
+    if inserted.rows_affected() != 1 {
+        return Err(StoreError::NotFound { entity: "hook" });
+    }
     Ok(())
 }
 

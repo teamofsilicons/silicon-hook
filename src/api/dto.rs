@@ -8,12 +8,11 @@ use time::{Duration, OffsetDateTime};
 use url::Url;
 use zeroize::Zeroizing;
 
-use crate::infrastructure::iam::IssuedTokens;
 use crate::{
     application::{HookWithSecret, SigningPatch},
     domain::{
-        ActorRef, BlockedRequest, BlockedRequestId, EventId, EventRecord, Hook, HookId, HookStatus,
-        SigningSecret,
+        AccountUuid, ActorKind, ActorRef, BlockedRequest, BlockedRequestId, EventId, EventRecord,
+        Hook, HookId, HookStatus, SigningSecret, SiliconRef,
         request::CapturedRequest,
         signature::{
             Expression, SecretEncoding, SignatureAlgorithm, SignatureConfig, SignatureEncoding,
@@ -201,12 +200,63 @@ impl SignatureResponse {
     }
 }
 
+/// A Silicon as responses show it: its permanent uuid and current id.
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct SiliconResponse {
+    pub(super) uuid: String,
+    pub(super) id: Option<String>,
+}
+
+impl From<&SiliconRef> for SiliconResponse {
+    fn from(silicon: &SiliconRef) -> Self {
+        Self {
+            uuid: silicon.uuid().as_str().to_owned(),
+            id: silicon.id().map(|id| id.as_str().to_owned()),
+        }
+    }
+}
+
+/// An account as responses show it. `uuid` is absent only for attribution
+/// recorded before Silicon Accounts that was never linked; `id` is the
+/// account's current id, or the stored IAM-era id for such records.
+#[derive(Clone, Debug, Serialize)]
+pub(super) struct AccountResponse {
+    pub(super) uuid: Option<String>,
+    pub(super) kind: ActorKind,
+    pub(super) id: Option<String>,
+}
+
+impl AccountResponse {
+    /// Shows stored attribution with the current id when Hook knows it.
+    pub(super) fn from_attribution(actor: &ActorRef, current_id: Option<&str>) -> Self {
+        match actor.uuid() {
+            Some(uuid) => Self {
+                uuid: Some(uuid.as_str().to_owned()),
+                kind: actor.kind(),
+                id: current_id.map(ToOwned::to_owned),
+            },
+            None => Self {
+                uuid: None,
+                kind: actor.kind(),
+                id: Some(actor.id().as_str().to_owned()),
+            },
+        }
+    }
+
+    pub(super) fn of(uuid: &AccountUuid, kind: ActorKind, id: Option<&str>) -> Self {
+        Self {
+            uuid: Some(uuid.as_str().to_owned()),
+            kind,
+            id: id.map(ToOwned::to_owned),
+        }
+    }
+}
+
 /// Public hook metadata; encrypted secret fields never enter this type.
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct HookResponse {
     id: HookId,
-    org_id: String,
-    silicon_id: String,
+    silicon: SiliconResponse,
     name: String,
     description: Option<String>,
     endpoint_url: Url,
@@ -214,7 +264,7 @@ pub(super) struct HookResponse {
     status: HookStatus,
     signature: SignatureResponse,
     time_zone: String,
-    created_by: ActorRef,
+    created_by: AccountResponse,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -232,13 +282,17 @@ pub(super) struct HookResponse {
 }
 
 impl HookResponse {
-    pub(super) fn from_domain(hook: &Hook, endpoint_url: Url) -> Self {
+    pub(super) fn from_domain(
+        hook: &Hook,
+        endpoint_url: Url,
+        silicon: &SiliconRef,
+        created_by: AccountResponse,
+    ) -> Self {
         let deleted_at = hook.deleted_at();
         let recoverable_until = deleted_at.and_then(|value| value.checked_add(Duration::days(45)));
         Self {
             id: hook.id(),
-            org_id: hook.organization_id().as_str().to_owned(),
-            silicon_id: hook.silicon_id().as_str().to_owned(),
+            silicon: SiliconResponse::from(silicon),
             name: hook.name().as_str().to_owned(),
             description: hook.description().map(|value| value.as_str().to_owned()),
             endpoint_url,
@@ -246,7 +300,7 @@ impl HookResponse {
             status: hook.status(),
             signature: SignatureResponse::from_domain(hook),
             time_zone: hook.time_zone().as_str().to_owned(),
-            created_by: hook.created_by().clone(),
+            created_by,
             created_at: hook.created_at(),
             disabled_at: hook.disabled_at(),
             deleted_at,
@@ -298,9 +352,9 @@ pub(super) struct HookWithSecretResponse {
 }
 
 impl HookWithSecretResponse {
-    pub(super) fn from_result(result: &HookWithSecret, endpoint_url: Url) -> Self {
+    pub(super) fn from_result(result: &HookWithSecret, hook: HookResponse) -> Self {
         Self {
-            hook: HookResponse::from_domain(&result.hook, endpoint_url),
+            hook,
             signing_secret: result
                 .signing_secret
                 .as_ref()
@@ -355,8 +409,7 @@ impl CapturedRequestResponse {
 #[derive(Clone, Debug, Serialize)]
 pub struct EventResponse {
     id: EventId,
-    org_id: String,
-    silicon_id: String,
+    silicon: SiliconResponse,
     hook_id: HookId,
     provider: String,
     delivery_sequence: i64,
@@ -366,12 +419,11 @@ pub struct EventResponse {
     request: CapturedRequestResponse,
 }
 
-impl From<&EventRecord> for EventResponse {
-    fn from(event: &EventRecord) -> Self {
+impl EventResponse {
+    pub(super) fn new(event: &EventRecord, silicon: &SiliconRef) -> Self {
         Self {
             id: event.id(),
-            org_id: event.organization_id().as_str().to_owned(),
-            silicon_id: event.silicon_id().as_str().to_owned(),
+            silicon: SiliconResponse::from(silicon),
             hook_id: event.hook_id(),
             provider: event.provider().as_str().to_owned(),
             delivery_sequence: event.delivery_sequence().get(),
@@ -386,8 +438,7 @@ impl From<&EventRecord> for EventResponse {
 #[derive(Clone, Debug, Serialize)]
 pub(super) struct BlockedRequestResponse {
     id: BlockedRequestId,
-    org_id: String,
-    silicon_id: String,
+    silicon: SiliconResponse,
     hook_id: HookId,
     provider: String,
     reason_code: String,
@@ -397,13 +448,12 @@ pub(super) struct BlockedRequestResponse {
     request: CapturedRequestResponse,
 }
 
-impl From<&BlockedRequest> for BlockedRequestResponse {
-    fn from(blocked: &BlockedRequest) -> Self {
+impl BlockedRequestResponse {
+    pub(super) fn new(blocked: &BlockedRequest, silicon: &SiliconRef) -> Self {
         let snapshot = blocked.snapshot();
         Self {
             id: snapshot.id,
-            org_id: snapshot.organization_id.as_str().to_owned(),
-            silicon_id: snapshot.silicon_id.as_str().to_owned(),
+            silicon: SiliconResponse::from(silicon),
             hook_id: snapshot.hook_id,
             provider: snapshot.provider.as_str().to_owned(),
             reason_code: snapshot.reason.code().to_owned(),
@@ -512,72 +562,4 @@ mod tests {
         );
         Ok(())
     }
-}
-
-/// IAM-hosted login produces this single-use token. Hook never accepts OTPs.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct LoginRequest {
-    pub(super) slt: String,
-}
-
-impl fmt::Debug for LoginRequest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str("LoginRequest([REDACTED])")
-    }
-}
-
-/// Refresh-token rotation input.
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct RefreshRequest {
-    pub(super) refresh_token: String,
-}
-
-impl fmt::Debug for RefreshRequest {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("RefreshRequest([REDACTED])")
-    }
-}
-
-/// Tokens IAM issued to Hook for an actor.
-#[derive(Debug, Serialize)]
-pub(super) struct TokensResponse {
-    pub(super) access_token: OneTimeSecret,
-    pub(super) refresh_token: OneTimeSecret,
-    pub(super) token_type: &'static str,
-    pub(super) expires_in: u64,
-    pub(super) scopes: Vec<String>,
-    pub(super) actor: ActorRef,
-    pub(super) org_id: Option<String>,
-}
-
-impl TokensResponse {
-    pub(super) fn from_issued(tokens: IssuedTokens) -> Self {
-        Self {
-            access_token: OneTimeSecret::new(tokens.access_token),
-            refresh_token: OneTimeSecret::new(tokens.refresh_token),
-            token_type: "Bearer",
-            expires_in: tokens.expires_in.as_secs(),
-            scopes: tokens.scopes,
-            actor: tokens.actor,
-            org_id: tokens
-                .organization_id
-                .map(|organization_id| organization_id.as_str().to_owned()),
-        }
-    }
-}
-
-/// The Silicon's IAM hook after registration with IAM.
-#[derive(Debug, Serialize)]
-pub(super) struct IamHookResponse {
-    #[serde(flatten)]
-    pub(super) hook: HookResponse,
-    pub(super) iam_webhook: IamWebhookResponse,
-}
-
-/// IAM-side facts about the registered webhook.
-#[derive(Debug, Serialize)]
-pub(super) struct IamWebhookResponse {
-    pub(super) secret_version: u64,
 }

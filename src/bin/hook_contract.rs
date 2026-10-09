@@ -7,12 +7,12 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help") {
         println!(
-            "hook-contract <status|deprecate|activate> <v2>\nUses HOOK_MIGRATOR_DATABASE_URL.\nDeprecation starts a seven-day idle window. Activity restarts that window. Only deprecated contracts sunset.\nOperator database credentials are required. No actor sessions are accepted."
+            "hook-contract <status|deprecate|activate> <v3|v2|v1>\nUses HOOK_MIGRATOR_DATABASE_URL.\nDeprecation starts a seven-day idle window. Activity restarts that window. Only deprecated contracts sunset.\nv1 and v2 used Silicon IAM sign-in and stay sunset; activating them changes nothing the API serves.\nOperator database credentials are required. No account sessions are accepted."
         );
         return Ok(());
     }
     anyhow::ensure!(
-        args.len() == 2 && matches!(args[1].as_str(), "v2"),
+        args.len() == 2 && matches!(args[1].as_str(), "v3" | "v2" | "v1"),
         "use hook-contract --help"
     );
     let settings = MigrationSettings::from_env()?;

@@ -32,7 +32,7 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 aes-gcm = "0.10.3"
 anyhow = "1.0.100"
 async-trait = "0.1.89"
-axum = { version = "0.8.9", features = ["http2", "json", "macros", "matched-path", "ws"] }
+axum = { version = "0.8.9", features = ["http2", "json", "macros", "matched-path"] }
 base64 = "0.22.1"
 bytes = "1.11.0"
 dotenvy = "0.15.7"
@@ -69,14 +69,11 @@ tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 url = { version = "2.5.7", features = ["serde"] }
 uuid = { version = "1.26.0", features = ["serde", "v4", "v7"] }
 zeroize = { version = "1.8.2", features = ["derive"] }
-silicon-iam-client = { version = "=5.0.0", path = "vendor/silicon-iam-client" }
+silicon-accounts-client = "0.4.0"
 
 [dev-dependencies]
 pretty_assertions = "1.4.1"
 proptest = "1.8.0"
-testcontainers = "0.27.3"
-testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
-tokio-tungstenite = "0.29.0"
 wiremock = "0.6.5"
 
 [profile.release]
