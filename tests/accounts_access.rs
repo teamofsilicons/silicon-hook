@@ -638,3 +638,33 @@ async fn every_route_family_refuses_outsiders_and_lets_viewers_only_read() -> Re
     );
     Ok(())
 }
+
+#[tokio::test]
+async fn uuid128_accounts_work_and_retired_tokens_cannot_recreate_accounts() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let carbon = "a750a68a-1bc2-4b3f-888e-0349c9d7289a";
+    let silicon = "b750a68a-1bc2-4b3f-888e-0349c9d7289b";
+    api.accounts.add_carbon(carbon, "c:uuid-carbon");
+    api.accounts
+        .add_silicon(silicon, "si:uuid-silicon", Some((carbon, "c:uuid-carbon")));
+    let token = api.accounts.token(carbon, "carbon", "c:uuid-carbon");
+    let (status, body) = create_hook(&api, silicon, &token, "UUID hook").await?;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    api.accounts.add_carbon("OldUuid1", "c:retired-account");
+    sqlx::query("INSERT INTO hook_private.accounts_uuid128_map(old_uuid,new_uuid,kind,mapping_sha256) VALUES('OldUuid1','c750a68a-1bc2-4b3f-888e-0349c9d7289c','carbon','test')").execute(api.owner.pool()).await?;
+    let old = api
+        .accounts
+        .token("OldUuid1", "carbon", "c:retired-account");
+    let (status, body) = api
+        .call(Method::GET, "/api/v3/auth/status", Some(&old), None)
+        .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM hook_private.accounts WHERE uuid='OldUuid1'")
+            .fetch_one(api.owner.pool())
+            .await?;
+    assert_eq!(count, 0);
+    Ok(())
+}

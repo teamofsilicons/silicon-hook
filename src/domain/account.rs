@@ -1,8 +1,8 @@
 //! Silicon Accounts identities as Hook sees them.
 //!
 //! An account is a Carbon (`c:handle`) or a Silicon (`si:handle`). Its `uuid`
-//! (the access token's `sub`) is permanent, short and case-sensitive, such as
-//! `zQo`; it is what Hook stores. The public id can change and is only shown.
+//! (the access token's `sub`) is a canonical 128-bit UUID. Legacy short IDs stay
+//! readable during the coordinated backfill. Public IDs remain display names.
 
 use std::fmt;
 
@@ -13,7 +13,7 @@ use super::{ActorKind, DomainError};
 /// Maximum length Hook accepts for an Accounts uuid.
 pub const MAX_ACCOUNT_UUID_LENGTH: usize = 64;
 
-/// Permanent Silicon Accounts identifier: ASCII letters and digits, compared exactly.
+/// Permanent Silicon Accounts UUID, or a legacy identifier during migration.
 #[derive(Clone, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct AccountUuid(String);
 
@@ -22,7 +22,7 @@ impl AccountUuid {
     ///
     /// # Errors
     ///
-    /// Returns [`DomainError`] unless the value is 1 to 64 ASCII letters or digits.
+    /// Returns [`DomainError`] for a malformed canonical UUID or legacy identifier.
     pub fn new(value: impl Into<String>) -> Result<Self, DomainError> {
         let value = value.into();
         if value.is_empty() {
@@ -36,10 +36,10 @@ impl AccountUuid {
                 max: MAX_ACCOUNT_UUID_LENGTH,
             });
         }
-        if !value.bytes().all(|byte| byte.is_ascii_alphanumeric()) {
+        if !Self::looks_like(&value) {
             return Err(DomainError::InvalidFormat {
                 field: "account_uuid",
-                reason: "must contain only ASCII letters and digits",
+                reason: "must be a canonical UUID or a legacy alphanumeric account identifier",
             });
         }
         Ok(Self(value))
@@ -49,9 +49,14 @@ impl AccountUuid {
     /// public id, which always contains a colon).
     #[must_use]
     pub fn looks_like(value: &str) -> bool {
-        !value.is_empty()
+        (!value.is_empty()
             && value.len() <= MAX_ACCOUNT_UUID_LENGTH
-            && value.bytes().all(|byte| byte.is_ascii_alphanumeric())
+            && value.bytes().all(|byte| byte.is_ascii_alphanumeric()))
+            || (value.len() == 36
+                && uuid::Uuid::parse_str(value).is_ok_and(|id| {
+                    id.hyphenated().to_string() == value
+                        && id.get_variant() == uuid::Variant::RFC4122
+                }))
     }
 
     /// Returns the uuid exactly as issued.
@@ -251,7 +256,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn uuids_are_case_sensitive_alphanumerics() -> Result<(), Box<dyn std::error::Error>> {
+    fn standard_uuids_and_legacy_identifiers_are_accepted() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let standard = "550e8400-e29b-41d4-a716-446655440000";
+        assert_eq!(AccountUuid::new(standard)?.as_str(), standard);
+        assert!(AccountUuid::new(standard.to_uppercase()).is_err());
+        assert!(AccountUuid::new("550e8400-e29b-41d4-c716-446655440000").is_err());
         assert_eq!(AccountUuid::new("zQo")?.as_str(), "zQo");
         assert_ne!(AccountUuid::new("a8K")?, AccountUuid::new("A8k")?);
         assert!(AccountUuid::new("").is_err());

@@ -135,6 +135,20 @@ impl HookApplication {
                 "The access token's subject is not a Silicon Accounts uuid.",
             )
         })?;
+        let retired: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM hook_private.accounts_uuid128_map WHERE old_uuid=$1)",
+        )
+        .bind(uuid.as_str())
+        .fetch_one(self.store.pool())
+        .await
+        .map_err(|e| map_store_error(e.into()))?;
+        if retired {
+            return Err(refused(
+                401,
+                "session_ended",
+                "This account identity was migrated. Sign in to Hook again.",
+            ));
+        }
         let kind = claims.kind.map(kind_of).ok_or_else(|| {
             refused(
                 401,

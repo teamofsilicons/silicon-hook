@@ -1244,9 +1244,9 @@ components:
           type: string
     AccountUuid:
       type: string
-      pattern: "^[A-Za-z0-9]{1,64}$"
-      description: Permanent Silicon Accounts identifier (short, case-sensitive). Key on it.
-      example: 8HV
+      pattern: "^([A-Za-z0-9]{1,64}|[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12})$"
+      description: Permanent 128-bit Silicon Accounts UUID in canonical lowercase hyphenated form. Legacy short IDs are accepted only during the coordinated migration.
+      example: 550e8400-e29b-41d4-a716-446655440000
     PublicId:
       type: string
       pattern: "^(c|si):[!-~]+$"

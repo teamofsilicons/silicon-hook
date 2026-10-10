@@ -127,3 +127,5 @@ GRANT INSERT ON hook_private.telemetry_events TO :"api_role", :"worker_role";
 GRANT SELECT, DELETE ON hook_private.telemetry_events TO :"worker_role";
 GRANT UPDATE (exported_at) ON hook_private.telemetry_events TO :"worker_role";
 GRANT EXECUTE ON FUNCTION hook_private.contract_status(text, boolean) TO :"api_role", :"worker_role";
+
+GRANT SELECT ON hook_private.accounts_uuid128_map TO :"api_role";

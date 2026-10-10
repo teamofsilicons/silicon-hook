@@ -1,0 +1,42 @@
+{
+  "app": "hook",
+  "schema": "hook_private",
+  "schemas": [
+    "hook",
+    "hook_private"
+  ],
+  "allow_unknown_kind": true,
+  "columns": [
+    "hook_private.accounts.uuid",
+    "hook_private.accounts.custodian_uuid",
+    "hook_private.account_ids.account_uuid",
+    "hook_private.accounts_events.account_uuid",
+    "hook_private.identity_links.accounts_uuid",
+    "hook.hooks.silicon_uuid",
+    "hook.hooks.created_by_uuid",
+    "hook.events.silicon_uuid",
+    "hook.blocked_requests.silicon_uuid",
+    "hook_private.retired_endpoint_keys.silicon_uuid",
+    "hook_private.audit_log.silicon_uuid",
+    "hook_private.audit_log.actor_uuid",
+    "hook_private.silicon_grants.silicon_uuid",
+    "hook_private.silicon_grants.grantee_uuid",
+    "hook_private.silicon_grants.granted_by_uuid",
+    "hook_private.silicon_allowances.silicon_uuid",
+    "hook_private.silicon_allowances.allowed_uuid",
+    "hook_private.silicon_allowances.added_by_uuid",
+    "hook_private.observer_subscriptions.silicon_uuid",
+    "hook_private.observer_subscriptions.recipient_uuid",
+    "hook_private.ting_outbox.recipient_id"
+  ],
+  "json_columns": [],
+  "expire_columns": [
+    "hook_private.management_idempotency.actor_id"
+  ],
+  "preserved": [
+    "All legacy silicon_id/actor_id/created_by_id namespace columns and provider-facing URLs",
+    "Actual hook encrypted_signing_secret/key/nonce and all resource IDs",
+    "Immutable ting_outbox request_body and idempotency_key; historical IAM sealed credentials and recipient bindings",
+    "Incoming provider event bodies, headers, summaries and telemetry"
+  ]
+}

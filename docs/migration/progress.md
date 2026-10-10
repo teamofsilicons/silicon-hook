@@ -771,3 +771,9 @@ identity cutover remain release gates. No production deployment performed.
 The user has additionally requested standard128-bit account UUIDs and migration
 of existing account IDs across linked apps. That follow-up is being implemented
 as a separate coherent change using one Accounts mapping export.
+
+## UUID cutover replay and coverage verification — 10 October 2026
+
+The checked CSV consumer now refuses incomplete legacy-account coverage before changing data and parks unaccepted prepared notifications without rewriting historical body/event identities. Dry-run, apply, idempotent reapply, conflicting-map refusal and missing-map refusal passed populated PostgreSQL clones. Explicit pending notification fixtures verified immutable-body preservation and replay exclusion. See [uuid128.md](uuid128.md) for schema-specific preservation rules and local evidence. No production data or original checkout changed.
+
+Hook migration0020 accepts canonical UUIDs;0021 stores the retired-subject ledger. API auth checks it before observing token accounts. Full-schema rehearsal preserved seven decrypted hook secrets and stable ingress namespaces, expired16 actor-bound replay rows, and retained an unknown-kind tombstone. Accounts access8/8 and all-target clippy passed (`.mig/uuid-backfill-auth.log`, `.mig/uuid-backfill-clippy.log`).
