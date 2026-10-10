@@ -2,7 +2,7 @@
 //! send only what you set.
 //!
 //! Accounts are keyed by their permanent Silicon Accounts `uuid` (a canonical
-//! lowercase 128-bit UUIDv4) and shown by their current `id` (`c:ada`, `si:scout`), which can
+//! lowercase 128-bit `UUIDv4`) and shown by their current `id` (`c:ada`, `si:scout`), which can
 //! change.
 
 use serde::{Deserialize, Serialize};
