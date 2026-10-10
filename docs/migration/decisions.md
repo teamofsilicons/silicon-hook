@@ -125,3 +125,107 @@ stage has not built yet.
 ### Telemetry operations
 The server's allow-list of client telemetry operation names is unchanged; the CLI stage adds the names of its new
 commands there (`src/telemetry/events.rs` and the OpenAPI `TelemetryEvent` schema).
+
+## Stage 2: client crate and CLI
+
+### Versions: client and CLI 1.0.0
+`silicon-hook-client` and `silicon-hook-cli` are 1.0.0 (hook.md: breaking). The service crate stays 0.10.1 until
+the release stage sets the service version. `honeycomb.yaml` follows the CLI version only so the old packager's
+version check stays consistent until the release stage replaces it with `apps.yaml`.
+
+### Sign-in lives in the client crate (`silicon_hook_client::signin`)
+UNDERSTANDING says the CLI has no feature the Rust package lacks, so the public-client sign-in (device flow,
+short-lived token exchange, refresh, revoke) is in the client crate, built on `silicon-accounts-client` 0.4.0.
+Two calls are sent directly because the published 0.4.0 lacks them: the public-client SLT exchange (the same form
+POST that `exchange_slt_public_client` sends in the unpublished source) and the public-client revoke
+(`revoke_public_client` accepts only Silicon Accounts' own client ids). Both are marked in the code to switch to the
+crate once a release has them. The device wait loop is our own because `wait_for_device_tokens` polls with the
+first-party client id.
+
+### No proof-authenticated calls in Hook's client
+The cross-app matrix has no app calling Hook on someone's behalf, and UNDERSTANDING says Hook exposes no OBO
+endpoints, so the client has no `Authorization: Proof` support. Other apps call Hook as the Silicon with its own
+Hook token (hook.md).
+
+### Typed errors keep Hook's envelope
+Hook's service answers `{error: {code, message, request_id, details}}` (it has no `hint` field yet). The client's
+`ApiError` keeps all of them plus `hint` (read when present) and `retry_after`; sign-in failures are
+`Error::SignIn` with a kind (`SltRefused(reason)`, `SessionEnded`, `Denied`, `Expired`, `NotEnabled`,
+`Unavailable{maybe_processed}`, `Rejected`). The SLT refusal reason is read from Silicon Accounts' exact
+`error_description` (already used, expired, another app, unknown, not an SLT, sign-in ended).
+
+### Output stays JSON on stdout; errors get stable codes and exit codes
+The CLI kept its existing style (results as JSON on stdout, next-step hints on stderr, `--json` silences hints).
+Errors are now `{"error": {code, message, hint, status, request_id, exit_code}}` with `--json`, and exit codes follow
+silicon-accounts (1 failure, 2 invalid input, 3 sign-in, 4 not found, 5 conflict, 6 rate limited, 130 interrupted).
+`hook login status` without `--json` exits 1 when signed out, like `silicon-accounts login status`.
+
+### Session file and legacy state
+Sessions are written to `.silicon-hook/profiles.json` (0600, directory 0700, atomic write, `profiles.lock`); the
+IAM-era `state.json` is never read for credentials and never changed. Its non-secret settings carry over once (a
+non-default URL, the default Silicon, and the telemetry choice, so an opt-out survives the upgrade), and a profile
+that had a session reports `previous_version_session` until it signs in again. Profiles (`--profile`) stay.
+A `profiles.json` that cannot be parsed is reported (`state_unreadable`, `login status --json` still exits 0) and is
+never overwritten, except by `hook login`, which moves it aside (kept for inspection) and starts a new one, so an
+automated Silicon can always recover by signing in.
+
+### A sign-in is bound to its services
+A saved session records the Silicon Accounts URL and the Hook API URL it was made with. If either in effect differs
+(flag, environment, `config set`), the CLI refuses to send the token (`signed_in_elsewhere`) instead of leaking it
+to another service. `config set url|accounts-url` on a signed-in profile is refused with "sign out first".
+
+### Refresh: single flight, and never present a possibly spent refresh token
+Refresh happens under the state lock when less than 60 seconds remain; a process that waited for the lock re-reads
+the file and uses the token another process just saved. Before sending a refresh the CLI saves a
+`refresh_started_at` marker. If a later command finds the marker (the earlier one was killed mid-refresh), or a
+refresh fails after the request may have reached Silicon Accounts (a timeout, an unreadable answer), the CLI does
+not present that refresh token again: a spent token presented again ends the whole sign-in as theft
+(`refresh_token_reuse`, which Hook's service turns into a sign-out of every Hook session of the account). It revokes
+the token instead (ending only this sign-in, reason `app_revoked`, which Hook ignores), forgets the session and
+reports `refresh_interrupted`. A refresh that fails before reaching Silicon Accounts (connection refused) keeps the
+session.
+
+### One retry after Hook refuses a token
+If Hook answers 401 to a command (for example `session_ended` because another sign-in of the account ended), the CLI
+refreshes once and retries the same request (mutations keep their idempotency key). `login status` does the same
+before reporting `authenticated: false` with Hook's reason.
+
+### `hook login` replaces a previous sign-in and signs it out
+Signing in again in the same profile saves the new session first, then revokes the previous refresh token (best
+effort, reason `app_revoked`), so old sign-ins are not left behind in the account's session list.
+
+### The positional SLT, `--slt-file` and `hook iam --json` stay as compatibility forms
+`hook login <SLT>` stays documented (UNDERSTANDING and the Silicon runtime use it). The pre-1.0 `--slt-file <path|->`
+is accepted but hidden. `hook iam --json` is hidden and prints exactly `hook accounts --json` (brief: one minor
+release); `hook docs iam` quietly shows the sign-in guide. No `HOOK_SLT` variable: the CLI never had one.
+
+### Removed flags explain themselves
+`--org`, `--test` and `--production` still parse (hidden) so that old scripts get a precise error (exit 2) naming
+what replaced them, instead of clap's generic "unexpected argument". `SILICON_ORG` and `SILICON_HOOK_ORG` are
+ignored silently because Silicon runtimes still export them.
+
+### Which Silicon a command acts on
+`--silicon` (a `si:` id or uuid), then `hook config set silicon`, then a signed-in Silicon's own uuid (uuid rather
+than id, so a rename between commands cannot redirect them). A Carbon without one gets an error naming
+`hook silicons`. A `c:` id is refused locally.
+
+### Commands
+New: `hook login` (device flow), `--slt-stdin`, `login status --offline`, `accounts`, `silicons`,
+`access list|grant|revoke|leave`, `allow-list list|add|remove`, `connect-accounts [--secret-file]`,
+`system delivery`, `config unset`, `config set accounts-url`. Removed: `iam` (hidden alias), `env`, `publisher`,
+`connect-iam`, `receiving authorize|complete|authorization-status|disconnect-authorization|scope|bootstrap`,
+`config set org`. `connect-accounts --secret-file -` creates or restores the hook and stores the `whsec_` secret in
+one step; without it, the answer says `secret_stored_now: false` (the hook's generated placeholder secret is not
+Silicon Accounts' one).
+
+### Telemetry
+Unchanged in spirit: one event per command, only while signed in, never refreshing a token for it, 500 ms at most,
+off with `config set telemetry off` or `SILICON_HOOK_TELEMETRY=off`. The service's operation allow-list gained the
+new command names.
+
+### Docs bundled with the CLI
+`hook docs` covers overview, signin, cli, client, receiving, signatures/api, delivery, contracts, configuration,
+telemetry, deployment and releases; all were rewritten for Silicon Accounts and API v3 except `deployment` (service
+stage) and `releases` (release stage). The IAM guide, the test-environment guides and the Ting-issues record are no
+longer bundled or published on the docs site; the files stay in `docs/` for the release stage's history move. The
+bundle check now also fails on leftover copies.

@@ -80,3 +80,16 @@ Replace with:
 ## Identifier schema
 Replace the last sentence of the first paragraph with "Accounts are stored by their Silicon Accounts uuid and shown
 by their current id." and drop the mention of `org_id`.
+
+## Rust Package & CLI (added by the client and CLI stage)
+- "if you need a local store for auth or something else, use `{home_dir}/.{appname}/dir`": Hook has always used
+  `.silicon-hook` (not `.hook`), and keeps it so existing installations keep their settings. Suggested wording:
+  "Hook keeps its local state in `{home_dir}/.silicon-hook/`."
+- "For logging in via the cli or the package for any carbon/silicon you don't ask for their credentials or redirect
+  them anywhere, instead you just request for their short lived token": Carbons now sign in with a device code they
+  approve in the browser (no credentials are typed into the CLI). Suggested wording: "The CLI never asks for
+  credentials. A Carbon runs `hook login` and approves the printed code at Silicon Accounts; a Silicon (or anyone
+  holding one) passes a short-lived token: `hook login <slt>`, or
+  `silicon-accounts login --app hook -q | hook login --slt-stdin`."
+- "`login status --json` ... reports `authenticated: true`, alongside which carbon or silicon": add "with its uuid,
+  id and kind; `{"authenticated": false}` when signed out".

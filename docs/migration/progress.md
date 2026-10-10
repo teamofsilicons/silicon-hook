@@ -146,3 +146,151 @@ managing the hooks. Everything was stopped and dropped afterwards (script: scrat
 - The local Accounts CLI defaults to production when `--url` and `ACCOUNTS_URL` are absent; the e2e run used plain
   HTTP calls to 127.0.0.1:9589 instead.
 - A per-worktree `info/exclude` is ignored (git reads the common dir); `.mig/.gitignore` holds `*`.
+
+## 2026-10-10 — Stage 2: client crate and CLI
+
+### What the CLI stage did
+
+- **`silicon-hook-client` 1.0.0** speaks API v3 only (handshake advertises and pins `v3`). Bearer = a Silicon
+  Accounts access token issued to Hook. Gone: Hook-mediated SLT login/refresh/logout, `with_organization`,
+  test-key/test-app-secret selection, publisher provisioning, Ting authorization, scoped test receivers,
+  `environments`, the crates.io `updater`, `connect_iam_hook`. New: `signin` (device flow with
+  interval/`slow_down`/expiry, public-client SLT exchange with the exact refusal reason, refresh, revoke — built on
+  `silicon-accounts-client` 0.4.0, two form POSTs sent directly because the published crate lacks them), `silicons`,
+  `access`/`grant`/`revoke`/`leave`, `allow_list`/`allow`/`disallow`, `connect_accounts_hook`, `delivery_status`,
+  `sign_in_information`, typed `Error::Api(ApiError{status, code, message, details, hint, request_id, retry_after})`
+  and `Error::SignIn`. Models show accounts as `{uuid, id}`; the Ting `EventReference` carries
+  `silicon: {uuid, id}` and refuses the old tenant/environment fields; the receiver matches `for` given as uuid, id
+  or `{uuid, id}`. Examples rewritten.
+- **`hook` 1.0.0**: `hook login` = Carbon device flow (`--json` progress lines, `--open`), `--slt-stdin`,
+  `--slt`, positional `<SLT>` (and hidden `--slt-file`); `login status [--offline]` (always exit 0 with `--json`;
+  exit 1 signed out without it); `logout` revokes at Silicon Accounts; `whoami`; `accounts --json` (offline, exit 0;
+  hidden `iam --json` prints the same); new `silicons`, `access`, `allow-list`, `connect-accounts`,
+  `system delivery`, `config set accounts-url`/`config unset`. Removed `--org`/`--test`/`--production` (hidden, fail
+  with an explanation), `env`, `publisher`, `connect-iam`, Ting-approval and sandbox `receiving` subcommands.
+  Sessions in `.silicon-hook/profiles.json` (0600, atomic, `profiles.lock`), refreshed once under the lock with an
+  interrupted-refresh marker; IAM-era `state.json` untouched, settings carried over, `previous_version_session`
+  reported. Structured errors with stable codes and exit codes 1–6/130.
+- **Service**: telemetry operation allow-list (and the OpenAPI `TelemetryEvent` enum) gained the new command names;
+  the request-event filter now skips `/api/v3/telemetry` (it named the retired v2 path).
+- **Docs**: new `docs/accounts/README.md` (Sign in to Hook); rewritten overview, CLI, Rust client, receiving
+  through Ting, API reference (v3), delivery, contracts, configuration, telemetry. `scripts/bundle-cli-docs.py`
+  bundles exactly the `hook docs` topics and refuses leftovers; the docs site no longer publishes the IAM,
+  test-environment and Ting-issue records (files kept for the history move) and its footer says API v3.
+
+### Commits
+
+| commit | subject |
+|---|---|
+| 26522d5 | Sign the client and the hook CLI in with Silicon Accounts (1.0.0) |
+| 78d8d7a | Accept the 1.0 CLI's command names in client telemetry |
+| 252ddcc | Say what connect-accounts stored, and give account refusals precise hints |
+| cd0e18a | Document signing in with Silicon Accounts, the 1.0 CLI and client, and API v3 |
+
+### Tests (final run, 2026-10-10)
+
+`export CARGO_TARGET_DIR=$PWD/target/mig CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3
+HOOK_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5460/postgres`
+
+| command | result |
+|---|---|
+| `cargo test --workspace --locked --all-targets --all-features` | all pass. Service unchanged (lib 137; accounts_access 5; accounts_webhook 5; migration_upgrade 1; postgres_integration 19 + 1 ignored; ting_delivery 2). CLI: unit 12, `commands` 6, `discovery` 5, `login` 15. Client: unit 1, `api` 6, `byos` 1, `signin` 8, `ting_delivery` 13 |
+| `cargo fmt --all --check` | ok |
+| `cargo clippy --workspace --locked --all-targets --all-features -- -D warnings` | ok |
+| `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --locked --no-deps --all-features` | ok |
+| `cargo deny --locked check` | advisories, bans, licenses, sources ok |
+| `npx --yes @redocly/cli@2.49.0 lint openapi.yaml` | valid (1 documented ignore) |
+| `python3 scripts/bundle-cli-docs.py --check` | ok |
+| `python3 -m unittest discover -s scripts -p 'test_*.py'` | 4 ok (needed `honeycomb.yaml` at 1.0.0) |
+| `npm run build && npm run check` in `docs-site` | 20 pages, 750 local links ok |
+| `cargo package --list -p silicon-hook-client` / `-p silicon-hook-cli` | ok |
+| `cargo publish --dry-run -p silicon-hook-client` | ok (nothing uploaded). The CLI's dry run needs client 1.0.0 on crates.io first |
+
+What the new tests cover: client — v3 handshake refusing a v2 server before any token is sent, every path/verb/body
+(hooks, history, access, allow-list, accounts hook, delivery), the error envelope (details, hint, request id,
+Retry-After), URL rules; sign-in against a stub Silicon Accounts — device flow pending → slow_down (+5 s measured)
+→ approved, denied, expired, deadline, transient 503 retried; SLT exchange with `client_id=hook` and no secret,
+each refusal reason, `NotEnabled`, local refusal of non-SLTs (nothing sent); refresh rotation and ended sign-ins;
+revoke form; unreachable Accounts = `Unavailable{maybe_processed: false}`; Ting callbacks and hydration with the new
+reference (renamed Silicon still hydrates by uuid, pre-1.0 references refused, Carbon observers). CLI — argument
+tree, help without retired words, retired commands rejected, target selection, session binding; state perms (0700 /
+0600), atomic writes, the lock blocks a second holder, unreadable file handling, legacy import (opt-out kept,
+tokens never read, `state.json` untouched); with the real binary against a stub Accounts + Hook: discovery in an
+empty home and with no HOME at all, device flow with NDJSON lines, denied/expired, SLT never echoed or stored, each
+refusal reason, refresh saved before use, five concurrent commands → exactly one refresh and no reuse, three
+commands blocked by a held lock → zero refreshes until released then one, ended sign-in forgotten, interrupted
+refresh revoked instead of presented, 401 → one refresh + retry, logout revokes, legacy state, unreadable state
+recovered by login, `signed_in_elsewhere`, `--org` refused, telemetry on/off, every management command's request.
+
+### End to end against the shared local Silicon Accounts stack
+
+hook-api ran on 127.0.0.1:4201 (database `hook_cli_e2e` on 5460, runtime roles `hook_cli_api`/`hook_cli_worker`
+with the real grant manifest; `ACCOUNTS_URL=http://localhost:9590`, `ACCOUNTS_API_URL=http://127.0.0.1:9589`,
+hook's dev secret, Ting off). Scripts: scratchpad `hook-scripts/cli-service.sh start|stop`,
+`cli-e2e-silicon.sh`, `cli-e2e-carbon.sh`, `cli-e2e-refresh.sh` (they never print STKs, SLTs or tokens). Identities:
+Carbon `c:hook-cli-c1-99293` (uuid `dio`) and its Silicon `si:hook-cli-s1-99293` (uuid `PB7`).
+
+- **Silicon**: `mint.mts slt --app hook` → `printf %s "$SLT" | hook login --slt-stdin` in a fresh `SILICON_HOME` →
+  `authenticated: true, uuid PB7, kind silicon, verified: true` → `login status --json` verified by Hook →
+  `hook create GitHub --unsigned` (201, `silicon {uuid PB7, id si:hook-cli-s1-99293}`, created_by the Silicon) →
+  `hook create Stripe` (signed, generated secret returned once) → a provider POST to the GitHub URL answered
+  `webhook.ok` → `hook list` (2 hooks) → `hook events --hook …` (`GitHub triggered at 02:43:06 10-10-2026 UTC`,
+  body `{"action":"opened"}`) → `hook event <id>` → `hook publication <id>` (`state: delivery_disabled` with the
+  explanation) → `hook rotate secret` → `hook connect-accounts` (`set_webhook: silicon-accounts webhook set
+  http://127.0.0.1:4201/silicon/si:hook-cli-s1-99293/HG3RQINL`) → `hook access list` (`you: self`, custodian
+  `c:hook-cli-c1-99293`) → `hook system delivery` (`enabled: false` + reason) → `hook logout` (`revoked: true`) →
+  `login status --json` = `{"authenticated": false}` → `hook --json list` exit 3 `not_signed_in`.
+- **Carbon (device flow)**: `hook login --json &` printed
+  `{"event":"device_code","user_code":"9X2C-M58A","verification_uri":"http://localhost:9590/device",…,"interval":5}`
+  → `mint.mts approve --email hook-cli-c1-99293@example.test --code 9X2C-M58A` (204) → the CLI finished
+  (`kind carbon, uuid dio, method device, verified true`) → `hook silicons` (`PB7`, access `custodian`) →
+  `hook --silicon si:hook-cli-s1-99293 list` (the Silicon's 3 hooks) and `events` → `create Linear` recorded
+  `created_by {uuid dio, kind carbon}` (the custodian, not the Silicon) → granting an unknown `c:` id: exit 4
+  `account_not_found` with Hook's message → `hook --json list` without `--silicon`: exit 2 "Which Silicon?" naming
+  `hook silicons` → `hook logout` (`revoked: true`).
+- **Refresh and sign-out at the real stack**: after `hook login <SLT>` (positional), the saved access token was set
+  to expire in 10 s; `hook list` refreshed with `client_id=hook` (refresh and access token digests both changed,
+  new expiry 1800 s, no marker left), `login status --json` verified; after `hook logout`, presenting its refresh
+  token answered `invalid_grant … revoked at … (app_revoked)`.
+- **Refusals at the real stack**: reusing an SLT → exit 3 `details.reason: already_used`; an SLT minted with
+  `--app dm` → `wrong_app` ("issued for the app 'dm', not for 'hook'"); `slt_mistyped` → `unknown`; an SLT used
+  three seconds after its two minutes → `expired` ("expired at 2026-10-10T02:59:08.315Z (they last 120 seconds)").
+  Each hint says `silicon-accounts login --app hook -q | hook login --slt-stdin`.
+- **Discovery in an empty `HOME`/`SILICON_HOME`** (`env -i HOME=$E SILICON_HOME=$E PATH=/usr/bin:/bin`):
+  `hook --help` exit 0 (5,436 bytes); `hook accounts --json` exit 0 →
+  `{"app_id":"hook","name":"Silicon Hook","version":"1.0.0","accounts_url":"https://accounts.teamofsilicons.com","api_url":"https://backend.hook.teamofsilicons.com","api_version":"v3","docs":…,"repository":…,"install":"silicon-apps install hook","sign_in":{…},"state_dir":"$E/.silicon-hook"}`;
+  `hook login status --json` exit 0 → `{"authenticated": false}`; `hook iam --json` identical to
+  `accounts --json`; no file created in the home.
+
+### Blocked on
+
+- Nothing new. The service stage's Ting note still applies (Ting must accept Silicon Accounts proofs before
+  `HOOK_TING_URL` is set in production).
+
+### Left for later stages
+
+- Release stage: `apps.yaml` + `scripts/package-apps.sh` + release workflow (replace `honeycomb.yaml`,
+  `scripts/package-cli.py`, `scripts/test_package_cli.py`; `honeycomb.yaml` was only bumped to 1.0.0);
+  `docs/releases.md` and the tail of `docs/deployment.md` (CLI release artifacts) still describe Honeycomb;
+  `docs/install.sh` (copied by the docs site) is the Honeycomb installer shim; root `README.md`, `API_DOCS.md`,
+  `IAM_INTEGRATION.md`, `RELEASE_IAM5.md`, `docs/verification/*`, and the move of `docs/iam`, `docs/testing`,
+  `docs/ting-integration-issues.md`, `docs/ting-implementation.md`, `docs/frontend-iam5-contexts.md` into
+  `docs/history/` (the docs site already skips them and `history/`). The service crate version (0.10.1 → 1.0.0).
+- Web stage: the web console must call API v3 with `silicon: {uuid, id}` shapes (see `docs/api/README.md`);
+  `docs-site/build.mjs` copies `web/public/brand/mark.svg` as the favicon, keep or move that file.
+- e2e stage: `scripts/dev-accounts.sh`; the CLI scripts above can be reused. The webhook scenarios (id change,
+  access removed) were proven by the service stage, not re-run here.
+- Silicon runtime (outside the migration): it runs `hook login <SLT>` and `hook iam --json`; both still work (the
+  alias is hidden). It must mint the token with `silicon-accounts login --app hook -q`.
+
+### Gotchas
+
+- `std::env::set_var` is `unsafe` in Rust 2024 and the crates forbid unsafe code: unit tests that need another
+  state directory call `Locked::open_in(dir)`; the binary's behaviour with environment variables is tested by
+  spawning it.
+- Integration tests spawn the real binary with `env_clear()` plus `PATH` (the device flow's label runs `hostname`)
+  and `SILICON_HOOK_TELEMETRY=off`.
+- `tokio::join!` is needed to start several `hook` processes at once; awaiting the futures in order runs them one
+  after the other.
+- The local stack's device flow interval is 5 s; approving with `mint.mts approve` right after the code is printed
+  finishes the login within one interval.
