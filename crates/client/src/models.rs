@@ -1,8 +1,8 @@
 //! Hook API v3 wire models. Responses tolerate fields added later; requests
 //! send only what you set.
 //!
-//! Accounts are keyed by their Silicon Accounts `uuid` (short, case-sensitive,
-//! permanent) and shown by their current `id` (`c:ada`, `si:scout`), which can
+//! Accounts are keyed by their permanent Silicon Accounts `uuid` (a canonical
+//! lowercase 128-bit UUIDv4) and shown by their current `id` (`c:ada`, `si:scout`), which can
 //! change.
 
 use serde::{Deserialize, Serialize};

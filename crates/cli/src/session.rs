@@ -363,7 +363,7 @@ pub fn validate_silicon(value: &str) -> CliResult<()> {
     if value.contains(['/', '\\', '?', '#', ' ']) || value.len() > 120 {
         return Err(CliError::invalid(
             format!("`{value}` is not a Silicon id or uuid."),
-            "Silicon ids look like si:scout; uuids are short case-sensitive strings like zQo.",
+            "Silicon ids look like si:scout; account UUIDs use the canonical lowercase UUIDv4 form.",
         ));
     }
     Ok(())

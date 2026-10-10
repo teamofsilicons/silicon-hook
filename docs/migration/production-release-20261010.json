@@ -27,10 +27,10 @@
   "public_github_releases": [
     "https://github.com/teamofsilicons/silicon-hook/releases/tag/v1.0.0"
   ],
-  "crates_published": [
-    "silicon-hook-client",
-    "silicon-hook-cli"
-  ],
+  "crates_published": {
+    "silicon-hook-client": "1.0.0",
+    "silicon-hook-cli": "1.0.0"
+  },
   "authenticated_browser": {
     "keyboardConfirmation": true,
     "authenticated": true,
@@ -49,10 +49,25 @@
   "webhook_signed_ping": "delivered",
   "temporary_fixture": {
     "uuid": "6af7bf6a-2fec-4f09-a502-c11447b8f4ac",
-    "account_deletion": "held for coordinator-requested Remind verification",
-    "android_device": "removed; access revoked; session ended; owned emulator stopped"
+    "account_deletion": "Permanently deleted after DM/Extend/Commit/Hook and Remind verification; existing IAM accounts untouched",
+    "android_device": "removed; access revoked; session ended; owned emulator stopped",
+    "cleanup_receipt": ".migration/live/parallel/release-validation-cleanup.private.json",
+    "receiver": "Deleted after verified Remind timer delivery; subscription removed and reminder archived",
+    "revocation_proof": "Unexpired fixture Hook access token returns HTTP 401 after account deletion",
+    "dm_messages": "Both fixture messages replaced with tombstones; private local relay stopped"
   },
   "evidence_directory": ".migration/live/parallel/hook/",
   "pr": "https://github.com/teamofsilicons/silicon-hook/pull/6",
-  "merge": "pending final branch CI"
+  "post_release_backup": {
+    "destination": "s3://silicon-hook-standalone-artifacts-lxpfsbc0jpuk/parallel-accounts-20261010/hook/backups/20261010T151443Z.tar.gz",
+    "sha256": "723adb54a23ed41c73969fdcd0787864544eaa5b32bfdd2d9a312a8b7d7ea890",
+    "bytes": 13888669,
+    "restore_verified": true,
+    "restore_network": "none",
+    "created_at": "2026-10-10T15:14:39.671971+00:00"
+  },
+  "optional_dependencies": {
+    "ting": "Not configured on fresh Accounts service; native product reads and retained events remain available"
+  },
+  "merge_evidence_url": "https://github.com/teamofsilicons/silicon-hook/pull/6"
 }

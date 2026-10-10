@@ -793,3 +793,10 @@ After Accounts restarted with the applied shared map, a previously valid old-sub
 Stopped every development API/worker/provider owned by this app and preserved the post-cutover database plus required private runtime state as mode-0600 archives. All four owned port blocks (4120–4159 and 4200–4239) have no listeners. Evidence: Commit `.mig/cutover/final-cleanup.json`, including backup SHA256 values. Shared Accounts/PostgreSQL cleanup is coordinated by the root task; unrelated pre-existing services were untouched.
 
 The local macOS ARM64 archive is a **development-profile candidate** (debug symbols disabled, unoptimized), with native discovery and extracted archive validation completed. It is not an optimized or published release; other target release builds and production deployment remain separate gates.
+
+
+## Production parallel rollout — 10 October 2026
+
+The later user request to get the apps live supersedes the earlier local-only release gates above. The new Accounts API and Silicon UI website are live on `api.hook.teamofsilicons.com` and `hook.teamofsilicons.com`, with an isolated Accounts store. Existing IAM backends, data, keys, clients and Silicon custody remain in place. No existing Silicon was imported or reenrolled.
+
+All six optimized CLI archives passed actual native discovery and authentication-status execution. Exact runtime, UI, binary and verifier revisions, publication links, genuine production product checks, backup qualifications and optional integration limits are recorded in [production-release-20261010.json](production-release-20261010.json). The one explicitly authorized validation Silicon was permanently deleted after the shared Remind delivery proof; its Hook receiver, Android access/session, DM messages and local test processes were cleaned up. Its unexpired Hook bearer returns 401. Human-owned understanding files remain unchanged.
