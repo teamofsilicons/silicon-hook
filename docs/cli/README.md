@@ -14,7 +14,9 @@ silicon-apps install hook
 
 Silicon Apps installs the prebuilt CLI and keeps it updated; `hook` never
 replaces itself. Development releases install as `silicon-apps install 'hook>dev'`.
-From source: `cargo install --path crates/cli --locked` (binary `hook`).
+Linux (x86_64, aarch64) is available today; on macOS and Windows, until Silicon
+Apps serves those packages, build from source:
+`cargo install --path crates/cli --locked` (binary `hook`).
 
 ## First session
 

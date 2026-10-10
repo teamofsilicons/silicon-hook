@@ -2,7 +2,7 @@
 
 Hook 0.8.0 is deployed and published. The [September 23 production record](ting-live-0.8.0.md) covers the native backend, gateway, website, docs, six-platform package and real production delivery. The separate [local integration record](ting-e2e-2026-09-23.md) retains its original test scope. The release history below predates this migration.
 
-The September 16 changes are deployed: Honeycomb lifecycle participation, migration 9, final-send delivery fences, durable activity reporting and CLI release packaging. The API and worker were deployed as native systemd services on September 17, including migration 9 in both databases. The Honeycomb 0.6.0 archive contains all six native builds for `tos>hook` and is publicly available. The September 17 CLI 0.6.1 patch is also published. See [the lifecycle contract](../testing/honeycomb.md) and [release build](../releases.md). The earlier verification below describes the September 13 release, including its superseded source installer.
+The September 16 changes are deployed: Honeycomb lifecycle participation, migration 9, final-send delivery fences, durable activity reporting and CLI release packaging. The API and worker were deployed as native systemd services on September 17, including migration 9 in both databases. The Honeycomb 0.6.0 archive contains all six native builds for `tos>hook` and is publicly available. The September 17 CLI 0.6.1 patch is also published. See [the lifecycle contract](../testing/honeycomb.md) and [release build](../releases-before-1.0.md). The earlier verification below describes the September 13 release, including its superseded source installer.
 
 Local validation: 162 workspace unit/integration and WebSocket tests pass (one opt-in live telemetry test remains ignored). Restricted-role PostgreSQL regressions cover failed-clean retry, concurrent identical operations, endpoint tombstones, stale writes and deliveries, key rotation, disable/restore/purge, service authentication and IAM shared readiness. Strict Clippy, dependency policy, packaging regressions and the 18-page documentation build/link check pass. Rustls is patched to 0.23.45. The initial archive uses client/CLI and manifest version 0.6.0; CLI and manifest 0.6.1 supersede it as described below. The 19 MiB local archive passes Honeycomb 0.2.0 directory and archive validation, and every archived file matches its staged input. Both Linux and both macOS builds pass `--version` and `--help`; Windows x86_64 and ARM64 pass architecture/import checks with the Visual C++ runtime statically linked, but have not been executed on Windows. The [build inventory](honeycomb-0.6.0.json) records binary and archive SHA-256 checksums, source revision and validation boundaries. The archive and checksum are in `dist/`; native builds are in `targets/`.
 
@@ -33,7 +33,7 @@ no explicit organization: 0.6.0 exited 1 with `missing_required_header`; 0.6.1
 exited 0 with top-level `authenticated: false`. This verifies the production
 request contract without claiming that the user's actual saved session was tested.
 
-The [native backend deployment](../../deploy/native/README.md) is complete.
+The [native backend deployment](https://github.com/teamofsilicons/silicon-hook/blob/d621aba/deploy/native/README.md) is complete.
 Release `2c3a41118ad4` runs the Linux ARM64 API and worker directly under systemd,
 as the unprivileged `silicon-hook` user. Both services are enabled and running,
 with zero restarts; `/proc` executable paths resolve to the deployed release.
@@ -76,7 +76,7 @@ The frontend is live at [hook.teamofsilicons.com](https://hook.teamofsilicons.co
 
 A pre-upgrade database/configuration backup is stored in the private release bucket. Previous API/worker and gateway images are retained on the host as `rollback-20260913`; image rollback does not reverse migrations.
 
-The bug-report workflow is published with its Postmark server secret and the existing verified `iam@teamofsilicons.com` sender configured through `POSTMARK_FROM_EMAIL`. No real bug report or email was submitted during deployment checks. See [deployment instructions](../deployment.md).
+The bug-report workflow is published with its Postmark server secret and the existing verified `iam@teamofsilicons.com` sender configured through `POSTMARK_FROM_EMAIL`. No real bug report or email was submitted during deployment checks. See [deployment instructions](https://github.com/teamofsilicons/silicon-hook/blob/d621aba/docs/deployment.md).
 
 A fresh hosted IAM login and organization selection passed after configuring Hook’s required read permissions. The scoped directory regression covers pagination and exclusion of invisible targets. Automated IAM, isolation, WebSocket and delivery checks passed. No customer webhook was sent during deployment verification.
 

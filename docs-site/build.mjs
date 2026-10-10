@@ -35,11 +35,10 @@ async function inventory(dir, prefix = "") {
   }
   return result;
 }
-// Records of retired features (and docs/history/) are kept in the repository
-// but not published; links to them resolve to the source on GitHub.
-const retired = (file) =>
-  /^(history|iam|testing)\//.test(file) ||
-  ["ting-integration-issues.md", "ting-implementation.md", "frontend-iam5-contexts.md"].includes(file);
+// History records (docs/history/) and the migration record (docs/migration/)
+// stay in the repository but are not published; links to them resolve to the
+// source on GitHub.
+const retired = (file) => /^(history|migration)\//.test(file);
 const files = (await inventory(source)).filter((f) => !retired(f)),
   documents = files.filter((f) => f.endsWith(".md"));
 const titles = new Map(
@@ -50,7 +49,7 @@ const titles = new Map(
     ]),
   ),
 );
-const navigation = ["README.md", "accounts/README.md", "cli/README.md", "client/README.md", "client/relay.md", "ting-delivery.md", "api/README.md", "contracts.md", "configuration.md", "releases.md", "telemetry.md", "deployment.md", "verification/current.md"];
+const navigation = ["README.md", "accounts/README.md", "cli/README.md", "client/README.md", "client/relay.md", "ting-delivery.md", "api/README.md", "contracts.md", "configuration.md", "releases.md", "telemetry.md", "deployment.md"];
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 const search = [];
@@ -117,7 +116,7 @@ for (const file of ["styles.css", "search.js"])
   await cp(path.join(root, "docs-site", file), path.join(output, file));
 await cp(path.join(source, "install.sh"), path.join(output, "install.sh"));
 await cp(path.join(root, "openapi.yaml"), path.join(output, "openapi.yaml"));
-await cp(path.join(root, "web/public/brand/mark.svg"), path.join(output, "favicon.svg"));
+await cp(path.join(root, "docs-site/favicon.svg"), path.join(output, "favicon.svg"));
 await writeFile(path.join(output, "search-index.json"), JSON.stringify(search));
 await writeFile(
   path.join(output, "robots.txt"),

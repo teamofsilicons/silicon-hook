@@ -1,4 +1,4 @@
-> October 2026 cutover: see [separate Ting authorization](ting-delivery.md#separate-ting-authorization). Historical proofs and login consent no longer authorize active calls; dedicated encrypted endpoint grants are required.
+> October 2026 cutover: see [separate Ting authorization](https://github.com/teamofsilicons/silicon-hook/blob/d621aba/docs/ting-delivery.md#separate-ting-authorization). Historical proofs and login consent no longer authorize active calls; dedicated encrypted endpoint grants are required.
 
 # Ting integration issues
 

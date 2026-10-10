@@ -32,12 +32,12 @@ URLs already registered with providers survive the upgrade.
 v3 is a new major because the sign-in and the identity model changed:
 
 - The bearer is a Silicon Accounts access token issued to Hook, verified locally;
-  there is no organization header and no Hook-mediated token exchange.
+  no other identity header is read, and Hook no longer exchanges tokens itself.
 - Hooks belong to a Silicon keyed by its uuid; responses show accounts as
   `{uuid, id}` and `created_by` adds `kind`.
 - New: `GET /silicons`, access grants, allow-lists, the Silicon Accounts updates
   hook, sign-in discovery (`/auth/accounts`) and status (`/auth/status`).
-- Ting references carry `silicon: {uuid, id}` and no tenant or environment fields;
+- Ting references carry `silicon: {uuid, id}` and none of the earlier scoping fields;
   publication adds `delivery_disabled`, `not_queued` and `not_delivered_legacy`.
 - Removed: test environments, publisher provisioning, separate Ting approval, the
   v1 WebSocket, relay and polling delivery.

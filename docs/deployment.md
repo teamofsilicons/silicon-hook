@@ -43,7 +43,24 @@ Provider URLs keep working throughout. Until a stored id is linked, its hooks ke
 receiving but cannot be managed. API v1 and v2 answer `410 api_version_sunset`; deploy
 the matching CLI, client and web before switching consumers.
 
-Read [the existing AWS runbook](../deploy/aws/README.md) for Hook's standalone API, worker, PostgreSQL and gateway infrastructure. A source implementation or docs publication does not itself upgrade those running services. Preserve the previous application image for rollback; schema changes are not reversed by rolling back an image.
+## Where Hook runs
+
+- **API, worker and PostgreSQL**: one ARM64 EC2 host behind Caddy at
+  `https://backend.hook.teamofsilicons.com` (also the provider ingress host). Releases
+  are native systemd bundles installed with `deploy/native/install.py`, which takes
+  Hook's Silicon Accounts secrets on the first 1.0 install, backs up before it migrates
+  and rolls back a failed switch ([native releases](../deploy/native/README.md),
+  [the host](../deploy/aws/README.md)).
+- **Web console**: a Next.js app on Vercel at `https://hook.teamofsilicons.com`. Its
+  server signs Carbons in with Silicon Accounts, keeps the session in a sealed cookie
+  and calls the API with the Carbon's access token; the browser never holds a token.
+  Its sign-in setup at Silicon Accounts lists `https://hook.teamofsilicons.com/auth/callback`
+  as a redirect URI.
+- **Docs**: a static Vercel site at `https://docs.hook.teamofsilicons.com` (below).
+
+Building or publishing this repository does not change those running services.
+Rolling back a release does not reverse a migration: keep the backup the installer
+takes before migrating.
 
 ## Documentation hosting
 
@@ -57,7 +74,7 @@ npm run check
 vercel deploy --prod
 ```
 
-Configure the Vercel project root as `docs-site`. The `vercel.json` file declares the build and output directory. DNS needs only the `docs.hook` host record; preserve every unrelated domain record. Validate HTTPS, canonical URLs, installer, search and internal links after publication.
+Configure the Vercel project root as `docs-site`. The `vercel.json` file declares the build and output directory. DNS needs only the `docs.hook` host record; preserve every unrelated domain record. Validate HTTPS, canonical URLs, the `/install.sh` entry point, search and internal links after publication. The site publishes the guides in `docs/` except `docs/history/` and `docs/migration/`.
 
 ## Bug-report email
 
@@ -65,8 +82,8 @@ The `bug-report.yml` GitHub workflow sends newly opened issues, including CLI re
 
 ## Space Station export
 
-Apply migration 0008 and the updated worker grants, then supply the dedicated `HOOK_TELEMETRY_TABLE_KEY` securely to the worker. Mount `HOOK_TELEMETRY_SPOOL_DIR` as a persistent private directory. Never put this key in browser environment variables, CLI distributions or docs. Restart the worker after changing its configuration. `HOOK_TELEMETRY=off` stops collection and export. See [telemetry](telemetry.md) for retention, sandbox routing and delivery semantics.
+Apply migration 0008 and the updated worker grants, then supply the dedicated `HOOK_TELEMETRY_TABLE_KEY` securely to the worker. Mount `HOOK_TELEMETRY_SPOOL_DIR` as a persistent private directory. Never put this key in browser environment variables, CLI distributions or docs. Restart the worker after changing its configuration. `HOOK_TELEMETRY=off` stops collection and export. See [telemetry](telemetry.md) for retention and delivery semantics.
 
 ## CLI release artifacts
 
-Use [the six-target release workflow](releases.md) to produce one validated Honeycomb archive. Documentation deployment does not produce or publish CLI binaries.
+The [release workflow](releases.md) builds the CLI for six targets and packs one Silicon Apps archive per target; an author of the `hook` app uploads the Linux ones to Silicon Apps. Documentation deployment does not produce or publish CLI binaries.

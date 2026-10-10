@@ -32,15 +32,15 @@ Duplicate selector headers, simultaneous root/application selectors, malformed s
 
 ## Scoped inbox and watch
 
-Ting 0.1.4 supports internal sandbox observation using the selected Hook app secret and signed-in actor. Register that actor through `POST /api/v2/delivery/recipient` with an empty body; a Carbon observing a visible Silicon uses its [receiving subscription](../api/README.md#get-post-delete-siliconssiliconiddeliverysubscription).
+Ting 0.1.4 supports internal sandbox observation using the selected Hook app secret and signed-in actor. Register that actor through `POST /api/v2/delivery/recipient` with an empty body; a Carbon observing a visible Silicon uses its [receiving subscription](https://github.com/teamofsilicons/silicon-hook/blob/d621aba/docs/api/README.md#get-post-delete-siliconssiliconiddeliverysubscription).
 
 Read `GET /api/v2/delivery/receiver`, then persist its scope and a stable operation key. POST to the same endpoint with `Idempotency-Key` and JSON containing `environment_id` from `scope.environment.id` and `generation` from `scope.environment.generation`. The private response includes `receiver_id`, `receiver_token` and `expires_at`. Retry uncertain requests with the original scope, body and key. Renew explicitly with a new key and the same `receiver_id`; exact replay retains the original expiry, even if expired. Both scope lookup and issuance can return `429` with `Retry-After`.
 
-The enclosing app uses the capability with Ting's `/v1/receivers/inbox` and `/v1/receivers/ws?protocol=v1`, renews/reconnects within its at-most-30-second lifetime, and revokes through `DELETE /v1/receivers/session`. This capability cannot ACK, attach a native destination or enable required delivery. Hook separately authorizes every original event lookup using its original reference generation. See the [receiver contract](../api/README.md#get-post-deliveryreceiver-v2-testing-only) and [testing client guide](client.md).
+The enclosing app uses the capability with Ting's `/v1/receivers/inbox` and `/v1/receivers/ws?protocol=v1`, renews/reconnects within its at-most-30-second lifetime, and revokes through `DELETE /v1/receivers/session`. This capability cannot ACK, attach a native destination or enable required delivery. Hook separately authorizes every original event lookup using its original reference generation. See the [receiver contract](https://github.com/teamofsilicons/silicon-hook/blob/d621aba/docs/api/README.md#get-post-deliveryreceiver-v2-testing-only) and [testing client guide](client.md).
 
 ## Legacy WebSocket
 
-Deprecated `/api/v1/ws` and `/api/v1/relay/ws` retain their existing protocols until that environment's v1 sunset. API v2 uses Ting instead. See [legacy delivery](../api/README.md#legacy-delivery-deprecated-v1).
+Deprecated `/api/v1/ws` and `/api/v1/relay/ws` retain their existing protocols until that environment's v1 sunset. API v2 uses Ting instead. See [legacy delivery](https://github.com/teamofsilicons/silicon-hook/blob/d621aba/docs/api/README.md#legacy-delivery-deprecated-v1).
 
 ## Legacy administrative API
 

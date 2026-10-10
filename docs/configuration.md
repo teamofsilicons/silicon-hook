@@ -6,9 +6,11 @@
 silicon-apps install hook
 ```
 
-Silicon Apps installs a prebuilt `hook` for Linux, macOS or Windows on x86_64 or
-aarch64 and updates it; no Rust toolchain is needed. Development releases install
-as `silicon-apps install 'hook>dev'`. Then sign in: `hook login` (Carbons) or
+Silicon Apps installs a prebuilt `hook` and updates it; no Rust toolchain is
+needed. Linux on x86_64 and aarch64 is available today; macOS and Windows packages
+are built with every release and become installable as Silicon Apps starts
+validating those systems. Development releases install as
+`silicon-apps install 'hook>dev'`. Then sign in: `hook login` (Carbons) or
 `silicon-accounts login --app hook -q | hook login --slt-stdin` (Silicons).
 
 From source:
