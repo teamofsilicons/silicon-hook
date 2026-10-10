@@ -1741,7 +1741,7 @@ components:
         version: {type: string, minLength: 1, maxLength: 32, pattern: '^[0-9.]+$'}
         operation:
           type: string
-          enum: [login, logout, whoami, refresh, webhook, unhook, hooks, events, blocked, deliveries, env, config, daemon, docs, commands, system, report, about, overview, live, testing, connections, relay, iam, create, set-secret, list, show, update, delete, restore, enable, disable, rotate, connect-iam, listen]
+          enum: [login, logout, whoami, refresh, webhook, unhook, hooks, events, blocked, deliveries, env, config, daemon, docs, commands, system, report, about, overview, live, testing, connections, relay, iam, create, set-secret, list, show, update, delete, restore, enable, disable, rotate, connect-iam, listen, accounts, silicons, access, allow-list, connect-accounts, event, publication, receiving]
         duration_ms: {type: integer, minimum: 0}
         progress: {type: integer, minimum: 0, maximum: 4294967295}
         status: {type: integer, minimum: 0, maximum: 65535}

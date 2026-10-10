@@ -28,7 +28,7 @@ impl RequestEvent {
                 .get("x-hook-telemetry")
                 .is_none_or(|v| v != "off");
         let path = request.uri().path();
-        let collect = opted_in && !matches!(path, "/healthz" | "/readyz" | "/api/v2/telemetry");
+        let collect = opted_in && !matches!(path, "/healthz" | "/readyz" | "/api/v3/telemetry");
         let mut event = Event::new("backend", "request", "started");
         // Only route templates are collected; never paths, queries, headers or bodies.
         event.route = request

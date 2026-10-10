@@ -114,6 +114,14 @@ impl Event {
                     "rotate",
                     "connect-iam",
                     "listen",
+                    "accounts",
+                    "silicons",
+                    "access",
+                    "allow-list",
+                    "connect-accounts",
+                    "event",
+                    "publication",
+                    "receiving",
                 ]
                 .contains(&op)
             })
@@ -177,6 +185,20 @@ mod tests {
         assert!(event.validate_external().is_ok());
         event.operation = Some("create".into());
         assert!(event.validate_external().is_ok());
+        // Every top-level command of the 1.0 CLI is a known operation.
+        for operation in [
+            "accounts",
+            "silicons",
+            "access",
+            "allow-list",
+            "connect-accounts",
+            "event",
+            "publication",
+            "receiving",
+        ] {
+            event.operation = Some(operation.into());
+            assert!(event.validate_external().is_ok(), "{operation}");
+        }
         event.operation = Some("secret_bearer_value".into());
         assert!(event.validate_external().is_err());
         event.operation = None;
