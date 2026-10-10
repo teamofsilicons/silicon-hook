@@ -204,7 +204,11 @@ fn build_dependencies(
     if let Some(origin) = &settings.ting.base_url {
         let client = TingClient::new(origin.as_str(), settings.ting.request_timeout)
             .map_err(|error| anyhow::anyhow!("failed to configure Ting delivery: {error}"))?;
-        application = application.with_delivery(TingAdapter::new(client, accounts));
+        application = application.with_delivery(TingAdapter::new(
+            client,
+            accounts,
+            settings.ting.app_id.clone(),
+        ));
     }
     Ok(ApiDependencies {
         application,

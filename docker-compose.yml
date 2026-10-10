@@ -46,6 +46,7 @@ services:
       HOOK_ACCOUNTS_WEBHOOK_SECRET: ${HOOK_ACCOUNTS_WEBHOOK_SECRET:-}
       # Delivery through Ting stays off unless HOOK_TING_URL is set.
       HOOK_TING_URL: ${HOOK_TING_URL:-}
+      HOOK_TING_APP_ID: ${HOOK_TING_APP_ID:-ting}
     depends_on:
       runtime-grants:
         condition: service_completed_successfully

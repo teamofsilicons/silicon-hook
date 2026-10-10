@@ -1,7 +1,8 @@
 //! Hook's delivery adapter for Ting in the Silicon Accounts era.
 //!
-//! - Sends and receipts use an App verification proof for the receiving app
-//!   `ting` (scopes `tings.send` and `sent.query`). Hook keeps each proof and
+//! - Sends and receipts use an App verification proof for Ting's app
+//!   (`HOOK_TING_APP_ID`, `ting` by default; scopes `tings.send` and
+//!   `sent.query`). Hook keeps each proof and
 //!   its rotating refresh token in memory, refreshes single-flight shortly
 //!   before expiry, and issues a new proof when a refresh is refused.
 //! - Enrolling a recipient uses a User verification proof (scope
@@ -24,8 +25,8 @@ use crate::infrastructure::{
     },
 };
 
-/// Silicon Accounts app id of Ting, the receiving app of Hook's proofs.
-pub const TING_APP_ID: &str = "ting";
+/// Ting's Silicon Accounts app id unless `HOOK_TING_APP_ID` names another.
+pub const TING_APP_ID: &str = crate::config::DEFAULT_TING_APP_ID;
 /// Scope of the App verification proof Hook sends with.
 pub const SEND_SCOPE: &str = "tings.send";
 /// Scope of the App verification proof Hook reads receipts with.
@@ -82,7 +83,11 @@ impl ProofCache {
         }
     }
 
-    async fn token(&self, accounts: &AccountsGateway) -> Result<SecretString, AccountsError> {
+    async fn token(
+        &self,
+        accounts: &AccountsGateway,
+        receiving_app: &str,
+    ) -> Result<SecretString, AccountsError> {
         // Holding the lock across the network call makes renewal single-flight:
         // a rotating refresh token is never presented twice.
         let mut state = self.state.lock().await;
@@ -104,7 +109,7 @@ impl ProofCache {
             }
         }
         let issued = accounts
-            .issue_app_verification(TING_APP_ID, &[self.scope])
+            .issue_app_verification(receiving_app, &[self.scope])
             .await?;
         let cached = cache(issued);
         let token = cached.token.clone();
@@ -142,6 +147,7 @@ pub struct TingAdapter {
 struct Inner {
     client: TingClient,
     accounts: AccountsGateway,
+    receiving_app: String,
     send: ProofCache,
     receipts: ProofCache,
 }
@@ -151,18 +157,26 @@ impl std::fmt::Debug for TingAdapter {
         formatter
             .debug_struct("TingAdapter")
             .field("origin", &self.inner.client.origin().as_str())
+            .field("receiving_app", &self.inner.receiving_app)
             .finish_non_exhaustive()
     }
 }
 
 impl TingAdapter {
-    /// Composes the adapter from the configured transport and Accounts gateway.
+    /// Composes the adapter from the configured transport, the Accounts
+    /// gateway and Ting's Silicon Accounts app id (the receiving app of every
+    /// proof, normally [`TING_APP_ID`]).
     #[must_use]
-    pub fn new(client: TingClient, accounts: AccountsGateway) -> Self {
+    pub fn new(
+        client: TingClient,
+        accounts: AccountsGateway,
+        receiving_app: impl Into<String>,
+    ) -> Self {
         Self {
             inner: Arc::new(Inner {
                 client,
                 accounts,
+                receiving_app: receiving_app.into(),
                 send: ProofCache::new(SEND_SCOPE),
                 receipts: ProofCache::new(RECEIPT_SCOPE),
             }),
@@ -185,7 +199,7 @@ impl TingAdapter {
             let proof = self
                 .inner
                 .send
-                .token(&self.inner.accounts)
+                .token(&self.inner.accounts, &self.inner.receiving_app)
                 .await
                 .map_err(DeliveryError::Proof)?;
             match self
@@ -217,7 +231,7 @@ impl TingAdapter {
         let proof = self
             .inner
             .receipts
-            .token(&self.inner.accounts)
+            .token(&self.inner.accounts, &self.inner.receiving_app)
             .await
             .map_err(DeliveryError::Proof)?;
         let result = self
@@ -247,7 +261,7 @@ impl TingAdapter {
             .accounts
             .issue_user_verification(
                 subject_token.expose_secret(),
-                TING_APP_ID,
+                &self.inner.receiving_app,
                 &[SUBSCRIBE_SCOPE],
             )
             .await

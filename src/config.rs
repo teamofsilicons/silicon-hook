@@ -17,6 +17,8 @@ use zeroize::Zeroizing;
 
 /// Production Silicon Accounts.
 pub const DEFAULT_ACCOUNTS_URL: &str = "https://accounts.teamofsilicons.com";
+/// Ting's Silicon Accounts app id, the receiving app of Hook's Ting proofs.
+pub const DEFAULT_TING_APP_ID: &str = "ting";
 const MAX_INGRESS_BODY_BYTES: usize = 1024 * 1024;
 const MAX_MANAGEMENT_BODY_BYTES: usize = 64 * 1024;
 const MAX_KEYRING_ENTRIES: usize = 16;
@@ -67,6 +69,9 @@ pub struct TingSettings {
     /// `None` (`HOOK_TING_URL` unset) disables delivery: Hook keeps receiving
     /// and storing events, and queues nothing for Ting.
     pub base_url: Option<Url>,
+    /// Ting's Silicon Accounts app id (`HOOK_TING_APP_ID`, default `ting`):
+    /// the receiving app every proof Hook presents to Ting is issued for.
+    pub app_id: String,
     /// Deadline for one Ting publication operation.
     pub request_timeout: Duration,
     /// Idle interval between bounded publication cycles.
@@ -86,6 +91,8 @@ impl TingSettings {
                 Ok::<_, SettingsError>(url)
             })
             .transpose()?;
+        let app_id = source.value_or("HOOK_TING_APP_ID", DEFAULT_TING_APP_ID);
+        validate_app_id("HOOK_TING_APP_ID", &app_id)?;
         let request_seconds: u64 = source.parse_or("HOOK_TING_TIMEOUT_SECONDS", "10")?;
         let poll_millis: u64 = source.parse_or("HOOK_TING_POLL_MILLISECONDS", "1000")?;
         if !(1..=15).contains(&request_seconds) {
@@ -102,6 +109,7 @@ impl TingSettings {
         }
         Ok(Self {
             base_url,
+            app_id,
             request_timeout: Duration::from_secs(request_seconds),
             poll_interval: Duration::from_millis(poll_millis),
         })
@@ -319,6 +327,12 @@ impl ApiSettings {
         let crypto = CryptoSettings::load(source)?;
         let accounts = AccountsSettings::load(source, environment)?;
         let ting = TingSettings::load(source, environment)?;
+        if ting.app_id == accounts.app_id {
+            return Err(invalid(
+                "HOOK_TING_APP_ID",
+                "must name Ting's app, not Hook's own: a proof is always issued for another app",
+            ));
+        }
         let policy = PolicySettings::load(source)?;
         let obsolete_variables = obsolete_variables(source);
 
@@ -553,7 +567,7 @@ impl AccountsSettings {
             None => public_url.clone(),
         };
         let app_id = source.value_or("HOOK_APP_ID", "hook");
-        validate_app_id(&app_id)?;
+        validate_app_id("HOOK_APP_ID", &app_id)?;
         let app_secret = source.required_secret("HOOK_APP_SECRET")?;
         validate_secret_text("HOOK_APP_SECRET", &app_secret, 16)?;
         let mut webhook_secrets = Vec::new();
@@ -978,8 +992,8 @@ fn validate_base64url_key(
     Ok(key)
 }
 
-/// Bare Silicon Accounts app id, such as `hook`.
-fn validate_app_id(app_id: &str) -> Result<(), SettingsError> {
+/// Bare Silicon Accounts app id, such as `hook` or `ting`.
+fn validate_app_id(name: &'static str, app_id: &str) -> Result<(), SettingsError> {
     let valid = (1..=80).contains(&app_id.len())
         && app_id
             .bytes()
@@ -992,7 +1006,7 @@ fn validate_app_id(app_id: &str) -> Result<(), SettingsError> {
         Ok(())
     } else {
         Err(invalid(
-            "HOOK_APP_ID",
+            name,
             "must be a bare Silicon Accounts app id of lowercase letters, digits, _ or -, such as hook",
         ))
     }
@@ -1227,6 +1241,27 @@ mod tests {
             settings.ting.base_url.as_ref().map(url::Url::as_str),
             Some("http://127.0.0.1:4202/")
         );
+        assert_eq!(settings.ting.app_id, super::DEFAULT_TING_APP_ID);
+        Ok(())
+    }
+
+    #[test]
+    fn ting_app_id_names_another_valid_app() -> Result<(), SettingsError> {
+        let mut environment = valid_api_environment("development");
+        environment
+            .0
+            .insert("HOOK_TING_APP_ID", "ting-staging".to_owned());
+        assert_eq!(ApiSettings::load(&environment)?.ting.app_id, "ting-staging");
+
+        for value in ["Ting", "ting app", "-ting", "hook"] {
+            let mut environment = valid_api_environment("development");
+            environment.0.insert("HOOK_TING_APP_ID", value.to_owned());
+            assert_eq!(
+                rejected(&environment).map(|(name, _)| name),
+                Some("HOOK_TING_APP_ID"),
+                "HOOK_TING_APP_ID={value}"
+            );
+        }
         Ok(())
     }
 

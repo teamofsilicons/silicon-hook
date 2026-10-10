@@ -13,6 +13,7 @@
 | `HOOK_ACCOUNTS_WEBHOOK_SECRET` | Signing secret of Hook's Silicon Accounts webhook (`POST /webhook`). Required in production. `HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET` holds the old one during a rotation. |
 | `HOOK_ACCOUNTS_TIMEOUT_SECONDS` | Deadline for one call to Silicon Accounts, 1 to 30 seconds. Default 5. |
 | `HOOK_TING_URL` | Ting origin. Unset turns delivery off: Hook still receives, verifies and stores every event, queues nothing, and says so in its logs, `/readyz` and the delivery routes. |
+| `HOOK_TING_APP_ID` | Ting's app id at Silicon Accounts, the receiving app of Hook's proofs. Default `ting`. |
 
 Plain `http` is accepted only for loopback hosts and never in production. Hook refuses to
 start when a value is malformed, and names the variable and the reason. Variables from

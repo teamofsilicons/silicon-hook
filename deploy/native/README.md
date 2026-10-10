@@ -37,7 +37,7 @@ Hook 1.0 signs in with Silicon Accounts, so `hook-api` needs `HOOK_APP_SECRET` a
 `KEY=value` per line without quotes, and only Silicon Accounts settings
 (`ACCOUNTS_URL`, `ACCOUNTS_API_URL`, `HOOK_APP_ID`, `HOOK_APP_SECRET`,
 `HOOK_ACCOUNTS_WEBHOOK_SECRET`, `HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET`,
-`HOOK_ACCOUNTS_TIMEOUT_SECONDS`, `HOOK_TING_URL`). They go into the API's settings
+`HOOK_ACCOUNTS_TIMEOUT_SECONDS`, `HOOK_TING_URL`, `HOOK_TING_APP_ID`). They go into the API's settings
 only; later installs carry them over. Without them the installer refuses before
 it changes anything. Settings of earlier versions are removed from every
 process, and the API keeps delivery through Ting off unless `HOOK_TING_URL` is

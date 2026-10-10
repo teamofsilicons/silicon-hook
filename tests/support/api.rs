@@ -21,7 +21,7 @@ use silicon_hook::{
     api::{ApiDependencies, router},
     application::{HookApplication, SystemClock},
     config::{AccountsSettings, ServerSettings},
-    delivery::adapter::TingAdapter,
+    delivery::adapter::{TING_APP_ID, TingAdapter},
     domain::EncryptionKeyId,
     infrastructure::{
         accounts::AccountsGateway,
@@ -106,7 +106,7 @@ impl TestApi {
         if let Some(origin) = ting {
             let client = TingClient::new(origin, Duration::from_secs(5))
                 .map_err(|error| anyhow::anyhow!("{error}"))?;
-            application = application.with_delivery(TingAdapter::new(client, gateway));
+            application = application.with_delivery(TingAdapter::new(client, gateway, TING_APP_ID));
         }
         let settings = ServerSettings {
             bind_addr: "127.0.0.1:0".parse()?,

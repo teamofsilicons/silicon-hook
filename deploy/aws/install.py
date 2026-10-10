@@ -35,7 +35,8 @@ else:
     creds.update({k: base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip('=') for k in ['encryption', 'cursor']})
     credentials.write_text(json.dumps(creds))
 ACCOUNTS_KEYS = {'ACCOUNTS_URL', 'ACCOUNTS_API_URL', 'HOOK_APP_ID', 'HOOK_APP_SECRET', 'HOOK_ACCOUNTS_WEBHOOK_SECRET',
-                 'HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET', 'HOOK_ACCOUNTS_TIMEOUT_SECONDS', 'HOOK_TING_URL'}
+                 'HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET', 'HOOK_ACCOUNTS_TIMEOUT_SECONDS', 'HOOK_TING_URL',
+                 'HOOK_TING_APP_ID'}
 accounts = json.loads((root / 'accounts.json').read_text())
 if set(accounts) - ACCOUNTS_KEYS:
     raise RuntimeError('accounts.json may hold only Silicon Accounts settings: ' + ', '.join(sorted(ACCOUNTS_KEYS)))

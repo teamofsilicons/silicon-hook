@@ -12,6 +12,7 @@ event for 14 days, and Silicons read them with `hook events` or the history API.
 | Variable | Meaning |
 | --- | --- |
 | `HOOK_TING_URL` | Ting's origin. Unset: delivery is off. Plain `http` only for loopback. |
+| `HOOK_TING_APP_ID` | Ting's app id at Silicon Accounts: every proof Hook presents to Ting is issued for this app (default `ting`; never Hook's own id). |
 | `HOOK_TING_TIMEOUT_SECONDS` | Deadline for one call to Ting, 1 to 15 seconds (default 10). |
 | `HOOK_TING_POLL_MILLISECONDS` | How often the publisher looks for queued sends, 100 to 30000 ms (default 1000). |
 
