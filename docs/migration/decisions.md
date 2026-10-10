@@ -329,3 +329,87 @@ Doc comments that still spoke of tenant and organization scopes, or of the previ
 no longer has anything to do with it, now describe the owner scopes the code checks. Column names (`org_id`,
 `iam_public_id`), the audit action `hook.iam_connected` of old rows, the hidden `hook iam --json`, the old telemetry
 operation names and the list of obsolete variables stay: they are data, compatibility or operator help.
+
+## Stage 4: end to end against Silicon Accounts
+
+### The dev stack and the e2e run are repository scripts, in Python like the packager
+`scripts/dev-accounts.sh` (over `scripts/dev_accounts.py`) and `scripts/e2e-accounts.sh` (over the
+`scripts/e2e_accounts/` package) use only the Python 3.9+ standard library, like `scripts/package_apps.py`, so
+they run on this Mac's `/usr/bin/python3` and on CI images without installing anything. They are not CI jobs:
+they need a running Silicon Accounts stack with its development helpers. The run takes the stack's description,
+its identity helper (`mint.mts`) and runner, and a `silicon-accounts` CLI from environment variables
+(`HOOK_DEV_STACK_FILE`, `HOOK_E2E_MINT`, `HOOK_E2E_TSX`, `HOOK_E2E_ACCOUNTS_CLI`) instead of hard-coded paths,
+and refuses to start, naming the variable, when one is missing. The Silicon Accounts CLI is always given the
+stack's URL and a scratch home, so it can never act on a production sign-in saved on the machine.
+
+### Dev state lives in .mig/, keys and the webhook secret survive restarts
+The brief puts pids and logs in `.mig/`; the script also keeps there, in `dev-accounts.env` (0600), the
+encryption key, the cursor key and the webhook secret, so `restart` brings back the same Hook (stored hook
+secrets stay readable, cursors stay valid, the webhook keeps verifying). The directory gets a `.gitignore` of
+`*` when the script creates it. App secrets are read from the stack file each time and never copied. `stop`
+keeps everything; `down` drops the database and its roles, forgets the keys and removes Hook's webhook from the
+stack only when it points at this Hook (it was unset before the stage, and is unset again after every run).
+
+### The webhook secret is generated first, then the URL is set, with every update
+`generate-secret` works before a URL exists and the following `PUT` keeps that secret, so the script always
+knows the secret Silicon Accounts signs with, whatever state the stack was in. The `PUT` sends `"events": null`
+(every update); when the URL and secret are right but the picks are not, the script restores every update. A
+signed `ping` must reach Hook before `start` reports success.
+
+### Ting stand-in: the receiving app is a setting, and the test stack's `interface` app plays Ting
+The shared stack has no `ting` app, and a proof can only be issued for an app that exists, so the issuer side
+of scenario 6 needed a receiving app whose credentials the stand-in can use. Hook's receiving app was a
+constant; it is now `HOOK_TING_APP_ID` (default `ting`, validated, never Hook's own id), which production also
+benefits from if Ting registers under another id. The e2e run points it at the testkit's fake `interface` app,
+the app the brief designates for proof tests; the stand-in (`scripts/ting_stub.py`) verifies every proof with
+`interface`'s development credentials, as Ting will with its own. Adding a `ting` app to the shared stack was
+ruled out: only Hook's own sign-in setup and webhook may change there. The stand-in refuses the first send proof
+once on request (to prove Hook renews it), can deliver accepted sends on to a receiving host the way Ting's
+daemon does, and journals proof digests, never tokens.
+
+### A token from the second of a sign-out is settled by Silicon Accounts
+Access tokens carry `iat` in whole seconds, sign-out events carry milliseconds. Comparing them directly refused
+the new token of a Silicon that signed in again within the same second as a sign-out (3 of 4 attempts against
+the stack after an STK rotation). Truncating the sign-out to its second would instead accept tokens issued just
+before it. Hook now refuses earlier seconds and accepts later ones locally, and asks introspection only for a
+token from the sign-out's own second; a confirmation is remembered for that token and that sign-out instant
+only. This reuses an "active" answer for one narrow, permanent fact (the token postdates that sign-out); the
+routes that introspect every time still never reuse one.
+
+### Proof requests pause after a failure
+With Ting's app missing (or Silicon Accounts down), every queued send asked for its own proof and logged a
+warning, every 30 seconds per send. A failed request now pauses proof requests for that scope: 30 seconds,
+doubling to 5 minutes while failures continue. Sends fail fast meanwhile, keep their 30-second retry, and stay
+`pending` with `proof_unavailable`; the log gets one line per failed request, with the pause. Enrolment proofs
+(per user request, never cached) are not paused.
+
+### Silicon Accounts outages get their own error code
+When Silicon Accounts does not answer (introspection, lookups, or the first signing-key fetch after a restart),
+Hook answers `503 accounts_unavailable` saying what it needed Silicon Accounts for; `provider_unavailable` now
+means the database only. The connection detail stays in the log because it can name private addresses. Reads
+verified with cached keys, sign-in status and provider ingress keep working during an outage (scenario 9), and
+the CLI keeps its sign-in.
+
+### hook-api checks its webhook settings at startup, warning only
+Setting an app webhook's URL keeps update picks made earlier, and Silicon Apps' recommended picks leave out
+`custodian_change`. Rather than trust every operator path, hook-api reads `GET /v1/apps/hook/webhook` once at
+startup and logs either that every event it acts on reaches its own `/webhook`, or each problem with its
+consequence (missing update, no secret, paused, another URL). It never blocks startup and `/readyz` does not
+depend on Silicon Accounts, so an outage cannot take Hook out of rotation. The cutover sets `"events": null`
+explicitly through the API (the CLI cannot choose updates) and verifies it.
+
+### Kept as they are
+- The CLI exits 3 for `403` refusals such as `silicon_not_reachable`: "sign-in required or refused" is the
+  silicon-accounts CLI's convention (`401 | 403 => EXIT_AUTH`), which Hook's CLI follows.
+- An unsigned request to a Standard Webhooks hook is withheld as `payload_unavailable`, not
+  `signature_missing`: the policy's payload needs `webhook-id` and `webhook-timestamp`, and the documented order
+  evaluates the payload first. The run checks all three reasons.
+- `/readyz` stays "ready" while Silicon Accounts is down (see above).
+- Development logs are coloured; the dev script sets `NO_COLOR=1` so its log files are plain. Production logs
+  are JSON and were never coloured.
+
+### Test identities
+Each run uses a fresh suffix: Carbons `hook-e2e-c1-<n>` and `hook-e2e-c2-<n>` (`@example.test`), Silicons
+`si:hook-e2e-s1-<n>` and `si:hook-e2e-s3-<n>` (looked after by C1) and `si:hook-e2e-s2-<n>` (by C2). A run spends
+about ten email codes over two addresses, under the per-address limit, and retries once after 40 seconds if the
+shared per-network limit refuses one. The accounts stay on the shared stack except S3, which the run deletes.

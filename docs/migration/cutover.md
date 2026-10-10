@@ -345,3 +345,12 @@ Locally, against the shared Silicon Accounts test stack and PostgreSQL 16 (2026-
 (unit tests with the real file layout); the daily backup script with stubbed `docker`/`aws`; the mapping draft
 against a migrated database with a real Carbon and Silicon (two linked, two unknown ids left out), followed by
 `link-identities --dry-run` and a real run accepting the drafted file. The production commands above were not run.
+
+End to end (2026-10-10, stage 4): `scripts/e2e-accounts.sh` ran Hook 1.0 against the same stack with real tokens:
+137 checks, 0 failures, in 80 s. It covers the step 4 webhook with every update (all six events delivered by the
+stack and applied, a replay and a reused `event_id` ignored, forged and stale deliveries refused), sign-in for the
+web (code + PKCE), the CLI (short-lived token, device flow, refresh, logout) and a server (SLT exchange), the
+custodian circle and sharing, restart safety, Silicon Accounts cut off mid-run, Hook's proofs to a Ting stand-in
+(including renewal and the Silicon's receiving host hydrating the event), and the packaged CLI's discovery
+commands. Run it again before the cutover: `HOOK_DEV_STACK_FILE=… HOOK_E2E_MINT=… HOOK_E2E_TSX=…
+HOOK_E2E_ACCOUNTS_CLI=… scripts/e2e-accounts.sh` (see the root README).

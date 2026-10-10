@@ -450,3 +450,271 @@ escaping); headings are now slugged from plain text.
 - A relative binary path made the first discovery attempt fail inside the empty home and get mistaken for "cannot
   run here"; the packager now resolves the path and treats only Exec-format/Bad-CPU errors as "cannot run".
 - `silicon-apps validate` accepts an archive as well as a directory.
+
+## 2026-10-10 — Stage 4: end to end against Silicon Accounts
+
+### What the e2e stage did
+
+- **`scripts/dev-accounts.sh start|restart|status|stop|down`** (over `scripts/dev_accounts.py`): builds, creates
+  and migrates `hook_e2e` on 5460 with roles `hook_e2e_api`/`hook_e2e_worker` and the real grant manifest,
+  generates Hook's webhook secret at the stack and points the webhook at `http://127.0.0.1:4201/webhook` with
+  every update, starts hook-api (4201) and hook-worker, and does not report success until a signed `ping` from
+  the stack was acknowledged. `--ting-stub` adds the Ting stand-in on 4202 (`scripts/ting_stub.py`), which
+  verifies every proof Hook presents with the receiving app's own credentials. Idempotent; keys and the webhook
+  secret survive restarts in `.mig/dev-accounts.env` (0600); pids in `.mig/pids`; `down` leaves nothing behind.
+- **`scripts/e2e-accounts.sh`** (over `scripts/e2e_accounts/`): every scenario of the stage, scripted, with real
+  tokens, against the shared stack: 0 identities, 1 Carbon on the API (web code + PKCE exchange), 2 Silicon on
+  the CLI, 3 device flow, 4 circle and sharing, 5 webhooks, 8 restart safety, 9 Silicon Accounts cut off (added),
+  6 proofs (issuer side), 7 discovery from a packaged archive. It starts from `down`, ends with `down`, and
+  writes `<state>/e2e-<n>/report.json`.
+- **Bugs found and fixed** (each with a regression test, unit or integration, plus the e2e check):
+  1. A token issued in the same second as a sign-out was refused: `iat` has whole seconds, sign-outs have
+     milliseconds. Probe: after an STK rotation, the Silicon's new token was refused once the event landed in
+     3 of 4 attempts (`rotated_at 04:12:20.041Z`, new token `iat` …540 → 401 `session_ended`; the one that
+     crossed into the next second passed). Now settled by introspection for that second only (`30e499a`).
+  2. Ting proof requests multiplied with the queue: with Ting's app missing at Silicon Accounts, 5 queued sends
+     made 5 refused proof requests (`400 unknown_receiving_app`) and 5 warnings, repeating every 30 s per send.
+     Now one request, then a pause of 30 s doubling to 5 min; the sends stay `pending` / `proof_unavailable`
+     (`93270b4`).
+  3. Silicon Accounts outages answered `503 provider_unavailable` "A required dependency is temporarily
+     unavailable", also when a freshly started API had no signing keys yet. Now `503 accounts_unavailable`
+     saying what Hook needed it for (`1c44471`).
+  4. A production webhook set the obvious way could withhold `silicon.custodian_changed` (setting the URL keeps
+     earlier picks; the recommended picks lack `custodian_change`). hook-api now checks its webhook settings at
+     startup and says what is missing; the cutover sets `"events": null` and verifies it (`887d8cf`).
+  5. The receiving app of Hook's Ting proofs was the constant `ting`, absent from the stack: now
+     `HOOK_TING_APP_ID` (default `ting`) (`9727852`).
+
+### Commits
+
+| commit | subject |
+|---|---|
+| 9727852 | Name Ting's Silicon Accounts app in HOOK_TING_APP_ID instead of fixing it to ting |
+| 30e499a | Accept a token signed in again in the second of a sign-out once Accounts confirms it |
+| 8907f0a | Run Hook against a Silicon Accounts test stack and prove it end to end |
+| 93270b4 | Pause Ting proof requests after a failure instead of asking once per queued send |
+| 1c44471 | Say that Silicon Accounts did not answer instead of a generic dependency error |
+| 3421fde | Prove Hook end to end while Silicon Accounts stops answering, and observer copies follow access |
+| aaef145 | Close the Ting loop end to end: the Silicon's receiving host hydrates from Hook |
+| 70624f7 | Check a denied device code end to end and describe the whole e2e run |
+| 887d8cf | Check at startup that every account event Hook acts on reaches it |
+
+### Tests (final run, 2026-10-10, after 887d8cf)
+
+`export CARGO_TARGET_DIR=$PWD/target/mig CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3
+HOOK_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5460/postgres HOOK_TEST_PSQL=/opt/homebrew/opt/postgresql@16/bin/psql`
+
+| command | result |
+|---|---|
+| `cargo fmt --all --check` | ok |
+| `cargo clippy --workspace --locked --all-targets --all-features -- -D warnings` | ok |
+| `cargo test --workspace --locked --all-targets --all-features --no-fail-fast` | all pass. Service: lib 142 (+5: Ting app id setting, proof pause schedule, 3 webhook-settings findings), accounts_access 6 (+1 Accounts outage), accounts_webhook 6 (+1 same-second sign-out), migration_upgrade 1, postgres_integration 19 (+1 ignored: needs a Space Station key), ting_delivery 3 (+1 proof pause). CLI 12 / 6 / 5 / 15, client 1 / 6 / 1 / 8 / 13 (unchanged) |
+| `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --locked --no-deps --all-features` | ok |
+| `cargo deny --locked check` | advisories, bans, licenses, sources ok |
+| `npx --yes @redocly/cli@2.49.0 lint openapi.yaml` | valid (1 documented ignore) |
+| `python3 scripts/bundle-cli-docs.py --check` | ok |
+| `python3 -m unittest discover -s scripts -p 'test_*.py'` | 25 ok |
+| `npm run build && npm run check` in `docs-site` | 12 pages, 474 local links/assets ok |
+| `scripts/e2e-accounts.sh` (env in `.mig/e2e.env`) | **137 passed, 0 failed in 80 s** (run 55559; earlier passes: 27/2 → 30/1 → 105/1 → 115/0 → 121/0 → 135/0 → 137/0 as checks were added; the failures were the harness's own wrong expectations, fixed) |
+
+### End-to-end run 55559 (real output, trimmed: every check, details kept where they carry evidence)
+
+Hook 1.0 on 127.0.0.1:4201 (`hook_e2e` on 5460), the shared stack at `http://localhost:9590`, Hook's webhook
+registered for the run and removed after it.
+
+```text
+   Compiling silicon-hook-cli v1.0.0 (/Users/codanium/Documents/silicon/.worktrees/hook-accounts-apps/crates/cli)
+PASS [setup] scripts/dev-accounts.sh start: fresh database, webhook registered, signed ping delivered
+## Scenario 0: test identities on the shared stack
+   C1: c:hook-e2e-c1-55559 (uuid oVm)
+   C2: c:hook-e2e-c2-55559 (uuid fSx)
+   S1: si:hook-e2e-s1-55559 (uuid 1e5)
+   S2: si:hook-e2e-s2-55559 (uuid Scg)
+   S3: si:hook-e2e-s3-55559 (uuid DyO)
+PASS [0] S1 and S3 are looked after by C1, S2 by C2
+## Scenario 1: a Carbon signs in like the web does and manages its Silicon's hooks over the API
+PASS [1] GET /api/v3/auth/accounts (public) names Hook's app id and the stack as the token issuer
+PASS [1] code exchange with Hook's app secret returns C1's access and refresh tokens  ({"account":{"uuid":"oVm","id":"c:hook-e2e-c1-55559","kind":"carbon"},"expires_in":1800})
+PASS [1] Hook accepts the token (JWKS, audience hook, issuer the stack)  ({"app_id":"hook","authenticated":true,"id":"c:hook-e2e-c1-55559","kind":"carbon","uuid":"oVm"})
+PASS [1] create: the custodian makes a signed hook for its Silicon (201, secret returned once)
+PASS [1] the hook is recorded as made by the custodian, never as the Silicon
+PASS [1] a provider request signed with the hook's secret is accepted
+PASS [1] unverifiable requests get the identical answer (no signature oracle)
+PASS [1] list: the hook is in its Silicon's list
+PASS [1] read: by the Silicon's uuid, without any secret material
+PASS [1] the verified request is in the history with its exact body
+PASS [1] they are withheld with exact reasons: payload_unavailable, signature_missing, signature_mismatch  (["payload_unavailable","signature_mismatch","signature_missing"])
+PASS [1] update: description and time zone change
+PASS [1] a second hook for the delete/restore cycle
+PASS [1] delete: soft-deletes the hook
+PASS [1] a deleted hook's URL answers 404
+PASS [1] include_deleted shows it inside its 45-day recovery window
+PASS [1] restore: the same URL works again
+PASS [1] delete again
+PASS [1] GET /silicons lists S1 for C1 with access `custodian`
+PASS [1] API v2 management answers 410 api_version_sunset with a pointer to v3  ({"error":{"code":"api_version_sunset","message":"Hook API v1 and v2 are retired. Use /api/v3 with a Silicon Accounts access token issued to Hook (Auth…)
+PASS [1] ingress under /api/v1/silicon/... and /api/v2/silicon/... still verifies and accepts  ({"/api/v1":200,"/api/v2":200})
+## Scenario 2: a Silicon signs in to the hook CLI with a short-lived token and uses it
+PASS [2] printf %s "$SLT" | hook login --slt-stdin (fresh SILICON_HOME)
+PASS [2] hook login status --json: authenticated, confirmed by Hook
+PASS [2] hook create LocalDemo --unsigned
+PASS [2] a provider posts to it
+PASS [2] hook events --hook <id> shows the request
+PASS [2] hook update --patch, then hook show reflects it
+PASS [2] hook rotate endpoint: the old URL is retired (410), the new one works
+PASS [2] hook list shows the custodian's GitHub hook and the Silicon's own
+PASS [2] hook connect-accounts prepares the hook and names the exact silicon-accounts command  ({"set_webhook":"silicon-accounts webhook set http://127.0.0.1:4201/silicon/si:hook-e2e-s1-55559/1K5X14GQ","secret_stored_now":false})
+PASS [2] the Silicon signs in to the Silicon Accounts CLI (silicon-accounts login --silicon)
+PASS [2] silicon-accounts webhook set <hook URL> prints a whsec_ secret once
+PASS [2] hook connect-accounts --secret-file - stores it on the same hook
+PASS [2] silicon-accounts webhook test queues a signed ping
+PASS [2] the ping arrives at Hook and verifies with the x-accounts-signature policy
+PASS [2] …and nothing from Silicon Accounts was withheld
+PASS [2] hook logout revokes the sign-in at Silicon Accounts
+PASS [2] Hook hears membership.signed_out (app_revoked) and keeps the Silicon's other sign-in working  ({"reason":"app_revoked","other_token_status":200})
+PASS [2] hook login status --json after logout: {"authenticated": false}, exit 0
+PASS [2] the Silicon runtime's positional form, hook login <SLT>, signs it in again
+## Scenario 3: a Carbon signs in to the hook CLI with the device flow
+   hook login --json printed: {"event": "device_code", "user_code": "JM4U-7R9P", "verification_uri": "http://localhost:9590/device"}; approved: {'approved': 'JM4U-7R9P', 'status': 204}
+PASS [3] hook login (device flow) finishes after the Carbon approves the code
+PASS [3] hook login status --json: the Carbon, confirmed by Hook
+PASS [3] hook silicons lists S1 as looked after by this Carbon
+PASS [3] a code the Carbon denies at Silicon Accounts: exit 3 access_denied, nothing saved  ({"deny":204,"exit":3,"error":"access_denied","files":[]})
+PASS [3] hook --silicon <S1> events reads the Silicon's history
+## Scenario 4: the custodian circle, sharing by id, and Silicons that are not open to the world
+PASS [4] the custodian sees its Silicon's hooks
+PASS [4] an unrelated Carbon is refused (403)
+PASS [4] …and cannot read one of its events by id
+PASS [4] a sibling Silicon (same custodian) is refused too
+PASS [4] the custodian makes a hook for its other Silicon S3
+PASS [4] C1 grants C2 `view` by its c: id (hook access grant)
+PASS [4] C2 now lists the hooks
+PASS [4] C2 now reads the event
+PASS [4] `view` cannot create a hook (403)
+PASS [4] after an upgrade to `manage` C2 creates one, recorded as C2
+PASS [4] hook access list shows the custodian and C2's grant by current id
+PASS [4] unsharing removes access at once
+PASS [4] a grantee can leave on its own
+PASS [4] granting S2 (another custodian's Silicon) is refused until S2 allows it
+PASS [4] S2's custodian adds C1 to S2's allow-list
+PASS [4] now the grant to S2 goes through
+PASS [4] S2 reads S1's hooks with its own token
+PASS [4] …but cannot create one with `view` (403)
+## Scenario 5: Silicon Accounts webhook events: id change, profile, sign-outs, custodian change, deletion, access removal
+PASS [5] Silicon Accounts' own (first-party) token is refused: token_wrong_audience  ({"error":{"code":"token_wrong_audience","message":"The access token was issued to a different app; expected audience hook. Send a token issued to Hook…)
+PASS [5] the custodian changes S1's id (POST /v1/me/silicons/{uuid}/id, first-party token)  ({"status":200,"id":"si:hook-e2e-s1r-55559"})
+PASS [5] Hook shows the new id in GET /silicons
+PASS [5] the Silicon's hooks answer to the new id and show URLs with it
+PASS [5] a URL a provider already holds (old id) keeps working, and so does the new one  ({"old_id_url":200,"new_id_url":200,"verified_events":5})
+PASS [5] the Silicon's CLI session from before the rename keeps working (uuid-keyed)
+PASS [5] the Silicon's own Accounts hook received silicon.id_changed, verified
+PASS [5] the stack replays the id-change delivery (same event_id, fresh signature)
+PASS [5] Hook acknowledges the replay and ignores it (logged duplicate, one dedupe row)  ({"log":"_id=01a12424-de77-7239-9759-d2380f9efedf event_type=account.id_changed duplicate=true request_id=01a12424-e303-7151-97c2-e27bf6e90a4e method=P…)
+PASS [5] a delivery reusing that event_id with a sign-out payload changes nothing
+PASS [5] a delivery signed with another secret is refused (401)
+PASS [5] an unsigned delivery is refused (401)
+PASS [5] a correctly signed but 10-minute-old delivery is refused (401)
+PASS [5] none of them signed C1 out
+PASS [5] the custodian renames S1's display name
+PASS [5] Hook applies account.updated to its account cache
+PASS [5] the custodian rotates S3's STK
+PASS [5] membership.signed_out (stk_rotated) ends S3's earlier Hook tokens (401 session_ended)  ({"reason":"stk_rotated","status":401,"code":"session_ended"})
+PASS [5] a Silicon that signs in again in the very second its STK was rotated is accepted after the sign-out lands; its earlier token is refused  ({"sign_out_at":"2026-10-10T04:49:22.215Z","new_token_same_second":true,"new":200,"old":401})
+PASS [5] after S2 is renamed, S1's access list shows S2's grant under its new id  ({"Scg":"si:hook-e2e-s2r-55559"})
+PASS [5] C1 offers S3 to C2
+PASS [5] C2 accepts and becomes S3's custodian
+PASS [5] after silicon.custodian_changed the new custodian manages S3's hooks and the old one is refused  ({"new_custodian":200,"old_custodian":403})
+PASS [5] GET /silicons moves S3 from C1's list to C2's
+PASS [5] S3's new custodian deletes S3's account
+PASS [5] account.deleted: S3's hook URL answers 410 account_deleted at once  ({"error":{"code":"account_deleted","message":"The Silicon this endpoint belonged to was deleted; it accepts no more requests.","request_id":"01a12424-…)
+PASS [5] …its hooks are soft-deleted (kept for the 45-day purge, not dropped)
+PASS [5] the Silicon removes Hook's access (silicon-accounts apps remove hook)
+PASS [5] after membership.access_removed its old access token is refused (401 session_ended)  ({"error":{"code":"session_ended","message":"This sign-in ended at 2026-10-10T04:49:25.741Z (signed out or Hook's access removed in Silicon Accounts). …)
+PASS [5] its CLI says it is signed out (exit 0)
+PASS [5] the custodian still manages the Silicon's hooks
+PASS [5] signing in again right away works and the Silicon's hooks are all still there
+## Scenario 8: restart safety: stateless sessions, kept keys, persistent webhook dedupe
+PASS [8] scripts/dev-accounts.sh restart (same database, keys and webhook secret)
+PASS [8] the Silicon's CLI session works without signing in again
+PASS [8] the Carbon's access token is still accepted
+PASS [8] the hook CLI refreshes at Silicon Accounts when its token is about to expire (both tokens rotate)  ({"exit":0,"access_rotated":true,"refresh_rotated":true,"expires_in":1800})
+PASS [8] a duplicate of an event applied before the restart is still ignored  ({"delivery":204,"c1":200,"rows":"1"})
+PASS [8] a hook secret stored before the restart still verifies, and the history is intact  ({"before":11,"after":12})
+## Scenario 9: Silicon Accounts stops answering: local checks and ingress keep working, the rest says why
+PASS [9] Hook restarted with Silicon Accounts reached through a relay on base+3
+PASS [9] with Silicon Accounts reachable, the custodian reads the hooks (keys fetched)
+PASS [9] cut off: reads verified locally keep working
+PASS [9] cut off: hook login status still says signed in
+PASS [9] cut off: creating a hook (which must confirm the sign-in) is refused as accounts_unavailable  ({"code":"accounts_unavailable","exit_code":1,"message":"Silicon Accounts did not answer, and this request needs it (to confirm that the sign-in is sti…)
+PASS [9] …and the CLI keeps its sign-in
+PASS [9] cut off: provider ingress never needs Silicon Accounts
+PASS [9] Silicon Accounts back: the same command succeeds
+## Scenario 6: Hook as a proof issuer: Ting stand-in on base+2 verifies every proof as the receiving app 'interface'
+PASS [6] restart with the Ting stand-in (HOOK_TING_URL=base+2, HOOK_TING_APP_ID=the stand-in's app)
+PASS [6] GET /delivery says delivery through Ting is on
+PASS [6] hook receiving register: a User verification proof from the Silicon's own token, verified by the receiver
+PASS [6] the custodian subscribes to copies: a User verification proof for the Carbon
+PASS [6] a provider request is stored and queued for Ting
+PASS [6] the first send carried a valid App verification proof (tings.send) issued by hook for the receiver
+PASS [6] after the stand-in refused it once, Hook refreshed the proof (same proof, new token) and Ting accepted  ({"refused":{"call":"send","outcome":"invalid_proof","valid":true,"kind":"app_verification","issuing_app":"hook","receiving_app":"interface","scopes":[…)
+PASS [6] the Silicon's send names it by uuid and asks for required delivery  ({"call":"send","outcome":"accepted","valid":true,"kind":"app_verification","issuing_app":"hook","receiving_app":"interface","scopes":["tings.send"],"f…)
+PASS [6] the custodian's copy goes out as an ordinary send  ({"call":"send","outcome":"accepted","valid":true,"kind":"app_verification","issuing_app":"hook","receiving_app":"interface","scopes":["tings.send"],"f…)
+PASS [6] hook publication: accepted by Ting, with the receipt read through an App verification proof (sent.query)  ({"state":"accepted_by_ting","receipt_proof":{"call":"receipt","outcome":"receipt","valid":true,"kind":"app_verification","issuing_app":"hook","receivi…)
+PASS [6] the stand-in's journal holds digests, never a proof token
+PASS [6] the Silicon's receiving host (client crate SDK) gets the reference, hydrates it from Hook with the Silicon's own token and answers 204  ({"callback_status":204,"hydrated":{"id":"01a12425-2b88-7892-9aba-5e79952f5d54","provider":"LocalDemo","silicon":{"id":"si:hook-e2e-s1r-55559","uuid":"…)
+PASS [6] a Carbon granted `view` subscribes to copies (User verification proof for it)
+PASS [6] an event goes to the Silicon (required), its custodian and the grantee (ordinary copies)  ({"1e5":"required","oVm":"ordinary","fSx":"ordinary"})
+PASS [6] revoking the grant ends the grantee's copies at once  ({"subscription_status":403,"sent_to":{"1e5":"required","oVm":"ordinary"}})
+PASS [6] after S1 moves to C2, the former custodian gets no more copies (C2 has not subscribed)  ({"sent_to":{"1e5":"required"}})
+PASS [6] the new custodian subscribes and receives copies  ({"status":200,"sent_to":{"1e5":"required","fSx":"ordinary"}})
+## Scenario 7: discovery commands from a packaged Silicon Apps archive, in an empty home
+PASS [7] cargo build --release -p silicon-hook-cli
+PASS [7] scripts/package-apps.sh 1.0.0 macos-aarch64 … --discovery require  (["packaged /Users/codanium/Documents/silicon/.worktrees/hook-accounts-apps/.mig/e2e-55559/dist/hook-1.0.0-macos-aarch64.tar.gz (2992547 bytes)","sha25…)
+PASS [7] the archive holds exactly apps.yaml and bin/hook
+PASS [7] apps.yaml names app hook, this version and only this target
+PASS [7] hook --help: exit 0, non-empty
+PASS [7] hook accounts --json: exit 0 with "app_id": "hook"  ({"app_id":"hook","name":"Silicon Hook","version":"1.0.0","accounts_url":"https://accounts.teamofsilicons.com","api_version":"v3"})
+PASS [7] hook login status --json: exit 0, {"authenticated": false}  ({
+PASS [7] the hidden `hook iam --json` (Silicon runtime alias) prints exactly `hook accounts --json`; help never shows it  ({"exit":0})
+PASS [7] the discovery commands wrote nothing into the empty home
+cleanup: {"stopped": ["hook-worker", "hook-api", "ting-stub"], "webhook": "removed", "database": "dropped hook_e2e and roles hook_e2e_api, hook_e2e_worker"}
+137 passed, 0 failed in 80 s (report: .mig/e2e-55559/report.json)
+```
+
+Outside the run, two probes against the same stack (scratch scripts, not in git) found bugs 1 and 2 above and
+confirmed the fixes live: the same-second probe (four STK rotations, each followed within half a second by a new
+public-client token: three refused before the fix; the e2e check now reproduces it deterministically by
+rotating at the top of a second, `new_token_same_second: true`), and the missing-Ting-app probe (a stack file
+whose stand-in receiver is `ting`; before: `proof failures logged in 8 s: 5`, after: `1`, with all five sends
+`('pending', 'proof_unavailable', 1)`). The outage probe through a relay became scenario 9.
+
+### Blocked on
+
+- **Ting** (unchanged): production Ting must accept Silicon Accounts proofs before `HOOK_TING_URL` is set. The
+  issuer side is proven against a stand-in that verifies proofs as the stack's `interface` app (there is no
+  `ting` app on the shared stack and only Hook's own setup may change there); if Ting's production app id is
+  not `ting`, set `HOOK_TING_APP_ID`.
+- Nothing in Silicon Accounts blocked this stage: every request it was given behaved as documented.
+
+### Left for later stages
+
+- **Web stages**: the Next.js web (the e2e run's scenario 1 already signs a Carbon in with the web's redirect
+  URI `http://localhost:4200/auth/callback` and the code exchange the BFF will do); `scripts/dev-accounts.sh`
+  gives the web a running API on 4201 with a working webhook. The `frontend` CI job still builds the old web.
+- **Operator (cutover.md)**: every production step; step 4 now sets the webhook with `"events": null` and checks
+  hook-api's startup line. Re-run `scripts/e2e-accounts.sh` before the cutover.
+- **Windows home directory** (observation from stage 3, unchanged): the CLI needs `SILICON_HOME` or `HOME`.
+
+### Gotchas
+
+- `mint.mts` starts Node for every call (about a second); a fast path (direct HTTP: Silicon login, short-lived
+  token, public-client exchange) is needed to issue a token within the same second as an event.
+- The stack's `PUT /v1/apps/{app}/webhook` keeps update picks unless `events` is sent; `null` means every
+  update. The Accounts CLI's `app webhook set` cannot choose updates and has no `get`.
+- hook-api's development log format is coloured unless `NO_COLOR` is set (the dev script sets it).
+- A freshly started hook-api has no signing keys until its first token; `hook login` does not call Hook, so the
+  first call after a restart is the one that fetches them.
+- Accounts CLI JSON: `webhook set` returns the secret as `webhook_secret`; the hook CLI's flag for a stored
+  secret is `secret_stored_now`.
+- The Ting stand-in and the receiving host are started by the harness; `down` stops the dev processes, and the
+  harness stops its own relay and host in `finally` blocks (pids `accounts-relay`, `receiving-host`).
