@@ -1,4 +1,4 @@
-/* Code blocks on the public pages: Arc's code-block anatomy and colour roles (components/arc/code-block), as on the
+/* Code blocks on the public pages: Silicon UI's code-block anatomy and colour roles (components/silicon-ui/code-block), as on the
    developer site (developer/components/docs/code-block.module.css). */
 .block {
   --sq-r: var(--radius-control);
@@ -85,7 +85,7 @@
 .chevron { color: var(--text-muted); transition: transform var(--duration-standard) var(--ease-spring); }
 .expand[aria-expanded="true"] .chevron { transform: rotate(180deg); }
 
-/* Colour roles, as in Arc's code block: each has contrast in both themes; colour supports, never replaces, the text. */
+/* Colour roles, as in Silicon UI's code block: each has contrast in both themes; colour supports, never replaces, the text. */
 .comment { color: var(--text-muted); font-style: italic; }
 .string { color: oklch(46% .13 150); }
 .number { color: oklch(50% .14 55); }

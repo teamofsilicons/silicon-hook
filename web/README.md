@@ -96,5 +96,5 @@ sign in again. Switching the frontend alone does not migrate the backend identit
 inventory or the fleet's consumers. See `../docs/deployment.md` and
 `../docs/migration/` for the coordinated cutover and rollback evidence.
 
-Arc sources and licenses remain in `vendor/`; `DESIGN.md` documents the shared
+Current component provenance and historical license notices remain in `vendor/`; `DESIGN.md` documents the shared
 visual system. `ADOPTING.md` is the original kit maintainer reference.

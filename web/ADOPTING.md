@@ -27,7 +27,7 @@ Then, in `web/`:
   4180, hook 4200, extend 4220, mcport 4240). Keep every dependency pin as it is.
 - `playwright.config.ts`: the same port as the default of `E2E_PORT`, and the app's service in place of the stub
   (step 6).
-- Keep `components/arc/`, `vendor/uiarc/` (the MIT notice must travel with Arc's source), `styles/`, `public/fonts/`,
+- Keep `components/silicon-ui/`, `vendor/silicon-ui/` and the historical `vendor/uiarc/` MIT attribution, `styles/`, `public/fonts/`,
   `assets/og/` and their licence files exactly as they are.
 
 Check: `pnpm typecheck && pnpm lint && pnpm test` pass before you change anything else.
@@ -119,7 +119,7 @@ For every screen of the old frontend, in the order Carbons use them:
    `api.post/patch/put/delete` that update or invalidate the queries.
 3. A `loading.tsx` when the page is slow to read (skeletons in the final layout), and the page in `appConfig.nav` if it
    is a section.
-4. Arc for every control (step 8); the foundation's `Page`, `PageHeader`, `Section`, `Surface`, `SettingsGroup` and
+4. Silicon UI for every control (step 8); the foundation's `Page`, `PageHeader`, `Section`, `Surface`, `SettingsGroup` and
    `SettingsRow`, `DescriptionList` for layout; `AccountChip` wherever an account appears; `ShareWithAccounts` wherever
    something is shared (D2: sharing names exact accounts by `c:`/`si:` id; the service resolves them and stores uuids).
 5. Every list has an empty state (nothing yet: say what will appear and offer the action; nothing matches: offer to
@@ -153,25 +153,11 @@ The browser calls `/api/<the service's own path>`; the kit forwards it to `APP_A
 - **Server-only calls** (to Silicon Accounts with the app's credentials, or to another app with a proof) belong in the
   service, not here; the web frontend only ever acts as the signed-in account.
 
-## 8. Add Arc components
+## 8. Add Silicon UI components
 
-Everything free in Arc is already in `components/arc/` with the Silicon edits. To add a newer one, or one Arc adds
-later, from `web/`:
+Use the official registry at `https://ui.teamofsilicons.com/r/{name}.json`, configured as `@silicon-ui` in `components.json`. Components live in `components/silicon-ui/`; read their documentation on `ui.teamofsilicons.com`, including foundation and motion dependencies. Record the source URL and hash in `silicon-ui-registry.json`.
 
-```sh
-pnpm dlx shadcn@latest add @uiarc/<name>      # lands in components/arc/<name>/ (components.json registers @uiarc)
-```
-
-then make the same four kinds of edit the vendored set has (silicon-accounts/web/README.md, "Arc UI, Local edits"):
-
-1. **Squircles**: the element gets `data-sq="surface"` (or `"clip"` for photos and containers whose children paint into
-   the corners); its `border-radius` becomes `--sq-r`, its background and border colours `--sq-fill` and `--sq-stroke`.
-2. **Brand**: a filled primary action uses `--primary`, `--primary-hover`, `--primary-pressed`, `--primary-foreground`.
-3. **Keyboard focus**: shown as a fill or an edge (never an outline ring), so every control passes WCAG 2.4.7.
-4. **Words**: Carbons and Silicons (step 9).
-
-Never re-add a vendored component with `--overwrite`: the edits would be lost. Only Free components may be copied into
-the kit; Pro components can be used in an app's own `web/` under its own licence, never added to the kit.
+Preserve app-owned layout compatibility tokens in `styles/tokens.css` and the documented keyboard confirmation correction. Review updates before replacing local files. Keep the historical MIT notice for derived application shell styles, plus current upstream attribution.
 
 ## 9. Copy rules (D9)
 
@@ -205,7 +191,7 @@ Everything a Carbon or Silicon reads: pages, buttons, errors, toasts, `llms.txt`
   themes.
 - **Density**: controls 36/44/50 px (`--control-height-sm/md/lg`), table rows about 52 px, settings rows 64 px; one
   primary action per surface.
-- **Motion**: Arc's tokens (`--duration-*`, `--ease-*`, `motionTokens.spring.*`); things glide and morph rather than
+- **Motion**: Silicon UI's tokens (`--duration-*`, `--ease-*`, `motionTokens.spring.*`); things glide and morph rather than
   pop; everything respects reduced motion (the providers set Motion's `reducedMotion: "user"`; CSS transitions sit in
   `@media (prefers-reduced-motion: no-preference)` or are switched off under `reduce`).
 

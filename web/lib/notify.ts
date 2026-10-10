@@ -6,7 +6,7 @@
  *   notifyError(error, "Could not save the item")      // title + the service's message and hint
  *   notify.success("Shared", "si:scout can see this item now")
  *
- * The Arc toast stack (components/arc/toast-stack) lives in the providers; <ToastBridge> hands its API to this module.
+ * The Arc toast stack (components/silicon-ui/toast-stack) lives in the providers; <ToastBridge> hands its API to this module.
  * Toasts raised before it mounts are queued and shown once it does. Adapted from the developer site's lib/notify.ts.
  */
 import type { ToastOptions, ToastStackApi } from "@/components/silicon-ui/toast-stack/toast-stack";

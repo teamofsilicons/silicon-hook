@@ -7,7 +7,7 @@
  * template strings, Rust raw strings, lifetimes and macros, HTTP messages with a JSON body, TOML tables and HTML with
  * a <script>.
  *
- * Token kinds are the code-block roles of Arc UI (components/arc/code-block), so the colours match the rest of the site.
+ * Token kinds are the code-block roles of Silicon UI (components/silicon-ui/code-block), so the colours match the rest of the site.
  * Unknown languages, `text` and `output` stay plain.
  */
 

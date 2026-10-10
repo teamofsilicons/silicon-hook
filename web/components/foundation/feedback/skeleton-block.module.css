@@ -1,4 +1,4 @@
-/* Arc's skeleton look (components/arc/skeleton): a calm, finite pulse, each block a beat after the one before it. */
+/* Silicon UI's skeleton look (components/silicon-ui/skeleton): a calm, finite pulse, each block a beat after the one before it. */
 .block {
   --sq-fill: color-mix(in oklab, var(--border-strong) 38%, var(--surface));
   display: block;
