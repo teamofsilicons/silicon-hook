@@ -186,6 +186,8 @@ managing the hooks. Everything was stopped and dropped afterwards (script: scrat
 | 78d8d7a | Accept the 1.0 CLI's command names in client telemetry |
 | 252ddcc | Say what connect-accounts stored, and give account refusals precise hints |
 | cd0e18a | Document signing in with Silicon Accounts, the 1.0 CLI and client, and API v3 |
+| e80065d | Record the client and CLI stage in the migration log and decisions |
+| 3f23482 | Show how the access, allow-list, receiving, config and events commands are used |
 
 ### Tests (final run, 2026-10-10)
 
