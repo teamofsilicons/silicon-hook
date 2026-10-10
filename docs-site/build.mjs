@@ -18,6 +18,11 @@ const escape = (value) =>
     (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c],
   );
 const route = (file) => "/" + file.replace(/README\.md$/, "").replace(/\.md$/, "/");
+// Heading HTML from marked to plain text: tags dropped, its entities decoded (escape() re-encodes once).
+const plain = (html) =>
+  html
+    .replace(/<[^>]+>/g, "")
+    .replace(/&(amp|lt|gt|quot|#39);/g, (_, entity) => ({ amp: "&", lt: "<", gt: ">", quot: '"', "#39": "'" })[entity]);
 const slug = (text) =>
   text
     .replace(/<[^>]+>/g, "")
@@ -60,12 +65,12 @@ for (const file of documents) {
   const renderer = new marked.Renderer();
   renderer.heading = ({ tokens, depth }) => {
     const text = renderer.parser.parseInline(tokens),
-      base = slug(text),
+      base = slug(plain(text)),
       n = slugs.get(base) || 0,
       id = base + (n ? "-" + n : "");
     slugs.set(base, n + 1);
-    if (depth === 2) headings.push({ text: text.replace(/<[^>]+>/g, ""), id });
-    return `<h${depth} id="${id}">${text}<a class="anchor" href="#${id}" aria-label="Link to ${escape(text.replace(/<[^>]+>/g, ""))}">#</a></h${depth}>`;
+    if (depth === 2) headings.push({ text: plain(text), id });
+    return `<h${depth} id="${id}">${text}<a class="anchor" href="#${id}" aria-label="Link to ${escape(plain(text))}">#</a></h${depth}>`;
   };
   renderer.link = ({ href, title, tokens }) => {
     let destination = href;
@@ -94,7 +99,7 @@ for (const file of documents) {
         `<a href="${route(f)}"${f === file ? ' aria-current="page"' : ""}>${escape(titles.get(f))}</a>`,
     )
     .join("");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Hook Docs</title><meta name="description" content="Silicon Hook ${escape(version)} documentation: ${escape(title)}"><link rel="canonical" href="${url}"><meta property="og:title" content="${escape(title)} · Hook Docs"><meta property="og:url" content="${url}"><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/styles.css"><script src="/search.js" defer></script></head><body><a class="skip" href="#main">Skip to content</a><header><a class="brand" href="/"><span>▣</span> Hook <small>Docs</small></a><label class="search-label" for="search">Search docs<input id="search" type="search" placeholder="Search the documentation" autocomplete="off" aria-controls="search-results"></label><a class="app-link" href="https://hook.teamofsilicons.com">Open Hook ↗</a></header><div id="search-results" hidden role="region" aria-label="Search results"></div><div class="layout"><aside><span class="version">VERSION · ${escape(version)}</span><nav aria-label="Documentation">${nav}</nav><a class="source" href="https://github.com/teamofsilicons/silicon-hook">Source on GitHub ↗</a></aside><main id="main"><div class="eyebrow">SILICON HOOK / DOCUMENTATION</div>${releasePreview ? `<div class="release-preview" role="note"><strong>Upcoming release ${escape(version)}</strong><p>This documentation previews Hook ${escape(version)}: sign-in with Silicon Accounts and API v3. Rollout is pending; existing installations still use the previous release. <a href="/deployment/">Upgrade order</a>.</p></div>` : ""}<article>${body}</article><footer>Silicon Hook · Client ${escape(version)} · API v3 · <a href="/contracts/">Version policy</a></footer></main><nav class="toc" aria-label="On this page"><strong>On this page</strong>${headings.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}</nav></div></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Hook Docs</title><meta name="description" content="Silicon Hook ${escape(version)} documentation: ${escape(title)}"><link rel="canonical" href="${url}"><meta property="og:title" content="${escape(title)} · Hook Docs"><meta property="og:url" content="${url}"><meta name="color-scheme" content="light dark"><link rel="icon" href="/favicon.svg"><script src="/theme.js"></script><link rel="stylesheet" href="/styles.css"><script src="/search.js" defer></script></head><body><a class="skip" href="#main">Skip to content</a><header><a class="brand" href="/"><img src="/favicon.svg" alt="" width="28" height="28">Hook <small>Docs</small></a><label class="search-label" for="search">Search docs<input id="search" type="search" placeholder="Search the documentation" autocomplete="off" aria-controls="search-results"></label><a class="app-link" href="https://hook.teamofsilicons.com">Open Hook ↗</a><div class="theme" role="group" aria-label="Theme"><button type="button" data-theme-choice="light" aria-pressed="false">Light</button><button type="button" data-theme-choice="dark" aria-pressed="false">Dark</button><button type="button" data-theme-choice="system" aria-pressed="true">System</button></div></header><div id="search-results" hidden role="region" aria-label="Search results"></div><div class="layout"><aside><span class="version">Version ${escape(version)}</span><nav aria-label="Documentation">${nav}</nav><a class="source" href="https://github.com/teamofsilicons/silicon-hook">Source on GitHub ↗</a></aside><main id="main"><div class="eyebrow">Silicon Hook documentation</div>${releasePreview ? `<div class="release-preview" role="note"><strong>Upcoming release ${escape(version)}</strong><p>This documentation previews Hook ${escape(version)}: sign-in with Silicon Accounts and API v3. Rollout is pending; existing installations still use the previous release. <a href="/deployment/">Upgrade order</a>.</p></div>` : ""}<article>${body}</article><footer>Silicon Hook · Client ${escape(version)} · API v3 · <a href="/contracts/">Version policy</a></footer></main><nav class="toc" aria-label="On this page"><strong>On this page</strong>${headings.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}</nav></div></body></html>`;
   const directory = path.join(output, route(file));
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, "index.html"), html);
@@ -112,8 +117,9 @@ for (const file of files.filter((f) => !f.endsWith(".md"))) {
   await mkdir(path.dirname(dest), { recursive: true });
   await cp(path.join(source, file), dest);
 }
-for (const file of ["styles.css", "search.js"])
+for (const file of ["styles.css", "search.js", "theme.js"])
   await cp(path.join(root, "docs-site", file), path.join(output, file));
+await cp(path.join(root, "docs-site/fonts"), path.join(output, "fonts"), { recursive: true });
 await cp(path.join(source, "install.sh"), path.join(output, "install.sh"));
 await cp(path.join(root, "openapi.yaml"), path.join(output, "openapi.yaml"));
 await cp(path.join(root, "docs-site/favicon.svg"), path.join(output, "favicon.svg"));
@@ -128,6 +134,6 @@ await writeFile(
 );
 await writeFile(
   path.join(output, "404.html"),
-  '<!doctype html><html lang="en"><meta charset="utf-8"><title>Page not found · Hook Docs</title><link rel="stylesheet" href="/styles.css"><main><h1>Page not found</h1><a href="/">Return to Hook documentation</a></main></html>',
+  '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Page not found · Hook Docs</title><link rel="icon" href="/favicon.svg"><script src="/theme.js"></script><link rel="stylesheet" href="/styles.css"><main class="not-found"><h1>Page not found</h1><p>That page is not part of the Hook documentation.</p><a href="/">Return to Hook documentation</a></main></html>',
 );
 console.log(`Built ${documents.length} documentation pages for ${origin}`);
