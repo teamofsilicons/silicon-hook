@@ -1,215 +1,144 @@
-# Stateless Rust client
+# Rust client
 
-The package is `silicon-hook-client`; the Rust import is `silicon_hook_client`.
-In this workspace use a path dependency on `crates/client`. Consumers of a
-published release use its matching crates.io version.
+The package is `silicon-hook-client` (import `silicon_hook_client`). It is
+stateless: it stores no credentials, starts no listener or daemon, and never
+updates itself. The host keeps its tokens and decides when to call. The `hook`
+CLI is built on this crate only.
 
-This client uses Hook API v2 for management and authenticated event lookup.
-The enclosing application handles IAM login, token storage and refresh, and
-internal Ting receiving. Hook and Ting remain internal services; the user
-does not need separate setup for either one. The SDK stores no credentials,
-starts no listener or daemon, and owns no delivery connection.
+```toml
+[dependencies]
+silicon-hook-client = "1"
+```
+
+Three parts:
+
+| Module | For |
+| --- | --- |
+| [`signin`](#sign-in) | Getting a Silicon Accounts access token issued to Hook, as Hook's public client (no secret) |
+| [`Client`](#call-hook) | Hook API v3 with that token: a Silicon's hooks, history, access, delivery status |
+| [`delivery`](relay.md) | Checking Ting callbacks and fetching the events they point to |
 
 ## Sign in
 
-The host obtains an IAM short-lived token for the selected Hook application
-through its existing Carbon/Silicon login. Hook does not collect passwords or OTPs.
+Hook accepts Silicon Accounts access tokens whose audience is `hook`. Hook's own
+tools get them as a public client:
 
 ```rust,no_run
-use silicon_hook_client::{Client, Mutation};
+use silicon_hook_client::signin::SignIn;
 
-# async fn example() -> Result<(), Box<dyn std::error::Error>> {
-let base = Client::new("https://backend.hook.teamofsilicons.com")?;
-let slt = std::env::var("HOOK_SLT")?;
-let login = Mutation::new();
-let tokens = base.login(&slt, &login).await?;
-let client = base.with_token(tokens.access_token.expose())
-    .with_organization("tos");
-let hooks = client.list_hooks("si:cos", false).await?;
-println!("{} hooks", hooks.items.len());
+# async fn demo() -> silicon_hook_client::Result<()> {
+let sign_in = SignIn::production()?; // or SignIn::new("http://localhost:9590")? locally
+
+// A Silicon: a short-lived token from `silicon-accounts login --app hook -q`.
+let tokens = sign_in.exchange_slt("slt_...").await?;
+
+// A Carbon: the device flow.
+let device = sign_in.start_device(Some("my tool on build-box"), None).await?;
+println!("open {} and enter {}", device.verification_uri, device.user_code);
+let tokens = sign_in.wait_for_device(&device, |_progress| {}).await?;
+
+let account = tokens.account.as_ref().expect("token responses carry the account");
+println!("signed in as {} ({}), a {}", account.id, account.uuid, account.kind.as_str());
 # Ok(()) }
 ```
 
-`login(slt, mutation)` and `authenticate(slt, mutation)` return the same `Tokens`
-model. Neither changes the original client or configures receiving. Keep the
-access and refresh tokens together in the host's secure session storage.
-Before `expires_in` elapses, call `refresh(refresh_token, mutation)` explicitly
-and atomically replace the complete pair. Keep one mutation key for retries of
-the same exchange or refresh; an uncertain response may have consumed or rotated
-the credential already.
+`wait_for_device` honours the server's interval, adds five seconds on each
+`slow_down`, retries transient failures (reported through the callback) and gives
+up when the code expires (10 minutes). `Tokens` holds a 30-minute
+`access_token`, a rotating `refresh_token`, `expires_in`, `refresh_expires_at`,
+`scope` and the `account` (`uuid`, `kind`, `id`, `display_name`, `pfp_url`, and a
+Silicon's `custodian`).
 
-To revoke the session family, call `logout(&mutation)` on a client whose bearer
-is the current refresh token. Dropping a client has no remote side effects.
+Keep the pair together. Before the access token expires, call
+`sign_in.refresh(refresh_token)`: it spends the refresh token you send and
+returns a new pair. Silicon Accounts ends the whole sign-in if a spent refresh
+token is presented again, so refresh one at a time per sign-in and store the new
+pair before using it. `sign_in.revoke(refresh_token)` signs out.
 
-Tokens redact Debug output and zeroize their owned strings when dropped.
-`Secret::expose()` gives plaintext only where needed. Serialization is explicit
-because hosts may need to save credentials securely; never log serialized token,
-hook-secret, or environment-key responses.
+Failures are `Error::SignIn` with a `kind` you can act on:
 
-`iam()` discovers public application configuration before login.
-`login_status()` checks the current bearer and selected organization online.
-Absent credentials or a 401 return `authenticated: false`; outages and other
-errors remain errors. If the token exchange did not bind an organization, the
-host selects one with `with_organization`.
+| `SignInErrorKind` | Meaning |
+| --- | --- |
+| `SltRefused(SltRefusal)` | The short-lived token was refused: `AlreadyUsed`, `Expired`, `WrongApp`, `Unknown`, `NotAnSlt`, `Ended`. Mint a fresh one. |
+| `SessionEnded` | The refresh token no longer works: sign in again. |
+| `Denied`, `Expired` | The device sign-in was denied, or its code expired. |
+| `NotEnabled` | Hook's sign-in setup at that Silicon Accounts does not allow this sign-in. |
+| `Unavailable { maybe_processed }` | Silicon Accounts could not be reached or failed. `maybe_processed` says whether the request may have been handled (a refresh token may then be spent). |
+| `Rejected` | Any other refusal; `code`, `message` and `hint` say what. |
 
-## Version and environment selection
+Servers that hold their own Silicon Accounts app secret use
+`silicon-accounts-client`'s `AppClient` instead; any route works as long as the
+token's audience is `hook`.
 
-`with_token`, `with_organization`, `with_test_key`, and `with_test_app_secret`
-return immutable configurations. API calls first negotiate `/api/version`,
-advertise only `v2`, verify `service = silicon-hook` and the selected major,
-then use `/api/v2/` with `silicon-hook-api-version: v2`. A v1-only backend is
-rejected before sending an SLT or a management mutation.
+## Call Hook
 
-`Client::new` accepts a pathless HTTPS origin or HTTP on loopback (`localhost`,
-`*.localhost`, or a loopback IP). Redirects are disabled. Authenticated requests
-and test selectors stay on the configured Hook origin.
+```rust,no_run
+use silicon_hook_client::{Client, Mutation, models::{CreateHook, UpdateHook}};
 
-A test client uses a Hook test key or the linked IAM application's test secret,
-plus an actor token from that test world. Changing to an application secret or
-leaving testing clears the previous actor and organization. See
-[testing with Rust](../testing/client.md). A failed test login must not fall
-back to a production credential.
+# async fn demo(access_token: &str) -> silicon_hook_client::Result<()> {
+let hook = Client::production()?.with_token(access_token);
+let created = hook
+    .create_hook("si:scout", &CreateHook { name: "GitHub".into(), ..Default::default() }, &Mutation::new())
+    .await?;
+println!("give GitHub {}", created.hook.endpoint_url);
+hook.update_hook("si:scout", created.hook.id, &UpdateHook {
+    description: Some(None), // explicit null clears it
+    ..Default::default()
+}, &Mutation::new()).await?;
+# Ok(()) }
+```
 
-## Operations
+`Client::new` takes a pathless HTTPS origin, or plain HTTP on this machine
+(`localhost`, `*.localhost`, a loopback address). Redirects are off. Before the
+first call the client checks `/api/version`: the server must be `silicon-hook`
+serving API `v3`, and every request then pins `Silicon-Hook-API-Version: v3`.
+
+`with_token` and `with_telemetry` return new, immutable clients. Every `silicon`
+argument accepts the Silicon's current `si:` id or its uuid; responses show
+accounts as `{uuid, id}` (and `kind` for `created_by`, grants and the like).
 
 | Area | Methods |
-|---|---|
-| Authentication | `login`, `authenticate`, `login_status`, `refresh`, `logout` |
-| Discovery | `iam`, `negotiate`, `version`, `health` |
-| Hooks | `list_hooks`, `get_hook`, `create_hook`, `update_hook`, `delete_hook`, `restore_hook` |
-| Activation | `set_enabled` |
-| Credentials | `rotate_endpoint`, `rotate_secret`, `set_secret` |
-| History and lookup | `events`, `blocked_requests`, `event` |
-| Internal receiving | `delivery_context`, `register_recipient`, `receiving_subscription`, `subscribe`, `unsubscribe`, `resolve_notification`, `hydrate_notification` |
-| Scoped sandbox observation | `receiver_scope`, `bootstrap_receiver`, `renew_receiver` |
-| Delivery status | `publication` |
-| Internal publisher administration | `provision_publisher`, `replace_rejected_publisher` |
-| IAM | `connect_iam_hook` |
-| Test administration | `create_environment`, `list_environments`, `list_environments_page`, `environment`, `environment_key`, `rotate_environment_key`, `delete_environment`, `restore_environment` |
-| Selected testing | `selected_environment`, `current_environment`, `clean_environment`, `configure_test_iam` |
-| Release discovery | Explicit read-only `updater::check` |
+| --- | --- |
+| Sign-in and status | `sign_in_information` (public), `login_status`, `negotiate`, `version`, `health`, `contracts` |
+| Silicons and access | `silicons`, `access`, `grant`, `revoke`, `leave`, `allow_list`, `allow`, `disallow` |
+| Hooks | `list_hooks`, `get_hook`, `create_hook`, `update_hook`, `set_secret`, `delete_hook`, `restore_hook`, `set_enabled`, `rotate_endpoint`, `rotate_secret` |
+| Silicon Accounts updates | `connect_accounts_hook` |
+| History | `events`, `blocked_requests`, `event` |
+| Delivery through Ting | `delivery_status`, `register_recipient`, `receiving_subscription`, `subscribe`, `unsubscribe`, `publication`, `delivery_context`, `resolve_notification`, `hydrate_notification` |
+| Diagnostics | `emit_telemetry` (opt-out with `with_telemetry(false)` or `SILICON_HOOK_TELEMETRY=off`) |
 
-Wire models live under `models`; receiving types live under `delivery`.
-`CreateHook::default()` with a nonempty name enables default HMAC-SHA256
-verification. A `Signature` override changes only supplied fields.
-`UpdateHook.description` and `Signature.public_key` distinguish omission
-(`None`) from explicit clearing (`Some(None)`).
+Mutations take a `Mutation`: one idempotency key per logical change. Reuse the
+same `Mutation` when retrying after an uncertain result, and Hook answers with
+the first result instead of applying the change twice.
 
-```rust,no_run
-# async fn example(client: &silicon_hook_client::Client) -> silicon_hook_client::Result<()> {
-use silicon_hook_client::{Mutation, models::{CreateHook, UpdateHook}};
-let created = client.create_hook("si:cos", &CreateHook {
-    name: "GitHub".into(), ..Default::default()
-}, &Mutation::new()).await?;
-client.update_hook("si:cos", created.hook.id, &UpdateHook {
-    description: Some(None), ..Default::default()
-}, &Mutation::new()).await?;
-# Ok(()) }
-```
+`login_status` returns `authenticated: false` without a token or when Hook
+refuses the token (401), with Hook's `reason` and `message`; outages stay errors.
 
-## Internal receiving
+## Errors
 
-An organization owner/admin Carbon configures the backend's dedicated Silicon
-publisher using `provision_publisher(&Secret, &Mutation)`. The SLT must be newly issued
-for that server-owned Hook session, not an interactive session's refresh token.
-The returned `PublisherMetadata` contains only organization, actor and expiry.
-Reuse the same SLT and mutation for an uncertain provisioning result. To recover
-a publisher whose session was rejected, explicitly call
-`replace_rejected_publisher(slt, mutation)` with a fresh dedicated SLT and a new
-operation key. This does not replace a currently usable publisher. See
-[service setup](../ting-delivery.md) for scopes and notification-type provisioning.
+`Error::Api` keeps Hook's error envelope: `status`, the stable `code`, `message`,
+`details`, `hint`, `request_id` and `retry_after`. `error.code()`,
+`error.status()`, `error.hint()`, `error.is_code("…")` and
+`error.is_unauthenticated()` work across kinds. Other kinds: `Invalid` (nothing
+was sent), `Transport` (Hook unreachable), `Protocol` (not Hook API v3, or an
+unexpected answer), `Json`, and `SignIn`.
 
-The host configures its shared Ting session and destination internally, then
-uses `delivery::Receiver` to validate the callback and hydrate compact event
-references. See [receiving through Ting](relay.md) for the acceptance boundary.
-There is no Hook WebSocket, local gateway, daemon, webhook destination setting,
-cumulative cursor, or Hook ACK API in this client.
+Secrets (`Secret`) never appear in `Debug` output and are wiped when dropped;
+`expose()` returns the plaintext where it must leave the program. Creation and
+rotation responses carry signing secrets once; store them privately and never log
+serialized responses.
 
-For sandbox inbox/watch observation, `receiver_scope` verifies the current
-actor/app/organization/environment. Persist that scope and a caller-owned
-`Mutation` before `bootstrap_receiver`. Retry them unchanged after uncertainty;
-renew the original receiver ID using `renew_receiver` with a new mutation.
-`ReceiverCapability` redacts its secret in Debug and retains the original expiry
-on replay, even if expired. Check expiry before using it. The host owns the
-scoped Ting inbox/watch transport and renewal; this capability cannot attach a
-native destination, enable required delivery or ACK events. See
-[sandbox receiving](../testing/client.md).
+## Who can call what
 
-Silicons receive their own events after recipient setup. An authorized Carbon
-uses `subscribe(silicon)` to request future events for a visible Silicon.
-`unsubscribe` cancels that Carbon's queued sends without affecting the primary
-Silicon. Already accepted Ting notifications cannot be retracted. The backend
-checks current IAM visibility when hydrating every original webhook.
+The Silicon and its custodian can do everything with the Silicon's hooks.
+`manage` grants create and change hooks; `view` grants read hooks, history and
+delivery status. Granting, revoking and the allow-list belong to the Silicon and
+its custodian. A custodian acts as itself, never as the Silicon. See
+[Sign in to Hook](../accounts/README.md#who-can-do-what).
 
-New primary Silicon sends use required automation delivery. Registration reports
-the separate `required_delivery` opt-in, while publication and receipt expose
-`DeliveryMode`. A silent required event can still reach a destination. The
-enclosing app handles the recipient's explicit opt-in through its own Ting
-session; the Hook client never enables it through application authority.
+## Examples
 
-## Failures, retries and limits
-
-`Error::Api` includes HTTP status, stable code, message, request ID, and optional
-Retry-After. A transport error may leave a mutation's outcome unknown; reuse its
-`Mutation` when retrying. Error bodies are decoded rather than dumped wholesale.
-Requests time out after 30 seconds. Response buffering stops at 64 MiB, and
-history is paginated within a backend byte budget. A 1–10000 item request may
-return fewer records; continue with `next_cursor`.
-
-Reading history or hydrating a notification does not acknowledge delivery.
-Ting is at least once: the host must durably accept and deduplicate every item
-in a callback batch before returning exactly HTTP 204. Acceptance by Ting,
-delivery to a destination, and application processing are separate states.
-`Receiver::resolve` returns an explicit unavailable result for a validated
-reference whose original returns Hook's authenticated `404 not_found`. Persist
-and report that result without treating it as work, so retained old notifications
-do not block newer events. Authority and service failures remain retryable errors.
-
-The one-shot `management_login` example lists hooks and revokes its temporary
-session. Run `cargo run -p silicon-hook-client --example management_login` with
-the environment variables documented in its source.
-
-## Bring your own secret
-
-```rust,no_run
-# async fn example(client: &silicon_hook_client::Client) -> silicon_hook_client::Result<()> {
-use silicon_hook_client::{Mutation, Secret, models::{CreateHook, Signature}};
-let created = client.create_hook("si:cos", &CreateHook {
-    name: "Provider".into(),
-    signature: Some(Signature {
-        secret: Some(Secret::new("provider-secret")),
-        secret_encoding: Some("utf8".into()),
-        ..Signature::default()
-    }),
-    ..CreateHook::default()
-}, &Mutation::new()).await?;
-client.set_secret("si:cos", created.hook.id,
-    Secret::new("replacement-secret"), None, &Mutation::new()).await?;
-# Ok(()) }
-```
-
-`None` retains the secret encoding. Pass an encoding such as `Some("hex".into())`
-to change it. The previous secret stops verifying immediately. Replacement
-preserves the URL, other policy fields, and activation state and returns no
-secret. The same operations work in the selected testing environment.
-
-## Updates
-
-The Rust client is a normal dependency. It never runs Cargo, modifies a
-lockfile, or schedules runtime updates. Update through the consuming project's
-dependency workflow. `with_auto_update` remains a compatibility no-op;
-Honeycomb owns CLI installation and updates.
-
-## Separate Ting authorization
-
-Ting operations require explicit endpoint approval after ordinary login. Use `hook receiving authorize`, review the IAM URL, then `hook receiving complete AUTHORIZATION_ID --code-file -`; pass a stable `--idempotency-key` to mutations. `receiving authorization-status` inspects local state and `receiving disconnect-authorization` removes local tokens. Missing approval returns `428 ting_authorization_required` without invalidating the login.
-
-The API exposes GET/POST `/api/v2/delivery/authorization`, POST `/api/v2/delivery/authorization/complete` (`authorization_id`, secret `authorization_code`), and POST `/api/v2/delivery/authorization/disconnect`. SDK methods are `authorize_ting`, `complete_ting_authorization`, `ting_authorization` and `disconnect_ting_authorization`. Tokens remain encrypted server-side, separately for each endpoint and account/org/environment. See [delivery guide](../ting-delivery.md) for publisher and recovery rules.
-
-### IAM 5 session identity
-
-`login`, `authenticate`, and `refresh` require a canonical Carbon or Silicon actor
-and one organization in the response. Missing organization metadata is an error;
-no identity text or caller default supplies it. A client selected with
-`with_organization` rejects responses for a different org. The state owner must
-also compare the refreshed actor with its saved actor before replacing a family.
+- `examples/management_login.rs`: a Silicon signs in with a short-lived token,
+  lists its hooks and signs out.
+- `examples/ting_receiver_e2e.rs`: a fixture host that receives Ting callbacks,
+  hydrates them and accepts them durably.

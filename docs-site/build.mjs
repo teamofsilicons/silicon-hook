@@ -35,7 +35,12 @@ async function inventory(dir, prefix = "") {
   }
   return result;
 }
-const files = await inventory(source),
+// Records of retired features (and docs/history/) are kept in the repository
+// but not published; links to them resolve to the source on GitHub.
+const retired = (file) =>
+  /^(history|iam|testing)\//.test(file) ||
+  ["ting-integration-issues.md", "ting-implementation.md", "frontend-iam5-contexts.md"].includes(file);
+const files = (await inventory(source)).filter((f) => !retired(f)),
   documents = files.filter((f) => f.endsWith(".md"));
 const titles = new Map(
   await Promise.all(
@@ -45,7 +50,7 @@ const titles = new Map(
     ]),
   ),
 );
-const navigation = ["README.md", "cli/README.md", "testing/README.md", "testing/cli.md", "client/README.md", "client/relay.md", "ting-delivery.md", "ting-integration-issues.md", "testing/client.md", "api/README.md", "testing/api.md", "iam/README.md", "contracts.md", "configuration.md", "releases.md", "testing/honeycomb.md", "telemetry.md", "deployment.md", "verification/current.md"];
+const navigation = ["README.md", "accounts/README.md", "cli/README.md", "client/README.md", "client/relay.md", "ting-delivery.md", "api/README.md", "contracts.md", "configuration.md", "releases.md", "telemetry.md", "deployment.md", "verification/current.md"];
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 const search = [];
@@ -90,7 +95,7 @@ for (const file of documents) {
         `<a href="${route(f)}"${f === file ? ' aria-current="page"' : ""}>${escape(titles.get(f))}</a>`,
     )
     .join("");
-  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Hook Docs</title><meta name="description" content="Silicon Hook ${escape(version)} documentation: ${escape(title)}"><link rel="canonical" href="${url}"><meta property="og:title" content="${escape(title)} · Hook Docs"><meta property="og:url" content="${url}"><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/styles.css"><script src="/search.js" defer></script></head><body><a class="skip" href="#main">Skip to content</a><header><a class="brand" href="/"><span>▣</span> Hook <small>Docs</small></a><label class="search-label" for="search">Search docs<input id="search" type="search" placeholder="Search the documentation" autocomplete="off" aria-controls="search-results"></label><a class="app-link" href="https://hook.teamofsilicons.com">Open Hook ↗</a></header><div id="search-results" hidden role="region" aria-label="Search results"></div><div class="layout"><aside><span class="version">VERSION · ${escape(version)}</span><nav aria-label="Documentation">${nav}</nav><a class="source" href="https://github.com/teamofsilicons/silicon-hook">Source on GitHub ↗</a></aside><main id="main"><div class="eyebrow">SILICON HOOK / DOCUMENTATION</div>${releasePreview ? `<div class="release-preview" role="note"><strong>Upcoming release ${escape(version)}</strong><p>This documentation previews the IAM 5 integration. Runtime rollout is pending; existing installations still use the previous release. <a href="https://docs.iam.teamofsilicons.com/obo-cutover/">Prepare your OBO integration</a>.</p></div>` : ""}<article>${body}</article><footer>Silicon Hook · Client ${escape(version)} · API v2 · <a href="/contracts/">Version policy</a></footer></main><nav class="toc" aria-label="On this page"><strong>On this page</strong>${headings.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}</nav></div></body></html>`;
+  const html = `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${escape(title)} · Hook Docs</title><meta name="description" content="Silicon Hook ${escape(version)} documentation: ${escape(title)}"><link rel="canonical" href="${url}"><meta property="og:title" content="${escape(title)} · Hook Docs"><meta property="og:url" content="${url}"><link rel="icon" href="/favicon.svg"><link rel="stylesheet" href="/styles.css"><script src="/search.js" defer></script></head><body><a class="skip" href="#main">Skip to content</a><header><a class="brand" href="/"><span>▣</span> Hook <small>Docs</small></a><label class="search-label" for="search">Search docs<input id="search" type="search" placeholder="Search the documentation" autocomplete="off" aria-controls="search-results"></label><a class="app-link" href="https://hook.teamofsilicons.com">Open Hook ↗</a></header><div id="search-results" hidden role="region" aria-label="Search results"></div><div class="layout"><aside><span class="version">VERSION · ${escape(version)}</span><nav aria-label="Documentation">${nav}</nav><a class="source" href="https://github.com/teamofsilicons/silicon-hook">Source on GitHub ↗</a></aside><main id="main"><div class="eyebrow">SILICON HOOK / DOCUMENTATION</div>${releasePreview ? `<div class="release-preview" role="note"><strong>Upcoming release ${escape(version)}</strong><p>This documentation previews Hook ${escape(version)}: sign-in with Silicon Accounts and API v3. Rollout is pending; existing installations still use the previous release. <a href="/deployment/">Upgrade order</a>.</p></div>` : ""}<article>${body}</article><footer>Silicon Hook · Client ${escape(version)} · API v3 · <a href="/contracts/">Version policy</a></footer></main><nav class="toc" aria-label="On this page"><strong>On this page</strong>${headings.map((h) => `<a href="#${h.id}">${escape(h.text)}</a>`).join("")}</nav></div></body></html>`;
   const directory = path.join(output, route(file));
   await mkdir(directory, { recursive: true });
   await writeFile(path.join(directory, "index.html"), html);

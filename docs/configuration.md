@@ -1,54 +1,88 @@
 # Install and configure Hook
 
-## One-command technical setup
+## Install the CLI
 
 ```sh
-honeycomb install 'hook'
+silicon-apps install hook
 ```
 
-Honeycomb installs a prebuilt executable for Linux, Windows or macOS on x86_64 or aarch64. No Rust compiler is needed. Then run `hook login <slt>` for internal management. The enclosing app handles Ting receiving separately from this management CLI, without an extra end-user setup flow.
+Silicon Apps installs a prebuilt `hook` for Linux, macOS or Windows on x86_64 or
+aarch64 and updates it; no Rust toolchain is needed. Development releases install
+as `silicon-apps install 'hook>dev'`. Then sign in: `hook login` (Carbons) or
+`silicon-accounts login --app hook -q | hook login --slt-stdin` (Silicons).
 
-For local source development:
+From source:
 
 ```sh
 git clone https://github.com/teamofsilicons/silicon-hook.git
 cd silicon-hook
-cargo build --workspace --bins --locked
 cargo install --path crates/cli --locked
 ```
 
-Use the reviewed revision containing the required features, and deploy its backend before connecting a new client. See [compatibility](contracts.md).
+Deploy the matching backend before connecting a new client; see
+[compatibility](contracts.md).
 
-## State and identity
+## Where the CLI keeps its state
 
-`SILICON_HOME` is the base for the private `.silicon-hook` directory. If absent, Hook uses `$HOME`. `SILICON_HOOK_HOME` overrides the full state directory. `hook config home <directory>` relocates the configured base. Files are private and state writes are atomic.
+`$SILICON_HOME/.silicon-hook` (or `~/.silicon-hook` without `SILICON_HOME`) holds
+`profiles.json`: each profile's settings and its Silicon Accounts sign-in. The
+directory is 0700 and the files 0600; writes are atomic, and a lock file
+(`profiles.lock`) serializes changes and token refreshes.
 
-`--profile` selects independent saved sessions. `env use` remembers a sandbox per profile; `--test` overrides it for one command and `--production` temporarily uses production. The CLI refreshes sessions under its private state lock. It starts no Hook daemon or delivery connection.
+- `SILICON_HOOK_HOME` names the exact directory instead.
+- `hook config home <directory>` moves the base to an existing directory (state
+  then lives in `<directory>/.silicon-hook`).
+- `--profile <name>` keeps a separate sign-in and settings in the same file.
 
-## Common configuration
+A `state.json` from Hook before 1.0 is left untouched and never read for
+credentials; see [upgrading](cli/README.md#upgrading-from-hook-before-10).
+
+## Settings
 
 ```sh
-hook config show
-hook config set url https://backend.hook.teamofsilicons.com
-hook config set org tos
+hook config show                                     # what is in effect, and where it came from
+hook config set silicon si:scout                     # default Silicon for this profile
+hook config set url http://127.0.0.1:4201            # a local Hook API
+hook config set accounts-url http://localhost:9590   # a local Silicon Accounts
+hook config set telemetry off
+hook config unset url
 ```
 
-The enclosing runtime owns destination configuration, optional internal Silicon metadata and callback authentication through Ting. See the [stateless receiving adapter](client/relay.md) and [service setup](ting-delivery.md). Keep test destinations and sessions isolated from production.
+| Setting | Flag | Environment | Default |
+| --- | --- | --- | --- |
+| Hook API | `--url` | `SILICON_HOOK_URL` | `https://backend.hook.teamofsilicons.com` |
+| Silicon Accounts | `--accounts-url` | `ACCOUNTS_URL` | `https://accounts.teamofsilicons.com` |
+| Default Silicon | `--silicon` | | the signed-in Silicon |
+| Telemetry | | `SILICON_HOOK_TELEMETRY=off` | on |
 
-## Automatic updates
+A flag or environment variable wins over the profile setting. Plain `http` is
+accepted only for this machine. A signed-in profile keeps the Hook API and Silicon
+Accounts it signed in with: changing either asks you to sign out first (or use
+another profile), so a token is never sent to another service.
 
-Honeycomb owns CLI updates. Hook commands never install or replace binaries. Rust dependencies change only when the consuming project updates its manifest or lockfile. Before upgrading from the legacy transport, use the old executable's `hook daemon stop`. The new CLI removes delivery fields on its next state save while preserving login credentials; it cannot manage the retired daemon.
+## Updates
+
+Silicon Apps owns CLI updates; `hook` never installs or replaces binaries. The
+Rust client changes only when the consuming project updates its manifest.
 
 ## Diagnose and report
 
-`hook <command> --help` explains purpose, flags and next steps. `hook commands --json` exports the command tree; `hook docs <topic>` works offline; `hook about` prints source/docs/package links.
+`hook <command> --help` explains purpose, flags and next steps;
+`hook commands --json` exports the command tree; `hook docs <topic>` works
+offline; `hook about` prints the source, docs and package links. Errors carry a
+stable `code`, a `hint` and an exit code ([CLI](cli/README.md#output-errors-and-exit-codes)).
 
 ```sh
-hook report "Expected behavior, actual result, and reproduction steps" --pr https://github.com/teamofsilicons/silicon-hook/pull/123
+hook report "Expected behaviour, actual result, and reproduction steps" --pr https://github.com/teamofsilicons/silicon-hook/pull/123
 ```
 
-Reports use your existing GitHub CLI login and submit only the text, optional PR and package version you supply. They never collect logs or credentials. If submission fails, check the issue tracker before retrying to avoid duplicate issues. Bug reports do not depend on Space Station.
+Reports use your existing GitHub CLI login and send only the text, the optional
+pull request and the version. If submission fails, check the issue tracker before
+retrying.
 
 ## Diagnostic telemetry
 
-Enabled by default. Use `hook config set telemetry off` for the selected profile or `SILICON_HOOK_TELEMETRY=off` for a process override. In the browser, open Connections & setup and disable Share diagnostic events. SDK clients use `client.with_telemetry(false)`. Operators can disable backend and worker collection with `HOOK_TELEMETRY=off`. See [telemetry storage, consent and event schema](telemetry.md).
+On by default. `hook config set telemetry off` turns it off for a profile and
+`SILICON_HOOK_TELEMETRY=off` for a process. SDK clients use
+`client.with_telemetry(false)`. Operators turn off backend and worker collection
+with `HOOK_TELEMETRY=off`. See [telemetry](telemetry.md).
