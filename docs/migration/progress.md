@@ -785,3 +785,11 @@ The final local macOS ARM64 CLI was rebuilt after UUID/auth fixes, then repackag
 ## Coordinated local UUID backfill — 10 October 2026
 
 With API/worker writers stopped and full database/private-state backups captured, applied the shared Accounts export (211 rows, SHA256 `750423f3117e11f5eb42025b457ff0f1bf42bd463c31b7e106d9cd10978ca4d9`) to `hook_codex_web`: 23 cached account rows moved and 0 held proof grants were authenticated/resealed. Dry-run, apply and unchanged replay passed. Exact resource IDs, archive/prepared payloads, Hook secret ciphertext and decrypted DM/Extend proof hashes matched their pre-apply snapshots. The live store had no unaccepted prepared deliveries left to park; separate populated queue regressions cover that case. Evidence: Commit `.mig/cutover/applied.json` and `retention-verified.json`. Production remains untouched.
+
+## Post-cutover verification and shutdown — 10 October 2026
+
+After Accounts restarted with the applied shared map, a previously valid old-subject bearer returned 401 and a fresh hosted sign-in returned 200 with the exact exported canonical UUIDv4 subject. Hook hook IDs, stable ingress namespaces and encrypted secret bytes were unchanged by the backfill. Evidence: Commit `.mig/cutover/verification.json` and `verify.log`.
+
+Stopped every development API/worker/provider owned by this app and preserved the post-cutover database plus required private runtime state as mode-0600 archives. All four owned port blocks (4120–4159 and 4200–4239) have no listeners. Evidence: Commit `.mig/cutover/final-cleanup.json`, including backup SHA256 values. Shared Accounts/PostgreSQL cleanup is coordinated by the root task; unrelated pre-existing services were untouched.
+
+The local macOS ARM64 archive is a **development-profile candidate** (debug symbols disabled, unoptimized), with native discovery and extracted archive validation completed. It is not an optimized or published release; other target release builds and production deployment remain separate gates.
