@@ -142,15 +142,14 @@ Rust 1.98 and PostgreSQL 16 are needed. Copy `.env.example` to `.env`; point
 loopback) and set `HOOK_APP_SECRET` to Hook's app secret there. Then:
 
 ```bash
+docker compose up -d postgres    # or any PostgreSQL 16 matching the URLs in .env
 cargo run --bin hook-migrate
-psql "$HOOK_MIGRATOR_DATABASE_URL" --set=api_role=silicon_hook_api \
-  --set=worker_role=silicon_hook_worker --file=deploy/postgres/grant-runtime.sql
 cargo run --bin hook-api
-cargo run --bin hook-worker    # in another terminal
+cargo run --bin hook-worker      # in another terminal
 ```
 
-`docker compose up --build` runs the same processes with a development
-database. Each executable validates only the configuration it owns: in
+`docker compose up --build` runs the same processes, with separate runtime roles
+and the grant manifest applied. Each executable validates only the configuration it owns: in
 production the API secrets reach only `hook-api`, and the migrator's database URL
 only `hook-migrate`. [Configuration](docs/configuration.md) and
 [deployment](docs/deployment.md) list every variable; the privilege manifest and

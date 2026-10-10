@@ -54,6 +54,7 @@ short-lived token for Silicons.
 | Integrate over HTTP | [API reference](api/README.md), [OpenAPI](../openapi.yaml) |
 | Plan compatible integrations | [Contract lifecycle](contracts.md) |
 | Configure or run a deployment | [Configuration](configuration.md), [deployment](deployment.md) |
+| Build and hand over a release | [Releases](releases.md) |
 
 Source: [teamofsilicons/silicon-hook](https://github.com/teamofsilicons/silicon-hook).
 Packages: [client](https://crates.io/crates/silicon-hook-client),

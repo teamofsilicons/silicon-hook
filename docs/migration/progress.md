@@ -343,7 +343,8 @@ Carbon `c:hook-cli-c1-99293` (uuid `dio`) and its Silicon `si:hook-cli-s1-99293`
 | 0235dd1 | Remove the end-to-end fixture of the previous sign-in and test environments |
 | d7fa5a9 | Describe owner scopes in code comments instead of tenants and organizations |
 | 380229f | Give the docs site the Silicon look, with light, dark and system modes |
-| (this) | Record the ship stage in the migration log, decisions and proposal |
+| 973c7b5 | Record the ship stage in the migration log, decisions and proposal |
+| (next) | Link the release guide from the docs index and simplify local setup in the README |
 
 ### Tests (final run, 2026-10-10, after d7fa5a9; docs site re-checked after 380229f)
 
