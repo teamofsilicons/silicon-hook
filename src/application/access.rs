@@ -60,7 +60,13 @@ fn accounts_unavailable(error: AccountsError) -> ApplicationError {
             format!("Silicon Accounts refused Hook's request ({status} {code}): {message}"),
         ),
         AccountsError::Unavailable(message) => {
-            ApplicationError::unavailable(anyhow::anyhow!("Silicon Accounts: {message}"))
+            // The detail can name private addresses: it goes to the log only.
+            tracing::warn!(error = %message, "Silicon Accounts did not answer");
+            refused(
+                503,
+                "accounts_unavailable",
+                "Silicon Accounts did not answer, and this request needs it (to confirm that the sign-in is still active, or to look an account up). Retry shortly.",
+            )
         }
     }
 }
@@ -113,7 +119,13 @@ impl HookApplication {
                 return Err(refused(401, rejection.code, rejection.message));
             }
             Err(VerifyFailure::Unavailable(message)) => {
-                return Err(ApplicationError::unavailable(anyhow::anyhow!(message)));
+                // The detail can name private addresses: it goes to the log only.
+                tracing::warn!(error = %message, "Silicon Accounts did not answer");
+                return Err(refused(
+                    503,
+                    "accounts_unavailable",
+                    "Silicon Accounts did not answer, and Hook needs its signing keys to check this access token. Retry shortly.",
+                ));
             }
         };
         let uuid = AccountUuid::new(claims.sub.clone()).map_err(|_| {

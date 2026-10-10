@@ -119,7 +119,9 @@ addresses `403`, invisible resources `404`, request deadlines `408`, conflicts
 `409` (including `delivery_disabled`), retired versions, expired recovery and
 retired endpoints `410`, oversized requests `413`, unsupported media `415`,
 invalid input `422` (with `details` where a safe explanation exists), redacted
-internal failures `500`, and dependency outages `503`.
+internal failures `500`, and dependency outages `503` (`accounts_unavailable` when
+Silicon Accounts did not answer a check the request needs, `proof_unavailable`
+for a proof for Ting, `provider_unavailable` for the database).
 
 ## Silicons and access
 

@@ -48,6 +48,7 @@ struct StubState {
     introspections: usize,
     refuse_proofs: bool,
     refused_proofs: usize,
+    down: bool,
     lookups: usize,
     proofs: Vec<Value>,
     keys: Vec<(String, [u8; 32])>,
@@ -181,6 +182,12 @@ impl StubAccounts {
         self.with_state(|state| state.refused_proofs)
     }
 
+    /// Makes the key set and introspection answer 503, as when Silicon
+    /// Accounts is down.
+    pub fn set_down(&self, down: bool) {
+        self.with_state(|state| state.down = down);
+    }
+
     /// Introspection requests served so far.
     #[must_use]
     pub fn introspections(&self) -> usize {
@@ -274,7 +281,10 @@ fn error(status: StatusCode, code: &str, message: &str) -> Response {
         .into_response()
 }
 
-async fn jwks(State(state): State<Arc<Mutex<StubState>>>) -> Json<Value> {
+async fn jwks(State(state): State<Arc<Mutex<StubState>>>) -> Response {
+    if state.lock().is_ok_and(|state| state.down) {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "down");
+    }
     let keys = state
         .lock()
         .map(|state| state.keys.clone())
@@ -283,6 +293,7 @@ async fn jwks(State(state): State<Arc<Mutex<StubState>>>) -> Json<Value> {
         "kty": "OKP", "crv": "Ed25519", "x": URL_SAFE_NO_PAD.encode(x),
         "kid": kid, "use": "sig", "alg": "EdDSA"
     })).collect::<Vec<_>>()}))
+    .into_response()
 }
 
 fn summary(uuid: &str, account: &StubAccount) -> Value {
@@ -359,6 +370,9 @@ async fn introspect(
         );
     }
     let token = form.get("token").cloned().unwrap_or_default();
+    if state.lock().is_ok_and(|state| state.down) {
+        return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "down");
+    }
     let inactive = state.lock().map_or(true, |mut state| {
         state.introspections += 1;
         state.inactive_tokens.contains(&token)

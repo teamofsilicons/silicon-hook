@@ -1181,8 +1181,10 @@ components:
           schema:
             "$ref": "#/components/schemas/Error"
     ServiceUnavailable:
-      description: A required dependency (the database, Silicon Accounts or Ting) cannot
-        answer; retry shortly.
+      description: A required dependency cannot answer; retry shortly. `accounts_unavailable`
+        when Silicon Accounts did not answer (confirming a sign-in, looking an account up),
+        `proof_unavailable` when it could not issue a proof for Ting, `provider_unavailable`
+        for the database.
       content:
         application/json:
           schema:

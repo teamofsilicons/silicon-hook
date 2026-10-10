@@ -306,6 +306,56 @@ async fn grants_give_view_or_manage_and_a_grantee_can_leave() -> Result<()> {
     Ok(())
 }
 
+/// While Silicon Accounts does not answer, routes verified locally keep
+/// working and the routes that must confirm a sign-in say exactly why they
+/// cannot (never a 401 that would end a client's sign-in).
+#[tokio::test]
+async fn an_unanswering_silicon_accounts_is_named_and_local_routes_keep_working() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let p = people(&api);
+    api.accounts.set_down(true);
+    let (status, refused) = list_hooks(&api, "si:cos", &p.cos).await?;
+    assert_eq!(
+        (status, refused["error"]["code"].clone()),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!("accounts_unavailable")
+        ),
+        "no signing keys yet: {refused}"
+    );
+    api.accounts.set_down(false);
+    assert_eq!(list_hooks(&api, "si:cos", &p.cos).await?.0, StatusCode::OK);
+    api.accounts.set_down(true);
+    assert_eq!(
+        list_hooks(&api, "si:cos", &p.cos).await?.0,
+        StatusCode::OK,
+        "verified locally with the cached keys"
+    );
+    let (status, refused) = create_hook(&api, "si:cos", &p.cos, "During").await?;
+    assert_eq!(
+        (status, refused["error"]["code"].clone()),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!("accounts_unavailable")
+        ),
+        "{refused}"
+    );
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("Silicon Accounts did not answer")),
+        "{refused}"
+    );
+    api.accounts.set_down(false);
+    assert_eq!(
+        create_hook(&api, "si:cos", &p.cos, "After").await?.0,
+        StatusCode::CREATED
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn a_silicon_outside_the_circle_receives_access_only_after_allowing_the_sharer() -> Result<()>
 {
