@@ -14,7 +14,13 @@ tokens) that tests read.
 
 --refuse-first-proof answers the first send with 401 invalid_proof (after
 verifying the proof), once, the way Ting refuses a proof it cannot accept, so
-Hook has to renew its proof. For development and tests only.
+Hook has to renew its proof.
+
+With TING_STUB_FORWARD_URL, TING_STUB_FORWARD_SECRET, TING_STUB_FORWARD_WEBHOOK_ID
+and TING_STUB_FORWARD_FOR (a recipient uuid) set, each new send accepted for that
+recipient is delivered on, the way Ting's daemon calls a receiving host:
+`{"tings": [notification]}` with `Authorization: Bearer <secret>` and
+`Ting-Webhook-Id`. For development and tests only.
 """
 
 import argparse
@@ -52,6 +58,26 @@ def verify(proof):
         return {"valid": False, "status": error.code, "error": error.read().decode(errors="replace")[:300]}
     except (urllib.error.URLError, OSError) as error:
         return {"valid": False, "error": f"unreachable: {error}"}
+
+
+def forward(sent):
+    """Delivers one accepted send to the receiving host, as Ting's daemon does."""
+    body = sent["body"]
+    notification = {"id": sent["id"], "created_at": sent["created_at"], "type": body["type"], "for": body["for"],
+                    "key": body["key"], "data": body["data"], "metadata": body.get("metadata", {})}
+    request = urllib.request.Request(
+        CONFIG["forward_url"], method="POST", data=json.dumps({"tings": [notification]}).encode(),
+        headers={"Content-Type": "application/json", "Authorization": f"Bearer {CONFIG['forward_secret']}",
+                 "Ting-Webhook-Id": CONFIG["forward_webhook_id"]})
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            status = response.status
+    except urllib.error.HTTPError as error:
+        status = error.code
+    except (urllib.error.URLError, OSError):
+        status = 0
+    record({"call": "forward", "ting_id": sent["id"], "key": body["key"], "for": body["for"].get("uuid"),
+            "status": status})
 
 
 def record(entry):
@@ -133,10 +159,13 @@ class Handler(BaseHTTPRequestHandler):
             return self.refuse(400, "invalid_input", entry)
         with LOCK:
             existing = STATE["keys"].get(body["key"])
-            if existing is None:
+            created = existing is None
+            if created:
                 existing = {"id": f"ting_{uuid.uuid4().hex}", "created_at": iso_now(), "body": body}
                 STATE["keys"][body["key"]] = existing
                 STATE["sends"][existing["id"]] = existing
+        if created and CONFIG.get("forward_url") and recipient.get("uuid") == CONFIG.get("forward_for"):
+            threading.Thread(target=forward, args=(existing,), daemon=True).start()
         answer = {"id": existing["id"], "key": body["key"], "status": "accepted", "silent": False,
                   "created_at": existing["created_at"]}
         if body.get("delivery") == "required":
@@ -182,7 +211,11 @@ def main():
         parser.error(f"set {', '.join(missing)}")
     CONFIG.update({"accounts": os.environ["ACCOUNTS_API_URL"].rstrip("/"), "app_id": os.environ["TING_STUB_APP_ID"],
                    "app_secret": os.environ["TING_STUB_APP_SECRET"], "issuer": os.environ["TING_STUB_ISSUER"],
-                   "journal": args.journal, "refuse_first": args.refuse_first_proof})
+                   "journal": args.journal, "refuse_first": args.refuse_first_proof,
+                   "forward_url": os.environ.get("TING_STUB_FORWARD_URL"),
+                   "forward_secret": os.environ.get("TING_STUB_FORWARD_SECRET", ""),
+                   "forward_webhook_id": os.environ.get("TING_STUB_FORWARD_WEBHOOK_ID", ""),
+                   "forward_for": os.environ.get("TING_STUB_FORWARD_FOR")})
     server = ThreadingHTTPServer(("127.0.0.1", args.port), Handler)
     sys.stderr.write(f"ting-stub on 127.0.0.1:{args.port}, verifying proofs as {CONFIG['app_id']}\n")
     server.serve_forever()

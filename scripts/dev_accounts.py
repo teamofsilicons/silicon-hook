@@ -441,6 +441,8 @@ def start(config, ting=False, refuse_first_proof=False):
             "TING_STUB_APP_SECRET": config.app_secret(config.ting_receiver),
             "TING_STUB_ISSUER": config.app_id,
         })
+        # Optional delivery on to a receiving host (see scripts/ting_stub.py).
+        stub_env.update({name: value for name, value in os.environ.items() if name.startswith("TING_STUB_FORWARD_")})
         argv = [sys.executable, str(REPO / "scripts/ting_stub.py"), "--port", str(config.ting_port),
                 "--journal", str(config.ting_journal)]
         if refuse_first_proof:
