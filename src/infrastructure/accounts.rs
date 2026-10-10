@@ -4,7 +4,8 @@
 //! Access tokens are verified locally against a cached JWKS that is fetched
 //! again (at most once every [`JWKS_REFETCH_INTERVAL`]) when a token names a
 //! key the cache does not hold. Introspection, used only where revocation must
-//! be seen at once, is cached for at most [`INTROSPECTION_CACHE_TTL`].
+//! be seen at once, never reuses an "active" answer; an "inactive" one is
+//! remembered for [`INACTIVE_TOKEN_MEMORY`].
 
 use std::{
     collections::HashMap,
