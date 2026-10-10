@@ -159,6 +159,31 @@ Behind a load balancer set `HOOK_TRUSTED_PROXY_HOPS` to the number of proxies
 that append `X-Forwarded-For`; otherwise address blocking would count the
 balancer instead of the sender.
 
+### Against a Silicon Accounts test stack
+
+`scripts/dev-accounts.sh start` runs Hook against a local Silicon Accounts stack in
+one command: it builds, creates and migrates `hook_e2e` (PostgreSQL on 5460, with
+separate API and worker roles and the grant manifest), points Hook's Silicon
+Accounts webhook at `http://127.0.0.1:4201/webhook` and proves it with a signed
+ping, then starts `hook-api` on 4201 and `hook-worker`. `--ting-stub` adds a Ting
+stand-in on 4202 that verifies every proof Hook presents with the receiving app's
+own credentials. `restart` keeps the data, keys and webhook secret; `stop`,
+`status` and `down` (which also drops the database and removes the webhook) do
+what they say. `HOOK_DEV_STACK_FILE` names the stack's JSON description (its URLs
+and development app secrets); the other settings are listed in
+`scripts/dev_accounts.py`.
+
+`scripts/e2e-accounts.sh` then proves Hook end to end against that stack with real
+tokens: a Carbon signed in like the web manages its Silicon's hooks over the API, a
+Silicon and a Carbon use the CLI (short-lived token, device flow, refresh, logout),
+access follows custodians and grants, every Silicon Accounts webhook event changes
+what it should (forged and replayed deliveries change nothing), a restart keeps
+sessions working, Hook's proofs to Ting verify and renew, and the packaged CLI
+answers the Silicon Apps discovery commands. It needs `HOOK_E2E_MINT` and
+`HOOK_E2E_TSX` (the stack's identity helper and its runner) and
+`HOOK_E2E_ACCOUNTS_CLI` (a `silicon-accounts` CLI, always given the stack's URL and
+a scratch home), and leaves nothing running.
+
 ## Quality gates
 
 ```bash
