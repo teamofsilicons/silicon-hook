@@ -184,8 +184,7 @@ recipient's explicit choice through its enclosing app can enable automation.
 
 ## Upgrade from the old relay CLI
 
-Before replacing an older CLI that runs a Hook daemon, complete the
-[legacy backlog gate](../deployment.md#legacy-backlog-gate): confirm the old
+Before replacing an older CLI that runs a Hook daemon, confirm the old
 receiver has durably accepted its pending events. Retained v1 events are not
 automatically copied into Ting. Then use the old executable to run
 `hook daemon stop`. Disable any service-manager entry that starts
