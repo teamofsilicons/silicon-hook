@@ -71,9 +71,9 @@ REVOKE ALL PRIVILEGES (
     encrypted_authority, authority_version
 ) ON TABLE hook_private.ting_recipient_bindings FROM :"api_role", :"worker_role";
 
--- Tables kept from the Silicon IAM and test-environment era (publisher
--- credentials, OBO grants, IAM-era observer bindings, delivery cursors and
--- hook_control) hold data but are no longer used: no runtime role reads them.
+-- Tables kept from Hook before 1.0 (publisher credentials, delegated Ting
+-- grants, the earlier observer bindings, delivery cursors and hook_control)
+-- hold data but are no longer used: no runtime role reads them.
 
 GRANT USAGE ON SCHEMA hook, hook_private
     TO :"api_role", :"worker_role";
