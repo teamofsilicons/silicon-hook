@@ -126,19 +126,50 @@ impl PostgresStore {
         event: &AccountsEvent,
     ) -> Result<EventOutcome, StoreError> {
         let mut transaction = self.pool.begin().await?;
+        let mut identities: Vec<&str> = event
+            .change
+            .account()
+            .map(AccountUuid::as_str)
+            .into_iter()
+            .collect();
+        match &event.change {
+            AccountsChange::Updated {
+                custodian: Some((uuid, _)),
+                ..
+            } => identities.push(uuid.as_str()),
+            AccountsChange::CustodianChanged { from, to, .. } => {
+                if let Some(uuid) = from {
+                    identities.push(uuid.as_str());
+                }
+                if let Some((uuid, _)) = to {
+                    identities.push(uuid.as_str());
+                }
+            }
+            _ => {}
+        }
+        let retired: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM hook_private.accounts_uuid128_map WHERE old_uuid=ANY($1))",
+        )
+        .bind(identities)
+        .fetch_one(&mut *transaction)
+        .await?;
         let fresh = sqlx::query_scalar::<_, String>(
             "INSERT INTO hook_private.accounts_events (event_id, event_type, account_uuid, occurred_at)
              VALUES ($1, $2, $3, $4) ON CONFLICT (event_id) DO NOTHING RETURNING event_id",
         )
         .bind(&event.event_id)
         .bind(&event.event_type)
-        .bind(event.change.account().map(AccountUuid::as_str))
+        .bind(if retired { None } else { event.change.account().map(AccountUuid::as_str) })
         .bind(event.occurred_at)
         .fetch_optional(&mut *transaction)
         .await?
         .is_some();
         if !fresh {
             return Ok(EventOutcome::Duplicate);
+        }
+        if retired {
+            transaction.commit().await?;
+            return Ok(EventOutcome::Applied);
         }
         let at = event.occurred_at;
         match &event.change {

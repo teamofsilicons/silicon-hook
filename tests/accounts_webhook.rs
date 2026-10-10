@@ -465,3 +465,35 @@ async fn deleting_an_account_retires_its_hooks_tokens_and_grants() -> Result<()>
     assert_eq!(hooks_as(&api, "si:dev", &alice).await?, StatusCode::OK);
     Ok(())
 }
+
+#[tokio::test]
+async fn retired_webhook_subjects_and_nested_custodians_cannot_return() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    setup(&api);
+    let alice = api.accounts.token("CAlice1", "carbon", "c:alice");
+    assert_eq!(hooks_as(&api, "si:cos", &alice).await?, StatusCode::OK);
+    sqlx::query("INSERT INTO hook_private.accounts_uuid128_map(old_uuid,new_uuid,kind,mapping_sha256) VALUES('OldRetired','c750a68a-1bc2-4b3f-888e-0349c9d7289a','carbon','test')").execute(api.owner.pool()).await?;
+    for (index,(kind,data)) in [
+        ("membership.signed_out",json!({"uuid":"OldRetired"})),
+        ("silicon.custodian_changed",json!({"uuid":"SCos1","to":{"uuid":"OldRetired","id":"c:retired"}})),
+        ("account.updated",json!({"uuid":"SCos1","account":{"uuid":"SCos1","kind":"silicon","id":"si:cos","version":999,"custodian":{"uuid":"OldRetired","id":"c:retired"}}})),
+    ].into_iter().enumerate() {
+        let delivery=event(&format!("evt_retired_{index}"),kind,&data);
+        assert_eq!(api.webhook(&delivery).await?.0,StatusCode::NO_CONTENT);
+        assert_eq!(api.webhook(&delivery).await?.0,StatusCode::NO_CONTENT);
+    }
+    let current: Option<String> =
+        sqlx::query_scalar("SELECT custodian_uuid FROM hook_private.accounts WHERE uuid='SCos1'")
+            .fetch_one(api.owner.pool())
+            .await?;
+    assert_eq!(current.as_deref(), Some("CAlice1"));
+    let recreated: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM hook_private.accounts WHERE uuid='OldRetired')",
+    )
+    .fetch_one(api.owner.pool())
+    .await?;
+    assert!(!recreated);
+    Ok(())
+}
