@@ -255,7 +255,7 @@ async fn connect_accounts_prepares_the_hook_then_stores_the_whsec_secret() {
     let (server, home) = signed_in_silicon().await;
     let run = hook(&home, &server, &["connect-accounts"], None).await;
     assert_eq!(run.code(), 0, "{}", run.stderr());
-    assert_eq!(run.json()["secret_stored"], false);
+    assert_eq!(run.json()["secret_stored_now"], false);
     assert!(run.stderr().contains("silicon-accounts webhook set"));
     let run = hook(
         &home,
@@ -265,7 +265,7 @@ async fn connect_accounts_prepares_the_hook_then_stores_the_whsec_secret() {
     )
     .await;
     assert_eq!(run.code(), 0, "{}", run.stderr());
-    assert_eq!(run.json()["secret_stored"], true);
+    assert_eq!(run.json()["secret_stored_now"], true);
     let requests: Vec<_> = server
         .stub
         .hook_requests()

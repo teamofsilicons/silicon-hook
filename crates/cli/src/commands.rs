@@ -346,17 +346,17 @@ pub async fn run(cli: &Cli) -> CliResult<()> {
                 })
                 .await?;
                 value["hook"] = serde_json::to_value(&hook)?;
-                value["secret_stored"] = json!(true);
+                value["secret_stored_now"] = json!(true);
                 next(
                     cli,
                     "Done: the Silicon's Silicon Accounts events now verify and arrive as events of this hook.",
                 );
             } else {
-                value["secret_stored"] = json!(prepared.hook.signature.has_secret);
+                value["secret_stored_now"] = json!(false);
                 next(
                     cli,
                     &format!(
-                        "Next: {} (prints a whsec_ secret once), then: hook connect-accounts --secret-file -",
+                        "Next: {} (it prints a whsec_ secret once), then: hook connect-accounts --secret-file - (paste it). Until then Silicon Accounts deliveries are withheld as unverified. Already stored it? Nothing more to do.",
                         prepared.next_steps.set_webhook
                     ),
                 );
