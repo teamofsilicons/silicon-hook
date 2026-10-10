@@ -327,8 +327,8 @@ export function ConfirmMorph({
   };
   useEffect(() => { if (state !== "confirming") { holding.current?.stop(); holding.current = null; hold.jump(0); } }, [hold, state]);
 
-  const answer = () => {
-    if (performance.now() - askedAt.current < ARM_MS) return;
+  const answer = (keyboard = false) => {
+    if (!keyboard && performance.now() - askedAt.current < ARM_MS) return;
     if (confirmMode === "countdown") {
       keepFocus();
       setCounting(true);
@@ -367,7 +367,7 @@ export function ConfirmMorph({
     if (event.key === "Enter" && state === "confirming" && !event.repeat && !(event.target instanceof HTMLButtonElement)) {
       event.preventDefault();
       if (counting) void perform("confirm");
-      else if (confirmMode !== "hold") answer();
+      else if (confirmMode !== "hold") answer(true);
     }
   };
 
@@ -392,7 +392,7 @@ export function ConfirmMorph({
       <span>{confirmLabel}</span>
       <motion.span className={styles.fill} style={{ clipPath: fillClip }} aria-hidden="true"><span>{confirmLabel}</span></motion.span>
     </button>
-    : <button type="button" className={styles.confirm} data-autofocus onClick={answer} onKeyDown={event => { if (event.repeat) event.preventDefault(); }}>{confirmLabel}</button>;
+    : <button type="button" className={styles.confirm} data-autofocus onClick={event => answer(event.detail === 0)} onKeyDown={event => { if (event.repeat) event.preventDefault(); }}>{confirmLabel}</button>;
 
   const face = (() => {
     switch (faceKey) {

@@ -1,5 +1,5 @@
 /*
- * The Silicon look, mapped onto Arc's semantic tokens (components/arc/foundation.css, imported first). One look, two
+ * The application palette, layered onto the official Silicon UI foundation (imported first). One look, two
  * modes (light and dark, or the system's), applied to <html data-theme> and to any subtree that sets data-theme itself
  * (a preview can show the other mode). Floating layers (menus, dialogs) portal to <body> and follow the page.
  *
@@ -17,6 +17,15 @@
  *                  5.8:1 dark). Arc's own primary button is the inverted foreground; our local edit of
  *                  button.module.css paints it with these.
  */
+:root {
+  /* Application layout compatibility. Registry components use Silicon UI's semantic scale. */
+  --space-1: .25rem; --space-2: .5rem; --space-3: .75rem; --space-4: 1rem;
+  --space-5: 1.25rem; --space-6: 1.5rem; --space-8: 2rem; --space-10: 2.5rem;
+  --space-12: 3rem; --space-16: 4rem; --space-20: 5rem; --space-24: 6rem;
+  --radius-panel: 1.625rem; --radius-surface: 2.125rem; --radius-pill: 9999px;
+  --surface-secondary: var(--surface-muted);
+}
+
 :root, [data-theme="light"] {
   color-scheme: light;
   --brand-blue: #1F5FB8;
