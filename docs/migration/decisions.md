@@ -229,3 +229,103 @@ telemetry, deployment and releases; all were rewritten for Silicon Accounts and 
 stage) and `releases` (release stage). The IAM guide, the test-environment guides and the Ting-issues record are no
 longer bundled or published on the docs site; the files stay in `docs/` for the release stage's history move. The
 bundle check now also fails on leftover copies.
+
+## Stage 3: packaging, CI, deployment and documentation
+
+### One version for the service, the client and the CLI
+`silicon-hook` moves from 0.10.1 to 1.0.0 like the client and the CLI, so a release tag (`v1.0.0`) names all three
+and the package manifest, which takes its version from `crates/cli/Cargo.toml`, cannot drift. The API stays v3
+(introduced by the service stage).
+
+### Packaging: one archive per target, checked where it was built
+`packaging/apps.yaml.in` lists one target; `scripts/package-apps.sh` (a shell entry over `scripts/package_apps.py`,
+Python 3.9+, standard library only) renders it, stages `apps.yaml` and `bin/hook[.exe]`, and runs
+`silicon-apps validate`, `silicon-apps pack`, an exact-inventory check and a second validation of the archive and of
+its extracted files. On top of the brief's three commands it also requires `hook --version` to print the manifest's
+version and refuses a binary whose discovery commands write into the empty home (the CLI stage made that a
+property). `silicon-apps` runs with an empty home of its own and `--server http://127.0.0.1:9`, so a sign-in saved on
+the machine is never used and a packer that tried to reach a server would fail instead of calling one.
+
+### Same runners and toolchains as before
+The release workflow keeps the 0.x matrix: native Linux builds on ubuntu-24.04 and ubuntu-24.04-arm, Windows on
+windows-2025 (aarch64 cross-compiled), macOS on macos-15 (x86_64 cross-compiled). Each build job checks its own
+binary with `--check-only`; discovery is required where the runner executes the binary natively and best effort for
+the two cross builds (Silicon Apps runs the commands at upload anyway). One packing job installs
+silicon-apps-cli 0.2.0 once and packs all six archives with SHA256SUMS. The Linux binaries stay dynamically linked
+against the runner's glibc: Silicon Apps' Linux workers are documented to run "a glibc compatible with Ubuntu 24.04
+builds" (`silicon-apps/deploy/PRODUCTION.md`), and the packager refuses anything needing more than glibc 2.39.
+Switching to static musl builds (as Waveform did) was not needed and would change a toolchain that shipped.
+
+### The installer carries Silicon Accounts settings, and only to the API
+The first 1.0 install reads `HOOK_APP_SECRET` and `HOOK_ACCOUNTS_WEBHOOK_SECRET` (and any other Silicon Accounts
+setting) from an owner-only `accounts.env` on the host; the file may hold only Silicon Accounts keys and no quoted
+values, and the values go into the API's settings only (the worker and the migrator never read them). Later
+installs carry them over. The installer refuses before changing anything when either secret is missing. Settings
+of the previous sign-in, the test environments and the lifecycle callbacks are removed from every process.
+`HOOK_TING_BASE_URL` is removed and deliberately not translated into `HOOK_TING_URL`: production Ting does not
+accept Silicon Accounts proofs yet, so delivery stays off until someone sets the new variable on purpose. Without
+`--apply`, the installer previews the change by variable name, never by value.
+
+### The shared test database is backed up, not migrated or dropped
+`hook_test` (the test environments' database) is unused from 1.0 on. The installer backs it up (online and
+quiesced) while its URL is still configured, never migrates it, and the daily backup keeps dumping it while it
+exists. Dropping it is left to a later, explicit decision: no step of this migration deletes data.
+
+### The browser gateway is retired with the old web
+The Next.js web on Vercel replaces the SolidJS console and its Node gateway, so the host's Caddy proxies only the
+API, the deployment workflow no longer builds the gateway image, and the host bootstrap stops (and disables) a
+gateway it finds instead of starting one. The cutover keeps the stopped container and its session files for a week
+for rollback, then deletes them (they hold encrypted tokens of the previous sign-in).
+
+### The host bootstrap stays, switched to Silicon Accounts
+`deploy/aws/install.py`/`prepare.py` are only used to rebuild the host, but they are the only record of how it was
+built, so they were kept and switched: `accounts.json` instead of the previous credentials file, no test database,
+no gateway, Caddy for the API only, and the API alone gets the Silicon Accounts secrets.
+
+### The identity mapping is drafted by a script in the backend bundle
+`draft-identity-mapping.py` (in `deploy/native/`, so it ships next to `install.py`) proposes the
+`link-identities` file by looking every stored id up at Silicon Accounts by its current id with Hook's app
+credentials. It is a separate operator script rather than a `hook-migrate` subcommand because the migrator
+deliberately loads only its database URL and never holds the app secret. It only reads, stays under the lookup
+budget, leaves out ids that are unknown, of the other kind, not active, or that would give one uuid to two ids,
+and lists each Silicon's custodian so the reviewer can check it. Matching current ids is a proposal, never proof;
+the runbook makes the review a step.
+
+### History moves to docs/history, links pinned to the last pre-1.0 commit
+The previous sign-in and test-environment guides, 0.x release notes, verification evidence, dated host records and
+the root status files moved to `docs/history/` with an index. Links between moved records still work; links to
+guides that have since changed point at `d621aba` on GitHub, so the records keep meaning what they meant.
+`IAM_INTEGRATION.md` (a pointer to a guide that no longer applies) was deleted; `API_DOCS.md` stays (it points at the
+current API guide). `scripts/ting_e2e/` was deleted rather than moved: it is code that drove the previous identity
+service, the test environments and API v2 in Docker, it cannot run against 1.0, and git history keeps it.
+
+### The docs site
+It publishes neither `docs/history/` nor `docs/migration/`, drops the verification page from its navigation, and
+uses its own favicon: the web kit's mark recipe (a white lucide "webhook" glyph on the brand-blue squircle)
+instead of the copy of the previous identity service's mark it took from the old web, so it no longer depends on
+`web/`. `docs/install.sh` (served at `/install.sh`) installs through Silicon Apps and tells you how to get
+Silicon Apps when it is missing.
+
+The Carbon asked for every app's frontend in the style of Accounts and Apps. The docs site is Hook's second
+public surface, so it moved from its own green and Inter look to the family's: the semantic colour tokens in
+light and dark, a Light / Dark / System switch (`theme.js`, the choice kept in `localStorage`, applied before the
+first paint), BDO Grotesk for titles (self-hosted, SIL OFL licence beside the files) with the system face for
+text, hairline borders, squircle corners where the browser draws them, and the Hook mark in the header. It stays a
+static marked build: moving it to Next.js was not part of this request's web work (`web/`), and the site's CSP
+(`'self'` only) already covers the new script and fonts. Headings are now slugged and listed from their plain
+text (an apostrophe showed as `&#39;` in the page outline).
+
+### No CSP change in this stage
+The backend host serves only the API and provider ingress (no HTML), and the docs site calls nothing; the web's
+Content Security Policy, including Silicon Accounts and profile-photo origins, comes with the Next.js web.
+
+### CI
+The documentation job is named for what it runs and also runs the packager and installer tests
+(`scripts/test_*.py`). No extra packaging job runs on every push: the release workflow can be dispatched by hand
+to rehearse a release, and the packager's behaviour is covered by unit tests with stand-in packers and binaries.
+
+### Code comments
+Doc comments that still spoke of tenant and organization scopes, or of the previous identity service where the code
+no longer has anything to do with it, now describe the owner scopes the code checks. Column names (`org_id`,
+`iam_public_id`), the audit action `hook.iam_connected` of old rows, the hidden `hook iam --json`, the old telemetry
+operation names and the list of obsolete variables stay: they are data, compatibility or operator help.

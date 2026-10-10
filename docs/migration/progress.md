@@ -296,3 +296,156 @@ Carbon `c:hook-cli-c1-99293` (uuid `dio`) and its Silicon `si:hook-cli-s1-99293`
   after the other.
 - The local stack's device flow interval is 5 s; approving with `mint.mts approve` right after the code is printed
   finishes the login within one interval.
+
+## 2026-10-10 — Stage 3: packaging, CI, deployment configuration and documentation
+
+### What the ship stage did
+
+- **Silicon Apps packaging.** `packaging/apps.yaml.in` (one target per archive) and `scripts/package-apps.sh
+  <version> <target> <binary>` (over `scripts/package_apps.py`, Python 3.9+, stdlib): native-format and processor
+  check, glibc ceiling 2.39 for dynamic Linux builds, the three discovery commands plus `--version` in an empty
+  `HOME`/`SILICON_HOME` (required with `PACKAGE_DISCOVERY=require`, skipped with a note where the binary cannot run,
+  never silently), `silicon-apps validate` + `pack` with an empty home and no server, exact archive inventory, a
+  second validation of the archive and of its extracted files, `dist/apps/hook-<v>-<target>.tar.gz` + `.sha256`.
+  `--check-only` checks a binary without packing. `honeycomb.yaml`, `scripts/package-cli.py` and its tests are gone;
+  `scripts/package-backend.py` reuses the new executable check. Service crate 0.10.1 → 1.0.0.
+- **CI.** `release.yml` ("Silicon Apps release archives"): tag `v*` (must equal `crates/cli/Cargo.toml`) or manual;
+  the same six targets and runners as 0.x; each build job checks its binary on its own runner; one packing job
+  installs `silicon-apps-cli` 0.2.0 and uploads `hook-silicon-apps-release` (six archives, `.sha256` files,
+  `SHA256SUMS`). `ci.yml`: the docs job is renamed and runs all `scripts/test_*.py`. `deployment-builds.yml` no longer
+  builds the gateway image.
+- **Deployment configuration (nothing deployed).** `deploy/native/install.py` takes Hook's Silicon Accounts
+  settings from an owner-only `accounts.env` on the first 1.0 install (API only), refuses without
+  `HOOK_APP_SECRET`/`HOOK_ACCOUNTS_WEBHOOK_SECRET`, drops the previous sign-in's, test environments' and lifecycle
+  settings and `HOOK_TING_BASE_URL`, backs up but never migrates `hook_test`, previews changes by name.
+  `deploy/aws/{install,prepare}.py` and `backup.sh` (host rebuild and daily backup) switched to `accounts.json`, no
+  test database, no gateway; Caddy proxies only the API. `deploy/native/draft-identity-mapping.py` (shipped in the
+  backend bundle) drafts the `link-identities` file from Silicon Accounts lookups. `docs/migration/cutover.md`: the
+  production runbook (every production command marked *run at cutover*), verification, rollback, the old CLIs,
+  Ting.
+- **Documentation.** New root `README.md` and `docs/releases.md`; `docs/deployment.md` (where Hook runs, release
+  artifacts), install sections (Linux today, macOS/Windows packages kept), contract wording; `docs/install.sh`
+  installs through Silicon Apps; bundled CLI docs re-synced. Records of Hook before 1.0 moved to `docs/history/`
+  (index, links pinned to `d621aba`); `IAM_INTEGRATION.md` and `scripts/ting_e2e/` deleted. The docs site publishes
+  neither `docs/history/` nor `docs/migration/`, and now has the Silicon look (tokens, light/dark/system switch, BDO
+  Grotesk titles, Hook mark) instead of its green/Inter one.
+- **UNDERSTANDING proposal** extended: the Updates section for one archive per target, `app iam --json`, and the
+  Carbon-owned `understanding/api.yaml` route inventory.
+
+### Commits
+
+| commit | subject |
+|---|---|
+| 5bc3554 | Package the hook CLI for Silicon Apps instead of Honeycomb |
+| d4b81b5 | Build Silicon Apps archives in the release workflow and drop Honeycomb |
+| d3d577e | Deploy Hook 1.0 with Silicon Accounts settings and write the cutover runbook |
+| f7bf6be | Document Hook 1.0 releases, hosting and install with Silicon Apps; move history |
+| 0235dd1 | Remove the end-to-end fixture of the previous sign-in and test environments |
+| d7fa5a9 | Describe owner scopes in code comments instead of tenants and organizations |
+| 380229f | Give the docs site the Silicon look, with light, dark and system modes |
+| (this) | Record the ship stage in the migration log, decisions and proposal |
+
+### Tests (final run, 2026-10-10, after d7fa5a9; docs site re-checked after 380229f)
+
+`export CARGO_TARGET_DIR=$PWD/target/mig CARGO_PROFILE_DEV_DEBUG=0 CARGO_INCREMENTAL=0 CARGO_BUILD_JOBS=3
+HOOK_TEST_POSTGRES_URL=postgres://postgres@127.0.0.1:5460/postgres HOOK_TEST_PSQL=/opt/homebrew/opt/postgresql@16/bin/psql`
+(script: `.mig/ship-tests.sh`, log `.mig/logs/ship-tests.log`)
+
+| command | result |
+|---|---|
+| `cargo fmt --all --check` | ok |
+| `cargo check --workspace --locked --all-targets --all-features` | ok |
+| `cargo clippy --workspace --locked --all-targets --all-features -- -D warnings` | ok |
+| `cargo test --workspace --locked --all-targets --all-features` | all pass, same counts as stage 2: service lib 137, accounts_access 5, accounts_webhook 5, migration_upgrade 1, postgres_integration 19 (+1 ignored: needs a Space Station key), ting_delivery 2; CLI unit 12, commands 6, discovery 5, login 15; client unit 1, api 6, byos 1, signin 8, ting_delivery 13 |
+| `RUSTDOCFLAGS='-D warnings' cargo doc --workspace --locked --no-deps --all-features` | ok |
+| `cargo deny --locked check` | advisories, bans, licenses, sources ok |
+| `npx --yes @redocly/cli@2.49.0 lint openapi.yaml` | valid |
+| `python3 scripts/bundle-cli-docs.py --check` | ok |
+| `python3 -m unittest discover -s scripts -p 'test_*.py'` | 25 ok (packager 17, native installer 5, mapping draft 3), under Python 3.14 and under macOS's `/usr/bin/python3` 3.9 |
+| `npm run build && npm run check` in `docs-site` | 12 pages, 473 local links/assets ok |
+| workflow YAML | parsed with Ruby's YAML and PyYAML (scratch venv); a structural check (jobs, `needs`, outputs, matrix keys, pinned `uses`) passed for all four files; actionlint is not installed |
+
+### Packaging proof (this Mac)
+
+- `cargo build --release --locked -p silicon-hook-cli` (1m07s) → `scripts/package-apps.sh 1.0.0 macos-aarch64
+  target/mig/release/hook --discovery require` → `binary: … macos-aarch64 executable (Mach-O)`, `discovery: --help,
+  accounts --json, login status --json and --version answered as Silicon Apps requires`, `packaged
+  dist/apps/hook-1.0.0-macos-aarch64.tar.gz (2992069 bytes)`, sha256 `bd3d42de358d0de3805b2dc47017df04a89505e0cd8cec2c7f4f59558e40bcd7`
+  (identical to a manual `silicon-apps pack` of the same files: the pack is deterministic).
+- `silicon-apps validate` (0.2.0, empty `--home`, `--server http://127.0.0.1:9`): `"valid": true` on the staged
+  directory and on the archive; nothing written to the home.
+- From the extracted archive (`apps.yaml` + `bin/hook` only), `env -i HOME=$E SILICON_HOME=$E PATH=/usr/bin:/bin`:
+  `hook --help` exit 0 (5,436 bytes), `hook accounts --json` exit 0 (709 bytes, `"app_id": "hook"`, version 1.0.0),
+  `hook login status --json` exit 0 → `{"authenticated": false}`; 0 files in the home afterwards.
+- The release workflow's packing loop, simulated with the real macOS binary and header fixtures for the other five
+  targets (mode 0644, as downloaded artifacts are): six archives, `.sha256` files and `SHA256SUMS` that verify;
+  discovery ran for macos-aarch64 from the 0644 copy and was skipped with a note for the targets this Mac cannot run.
+- `scripts/package-backend.py` with fixture ARM64 binaries: the bundle now includes `draft-identity-mapping.py`,
+  and `install.py`'s `verify()` accepts it.
+
+### Mapping draft end to end (shared local stack + PostgreSQL 5460)
+
+Scratch script `hook-ship/mapping-e2e.sh`: database `hook_ship_mapping` migrated with `hook-migrate`, a minted
+Carbon and Silicon (`si:hook-ship-s1-02830` uuid `TSZ`, custodian `c:hook-ship-c1-02830` uuid `hzg`) plus two unknown
+ids in the inventory → `draft-identity-mapping.py --accounts-url http://127.0.0.1:9589` with hook's dev secret:
+`{"stored_ids": 4, "mapped": 2, "left_out": 2}`, both unknown ids `account_not_found`, the Silicon's custodian listed;
+`hook-migrate link-identities --dry-run` → `rows_in_file 2, linked 2, unlinked 0, hooks_without_owner 0`; the real
+run linked both (`source mapping:3bdab8d6…`). Database dropped afterwards (no `hook*` databases or roles left).
+
+### Docs site look (screenshots in scratch `hook-ship/screens/`, not in git)
+
+Home, Releases and API pages at 1440×900 and 390×844 in light and dark, the switch (Dark chosen, reload keeps it:
+`data-theme="dark"`, `aria-pressed="true"`), search results and the 404 page: no console errors, BDO Grotesk 600
+loaded, nothing scrolls sideways except code. Found and fixed: the page outline showed `Hook&#39;s` (double
+escaping); headings are now slugged from plain text.
+
+### Sweep
+
+`git grep -n -i -E 'iam|honeycomb|org_id|organi[sz]ation|\borg\b|tenant'`, every remaining hit is intentional:
+
+| where | why it stays |
+|---|---|
+| `web/` (356) | the old SolidJS console and gateway; the web stages replace and delete `web/` |
+| `docs/history/` (317) | historical records, kept as written (brief) |
+| `migrations/` (101) | applied migrations are checksummed by readiness and must never change |
+| `docs/migration/` (70) | the migration's own records (decisions, progress, cutover, proposal) may name both |
+| `understanding/` (34) | Carbon-owned contract and route inventory; changes proposed in `understanding-proposal.md` |
+| `tests/`, `crates/*/tests`, `crates/cli/src/tests.rs`, `src/**` test fixtures | legacy-data fixtures (0018 upgrade, old Ting references) and assertions that retired words, flags and fields are refused or absent |
+| `src/infrastructure/postgres/{schema_contract,events,idempotency,ting}.rs`, `deploy/postgres/grant-runtime.sql` | the legacy `org_id` / `iam_public_id` / `is_iam_default` columns: kept (no data deleted, no column renamed), new rows get the constant `accounts`, readiness checks the exact schema |
+| `src/infrastructure/postgres/identity_links.rs`, `src/bin/hook_migrate.rs`, `deploy/native/draft-identity-mapping.py`, `tests/migration_upgrade.rs` | the operator's link-identities path exists only to link ids stored before 1.0 (decisions) |
+| `src/infrastructure/postgres/types.rs` (`IamConnected` → `hook.iam_connected`) | audit action of rows written before 1.0 |
+| `src/config.rs` (`OBSOLETE_VARIABLES`) | names each old variable to say what replaced it |
+| `src/domain/request.rs` (`iam_test_key`) | header redaction: never store the old selector/test-key headers if a provider sends them |
+| `crates/cli/src/{args,main,status}.rs`, `src/telemetry/events.rs`, `openapi.yaml` `TelemetryEvent` | the hidden `hook iam --json` alias (brief) and old CLIs' telemetry operation names |
+| `crates/cli/src/store.rs`, `store/load.rs` | describe the pre-1.0 `state.json` the CLI leaves untouched |
+| doc comments saying "IAM-era id" (`src/domain`, `src/api/dto.rs`, `src/application`, `postgres/hooks.rs`, `postgres/ting.rs`) | accurately describe legacy rows and parked sends |
+| `deploy/native/install.py`, `deploy/aws/backup.sh`, `scripts/test_native_deployment.py` | remove `HOOK_IAM_*`/`HOOK_HONEYCOMB_*` settings and back up the old `iam.json` while it is on the host |
+| `deploy/aws/standalone.yaml` | AWS IAM (the cloud's roles), a different product |
+| `observability/spacestation/*` | Space Station's own organization (`tos`) for its table; not Hook's |
+
+### Blocked on
+
+- Nothing new. Ting must accept Silicon Accounts proofs before `HOOK_TING_URL` is set; the Silicon runtime must
+  install from Silicon Apps and mint with `silicon-accounts login --app hook -q` (both in cutover.md).
+
+### Left for later stages
+
+- **Web stages**: replace `web/` (and the `frontend` job in `ci.yml`, which still builds the SolidJS console); the
+  root README's "web console" sentence and `docs/deployment.md` describe the D7 target (Next.js on Vercel, BFF,
+  `https://hook.teamofsilicons.com/auth/callback`) — keep them true and add the one-command local run; cutover step 7
+  points at the web's `.env.example` for its server settings; the web's CSP (Silicon Accounts, profile photos).
+- **e2e stage**: `scripts/dev-accounts.sh`; the stage 2 CLI scripts in scratch can be reused.
+- **Fix stage (observation, not changed here)**: on Windows the CLI finds its home only through `SILICON_HOME` or
+  `HOME` (no `USERPROFILE` fallback), as before 1.0; `login status --json` still answers (`reason: no_home`), but a
+  Windows Carbon must set one to sign in. It matters once Silicon Apps validates Windows.
+- **Operator (cutover.md)**: every production step.
+
+### Gotchas
+
+- `psql` is not on this Mac's PATH: `/opt/homebrew/opt/postgresql@16/bin/psql` (`HOOK_TEST_PSQL`, `HOOK_PSQL`).
+- No PyYAML in either Python; Ruby's YAML or a scratch venv (`pip install pyyaml`) parses the workflows.
+- Playwright for screenshots: the web kit's `node_modules/.pnpm/playwright@1.56.1/node_modules/playwright/index.mjs`.
+- Downloaded workflow artifacts lose their mode bits; the packager runs discovery on an executable private copy.
+- A relative binary path made the first discovery attempt fail inside the empty home and get mistaken for "cannot
+  run here"; the packager now resolves the path and treats only Exec-format/Bad-CPU errors as "cannot run".
+- `silicon-apps validate` accepts an archive as well as a directory.

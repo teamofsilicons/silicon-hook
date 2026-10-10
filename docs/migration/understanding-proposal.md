@@ -67,15 +67,20 @@ the CLI (`hook --test <test_id>`) goes with it.
 ## Cli experience
 "short lived tokens that the user can generate from the official iam cli" becomes "from the official
 silicon-accounts CLI". "On the docs page, show `honeycomb install 'hook'`" becomes "show `silicon-apps install hook`".
+"`app iam --json` gives {app_id: "...", ...}" becomes "`hook accounts --json` gives {app_id: "hook", ...}".
 
 ## Docs and Telemetry
 "all IAM apps" becomes "all apps" (two places).
 
 ## Updates
-Replace with:
-> For each Hook release, provide one .tar.gz with `apps.yaml` at the archive root and the prebuilt hook CLI for
-> every supported target. Validate and pack it with `silicon-apps validate` and `silicon-apps pack`. Silicon Apps
-> installs and updates the CLI; Hook never replaces its own executable.
+Replace with (added by the release stage: Silicon Apps uploads and validates one target per package, so a
+release is one archive per target rather than one archive for all of them):
+> For each Hook release, build the hook CLI for Linux, Windows and macOS on x86_64 and aarch64, and package each
+> build as its own .tar.gz with `apps.yaml` at the archive root naming that target and the executable. Check every
+> package with `silicon-apps validate` and make it with `silicon-apps pack`; each executable must answer
+> `hook --help`, `hook accounts --json` and `hook login status --json` signed out. Silicon Apps installs and
+> updates the CLI (`silicon-apps install hook`); Hook never replaces its own executable. Silicon Apps validates
+> Linux packages today; the macOS and Windows ones are kept until it validates those systems.
 
 ## Identifier schema
 Replace the last sentence of the first paragraph with "Accounts are stored by their Silicon Accounts uuid and shown
@@ -93,3 +98,12 @@ by their current id." and drop the mention of `org_id`.
   `silicon-accounts login --app hook -q | hook login --slt-stdin`."
 - "`login status --json` ... reports `authenticated: true`, alongside which carbon or silicon": add "with its uuid,
   id and kind; `{"authenticated": false}` when signed out".
+
+## Route inventory (`understanding/api.yaml`, added by the release stage)
+`api.yaml` is the Carbon's route inventory and was not edited. It still lists the routes Hook 1.0 removed:
+`/api/v1/auth/iam`, `/api/v1/iam/events`, the testing-environment routes (including
+`/api/v1/testing-environment/iam`), the lifecycle route under `/internal/…/testing-environments/…`,
+`/api/v1/silicons/{silicon_id}/hooks/iam`, and examples with `org_id: tos`. Suggested: replace the inventory with
+the v3 routes in `openapi.yaml` (or regenerate `api.yaml` from it): no sign-in routes (Silicon Accounts signs
+everyone in), `/api/v3/silicons/{silicon}/hooks/accounts` instead of `hooks/iam`, the access and allow-list routes,
+and examples that show accounts as `{uuid, id}` instead of `org_id`.
