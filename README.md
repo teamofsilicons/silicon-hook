@@ -178,8 +178,10 @@ tokens: a Carbon signed in like the web manages its Silicon's hooks over the API
 Silicon and a Carbon use the CLI (short-lived token, device flow, refresh, logout),
 access follows custodians and grants, every Silicon Accounts webhook event changes
 what it should (forged and replayed deliveries change nothing), a restart keeps
-sessions working, Hook's proofs to Ting verify and renew, and the packaged CLI
-answers the Silicon Apps discovery commands. It needs `HOOK_E2E_MINT` and
+sessions working, reads and ingress keep working while Silicon Accounts is cut off,
+Hook's proofs to Ting verify and renew and the Silicon's receiving host hydrates
+what Ting delivers, and the packaged CLI answers the Silicon Apps discovery
+commands. It needs `HOOK_E2E_MINT` and
 `HOOK_E2E_TSX` (the stack's identity helper and its runner) and
 `HOOK_E2E_ACCOUNTS_CLI` (a `silicon-accounts` CLI, always given the stack's URL and
 a scratch home), and leaves nothing running.

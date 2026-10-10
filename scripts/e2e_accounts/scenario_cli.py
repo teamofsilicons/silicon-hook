@@ -1,5 +1,7 @@
 """Scenario 2 (a Silicon on the CLI) and scenario 3 (a Carbon's device-flow sign-in)."""
 
+import json
+import subprocess
 import time
 
 from scenario_api import silicon_token
@@ -130,6 +132,22 @@ def scenario_3(h):
     entry = [i for i in (silicons or {}).get("items", []) if i["silicon"]["uuid"] == h.s1.uuid] if code == 0 else []
     h.check("hook silicons lists S1 as looked after by this Carbon", entry and entry[0]["access"] == "custodian",
             silicons or err)
+    # A code the Carbon denies at Silicon Accounts ends that sign-in attempt with a clear refusal.
+    c1.first_party = h.mint("carbon", "--email", c1.email)["access_token"]
+    denied_home = h.home("c1-denied")
+    process = subprocess.Popen([h.hook_bin, "--json", "login"], stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                               text=True, env=h.cli_env(denied_home))
+    device = json.loads(process.stdout.readline())
+    status, _ = h.accounts("POST", f"/v1/device/{device['user_code']}/deny", c1)
+    _, err = process.communicate(timeout=30)
+    error = h.hook_json_error(err)
+    saved = [str(path.relative_to(denied_home)) for path in denied_home.rglob("profiles.json")]
+    h.check("a code the Carbon denies at Silicon Accounts: exit 3 access_denied, nothing saved",
+            status == 204 and process.returncode == 3 and error.get("code") == "access_denied"
+            and not any(any((profile or {}).get("session") for profile in
+                            json.loads(path.read_text()).get("profiles", {}).values())
+                        for path in denied_home.rglob("profiles.json")),
+            {"deny": status, "exit": process.returncode, "error": error.get("code"), "files": saved})
     code, events, err = h.hook(c1.home, "--silicon", h.s1.id, "events", "--limit", "10")
     h.check("hook --silicon <S1> events reads the Silicon's history",
             code == 0 and len(events.get("items", [])) >= 3, [(e["provider"], e["summary"]) for e in (events or {}).get("items", [])][:5] if code == 0 else err)

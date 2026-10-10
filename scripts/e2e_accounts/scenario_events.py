@@ -26,7 +26,7 @@ def harmful_duplicate(h, event_id):
 def scenario_5(h):
     h.begin(5, "Silicon Accounts webhook events: id change, profile, sign-outs, custodian change, deletion, access removal")
     h.load_webhook_secret()
-    h.c1.first_party = h.mint("carbon", "--email", h.c1.email)["access_token"]
+    h.c1.first_party = h.c1.first_party or h.mint("carbon", "--email", h.c1.email)["access_token"]
     h.c2.first_party = h.mint("carbon", "--email", h.c2.email)["access_token"]
     status, body = h.call("GET", "auth/status", token=h.c1.first_party)
     h.check("Silicon Accounts' own (first-party) token is refused: token_wrong_audience",
