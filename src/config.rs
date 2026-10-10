@@ -67,7 +67,7 @@ pub struct TingSettings {
     /// `None` (`HOOK_TING_URL` unset) disables delivery: Hook keeps receiving
     /// and storing events, and queues nothing for Ting.
     pub base_url: Option<Url>,
-    /// Deadline for one Ting or IAM publication operation.
+    /// Deadline for one Ting publication operation.
     pub request_timeout: Duration,
     /// Idle interval between bounded publication cycles.
     pub poll_interval: Duration,

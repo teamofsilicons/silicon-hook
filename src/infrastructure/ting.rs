@@ -7,7 +7,7 @@
 //! sent to the configured origin) and response bodies are bounded.
 //!
 //! The request shapes are Hook's Accounts-era contract with Ting: no
-//! organization, recipients addressed by Silicon Accounts `{uuid, id}`.
+//! account-grouping field; recipients addressed by Silicon Accounts `{uuid, id}`.
 
 use std::{fmt, net::IpAddr, time::Duration};
 

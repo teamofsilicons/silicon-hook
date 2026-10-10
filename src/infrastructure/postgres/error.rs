@@ -28,7 +28,7 @@ pub enum StoreError {
         /// Non-sensitive validation detail.
         reason: String,
     },
-    /// The requested aggregate does not exist in the supplied tenant scope.
+    /// The requested aggregate does not exist in the supplied owner scope.
     #[error("{entity} was not found")]
     NotFound {
         /// Kind of missing aggregate.

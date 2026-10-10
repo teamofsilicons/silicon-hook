@@ -37,7 +37,7 @@ pub enum AppError {
         /// Remaining block duration.
         retry_after: std::time::Duration,
     },
-    /// Resource does not exist in the caller-visible organization scope.
+    /// Resource does not exist among what the caller may see.
     #[error("resource was not found")]
     NotFound,
     /// A retained resource can no longer be restored or consumed.

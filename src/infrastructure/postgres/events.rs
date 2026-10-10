@@ -177,7 +177,7 @@ impl PostgresStore {
         .await
     }
 
-    /// Loads one retained event within its complete authorized tenant scope.
+    /// Loads one retained event within its complete authorized owner scope.
     ///
     /// # Errors
     /// Returns database or stored-domain validation failures.

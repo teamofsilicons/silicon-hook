@@ -24,7 +24,7 @@ const MAX_RETAINED_HOOKS_PER_SILICON: i64 = 1_000;
 const MAX_HOOK_ACTIVATION_BATCH_SIZE: usize = 1_000;
 
 impl PostgresStore {
-    /// Returns one hook within its complete tenant scope.
+    /// Returns one hook within its complete owner scope.
     ///
     /// # Errors
     ///
@@ -177,7 +177,7 @@ impl PostgresStore {
     }
 
     /// Returns the requested hooks in deterministic UUID order within one
-    /// tenant scope. Disabled and soft-deleted hooks are included.
+    /// owner scope. Disabled and soft-deleted hooks are included.
     ///
     /// # Errors
     ///
@@ -213,7 +213,7 @@ impl PostgresStore {
     /// # Errors
     ///
     /// Returns a validation error for an empty or duplicate batch, not-found for
-    /// an incomplete tenant-scoped set, or a state conflict when any hook is
+    /// an incomplete owner-scoped set, or a state conflict when any hook is
     /// soft-deleted.
     pub async fn set_hooks_enabled(
         &self,
@@ -303,7 +303,7 @@ impl PostgresStore {
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::NotFound`] for a mismatched tenant scope and
+    /// Returns [`StoreError::NotFound`] for a mismatched owner scope and
     /// [`StoreError::StateConflict`] when the hook is already deleted.
     pub async fn delete_hook(&self, command: &HookMutation) -> Result<Hook, StoreError> {
         let mut transaction = self.pool.begin().await?;
@@ -339,7 +339,7 @@ impl PostgresStore {
     ///
     /// # Errors
     ///
-    /// Returns [`StoreError::NotFound`] for a mismatched tenant scope and
+    /// Returns [`StoreError::NotFound`] for a mismatched owner scope and
     /// [`StoreError::StateConflict`] when the hook is deleted.
     pub async fn update_hook(&self, command: UpdateHook) -> Result<Hook, StoreError> {
         let mut transaction = self.pool.begin().await?;
@@ -874,7 +874,7 @@ async fn select_replayed_scoped_hook(
         .ok_or_else(|| {
             StoreError::corrupt(
                 "management idempotency",
-                "replayed hook no longer exists in its tenant scope",
+                "replayed hook no longer exists in its owner scope",
             )
         })
 }

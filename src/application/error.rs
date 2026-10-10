@@ -23,7 +23,7 @@ pub enum ApplicationError {
     /// The authenticated principal may not perform the operation.
     #[error("operation is forbidden")]
     Forbidden,
-    /// A resource does not exist within the authorized tenant scope.
+    /// A resource does not exist within the scope the caller may see.
     #[error("resource was not found")]
     NotFound,
     /// A deleted resource is outside its recovery window.

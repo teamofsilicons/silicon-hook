@@ -86,7 +86,8 @@ pub enum AuditAction {
     SecretRotated,
     /// A hook endpoint key was replaced and the old key retired.
     EndpointRotated,
-    /// The Silicon's IAM hook was created for registration with IAM.
+    /// Rows written before 1.0: the Silicon's hook for the previous identity
+    /// service's notifications was created.
     IamConnected,
     /// The Silicon's "Silicon Accounts updates" hook was created.
     AccountsConnected,
@@ -138,7 +139,7 @@ pub struct CreateHook {
     pub recorded_at: OffsetDateTime,
 }
 
-/// Result of an atomic create or IAM-provision operation.
+/// Result of an atomic create, or of creating a Silicon's notifications hook.
 #[derive(Clone, Debug)]
 pub enum CreateHookOutcome {
     /// This call created the hook.

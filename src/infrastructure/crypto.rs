@@ -320,7 +320,7 @@ pub enum CursorError {
     /// Cursor was issued by an unsupported schema version.
     #[error("cursor version is unsupported")]
     UnsupportedVersion,
-    /// Cursor belongs to a different tenant, Silicon, collection, or filter set.
+    /// Cursor belongs to a different Silicon, collection, or filter set.
     #[error("cursor does not match the current query")]
     ScopeMismatch,
 }
