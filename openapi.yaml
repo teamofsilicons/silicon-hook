@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Silicon Hook API
-  version: 3.0.0
+  version: 1.0.0
   summary: Signed webhook endpoints for Silicons, with verified history and optional delivery through Ting.
   description: |
     Silicon Hook gives each Silicon signed webhook endpoints at

@@ -37,12 +37,15 @@ services:
       HOOK_ENCRYPTION_KEYS: 1:AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA
       HOOK_ENCRYPTION_CURRENT_VERSION: "1"
       HOOK_CURSOR_SIGNING_KEY: AQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQEBAQE
-      # Local mode: deterministic local:* bearers, no IAM deployment needed.
-      # Set HOOK_IAM_APP_ID/HOOK_IAM_APP_SECRET (and an HTTPS HOOK_IAM_BASE_URL)
-      # to talk to a real Silicon IAM.
-      HOOK_IAM_BASE_URL: http://127.0.0.1:8081
-      HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP: "true"
-      HOOK_ALLOW_LOCAL_AUTH: "true"
+      # Silicon Accounts: Hook accepts only access tokens issued to HOOK_APP_ID.
+      # Plain http is accepted for loopback hosts only, so against a local
+      # Accounts stack run hook-api on the host instead (see docs/configuration.md).
+      ACCOUNTS_URL: ${ACCOUNTS_URL:-https://accounts.teamofsilicons.com}
+      HOOK_APP_ID: ${HOOK_APP_ID:-hook}
+      HOOK_APP_SECRET: ${HOOK_APP_SECRET:?set HOOK_APP_SECRET to Hook's Silicon Accounts app secret}
+      HOOK_ACCOUNTS_WEBHOOK_SECRET: ${HOOK_ACCOUNTS_WEBHOOK_SECRET:-}
+      # Delivery through Ting stays off unless HOOK_TING_URL is set.
+      HOOK_TING_URL: ${HOOK_TING_URL:-}
     depends_on:
       runtime-grants:
         condition: service_completed_successfully
