@@ -7,10 +7,10 @@ import { useHookScope } from "./context";
 import { Blank, Status } from "./common";
 import { Page, PageHeader, Section, Surface } from "@/components/foundation/layout/layout";
 import { ErrorAlert } from "@/components/foundation/feedback/error-alert";
-import { Button } from "@/components/arc/button/button";
-import { Input } from "@/components/arc/input/input";
-import { Select } from "@/components/arc/select/select";
-import { ConfirmMorph } from "@/components/arc/confirm-morph/confirm-morph";
+import { Button } from "@/components/silicon-ui/button/button";
+import { Input } from "@/components/silicon-ui/input/input";
+import { Select } from "@/components/silicon-ui/select/select";
+import { ConfirmMorph } from "@/components/silicon-ui/confirm-morph/confirm-morph";
 export function AccessPage() {
   const { selected } = useHookScope();
   return <Page width="reading"><PageHeader title="Access" description="Choose exactly which Carbons and Silicons can use this Silicon’s hooks." />{selected ? <AccessEditor key={selected.silicon.uuid} uuid={selected.silicon.uuid} /> : <Blank title="Choose a Silicon">Select a Silicon to see its access and allow-list.</Blank>}</Page>;

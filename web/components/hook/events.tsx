@@ -9,10 +9,10 @@ import { useHookScope } from "./context";
 import { Blank, Modal, Pager, Status } from "./common";
 import { Page, PageHeader, Surface } from "@/components/foundation/layout/layout";
 import { ErrorAlert } from "@/components/foundation/feedback/error-alert";
-import { Button } from "@/components/arc/button/button";
-import { Select } from "@/components/arc/select/select";
-import { Checkbox } from "@/components/arc/checkbox/checkbox";
-import { Input } from "@/components/arc/input/input";
+import { Button } from "@/components/silicon-ui/button/button";
+import { Select } from "@/components/silicon-ui/select/select";
+import { Checkbox } from "@/components/silicon-ui/checkbox/checkbox";
+import { Input } from "@/components/silicon-ui/input/input";
 
 export function EventTable({ events, select }: { events: HookEvent[]; select: (event: HookEvent) => void }) {
   return <><div className="hook-table-wrap hook-event-table"><table className="hook-table"><thead><tr><th scope="col">Request</th><th scope="col">Received</th><th scope="col">Silicon</th><th scope="col">Result</th><th scope="col"><span className="sr-only">Details</span></th></tr></thead><tbody>{events.map(event => <tr key={event.id}><td><strong>{event.provider}</strong><span className="hook-event-summary">{event.summary || event.request.path}</span></td><td>{formatDateTime(event.received_at)}</td><td>{event.silicon.id || event.silicon.uuid}</td><td><Status value={event.reason_code || "verified"} /></td><td><Button variant="ghost" size="sm" onClick={() => select(event)}>Inspect</Button></td></tr>)}</tbody></table></div><div className="hook-event-cards">{events.map(event => <Surface key={event.id} className="hook-stack"><div className="hook-toolbar"><strong>{event.provider}</strong><Status value={event.reason_code || "verified"} /></div><p className="hook-muted">{formatDateTime(event.received_at)} · {event.silicon.id || event.silicon.uuid}</p><p>{event.summary || event.request.path}</p><Button variant="secondary" size="sm" onClick={() => select(event)}>Inspect</Button></Surface>)}</div></>;

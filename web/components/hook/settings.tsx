@@ -9,9 +9,9 @@ import { useTheme, type ThemePreference } from "@/components/foundation/theme/us
 import { telemetryEnabled, setTelemetry, subscribeTelemetry } from "@/lib/hook/preferences";
 import { Page, PageHeader, Section, SettingsGroup, SettingsRow, Surface } from "@/components/foundation/layout/layout";
 import { ErrorAlert } from "@/components/foundation/feedback/error-alert";
-import { Select } from "@/components/arc/select/select";
-import { Checkbox } from "@/components/arc/checkbox/checkbox";
-import { Button } from "@/components/arc/button/button";
+import { Select } from "@/components/silicon-ui/select/select";
+import { Checkbox } from "@/components/silicon-ui/checkbox/checkbox";
+import { Button } from "@/components/silicon-ui/button/button";
 import { Copy } from "./common";
 export function SettingsPage() {
   const session = useSessionView();

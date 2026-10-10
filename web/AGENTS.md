@@ -1,7 +1,6 @@
 # Silicon web kit
 
-The template a Silicon app's web frontend is built from: Next.js 16 App Router, React 19, TypeScript strict, pnpm, Arc
-UI in `components/arc/`, TanStack Query in `lib/client/`. `README.md` is the guide (the BFF, the session, the proxy,
+The template a Silicon app's web frontend is built from: Next.js 16 App Router, React 19, TypeScript strict, pnpm, Silicon UI in `components/silicon-ui/`, TanStack Query in `lib/client/`. `README.md` is the guide (the BFF, the session, the proxy,
 the environment); `ADOPTING.md` is the checklist for an app; `DESIGN.md` is the design system. Read the bundled Next
 docs in `node_modules/next/dist/docs/` before relying on memory.
 

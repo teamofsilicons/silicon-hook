@@ -6,7 +6,7 @@
  * the account's own page at Silicon Accounts, search, and sign out. Below 640 px it opens as a bottom sheet.
  */
 import { CircleUserRound, Search } from "lucide-react";
-import { UserMenu } from "@/components/arc/user-menu/user-menu";
+import { UserMenu } from "@/components/silicon-ui/user-menu/user-menu";
 import { useTheme, type ThemePreference } from "@/components/foundation/theme/use-theme";
 import type { SessionAccount } from "@/lib/account";
 import { kindNoun } from "@/lib/format";

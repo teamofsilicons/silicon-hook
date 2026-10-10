@@ -19,6 +19,6 @@
   },
   "iconLibrary": "lucide",
   "registries": {
-    "@uiarc": "https://uiarc.dev/r/{name}.json"
+    "@silicon-ui": "https://ui.teamofsilicons.com/r/{name}.json"
   }
 }

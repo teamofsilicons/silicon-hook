@@ -1,12 +1,12 @@
 "use client";
 
 /**
- * The ⌘K command palette: Arc's command-palette block in a modal layer. Commands come from the registry
+ * The ⌘K command palette: Silicon UI's command-palette block in a modal layer. Commands come from the registry
  * (lib/commands.ts): the shell's navigation, theme and account commands plus whatever the current page adds.
  */
 import * as DialogPrimitive from "@radix-ui/react-dialog";
-import { CommandPalette, type CommandItem } from "@/components/arc/command-palette/command-palette";
-import { returnFocusTo, useLayerOpener } from "@/components/arc/lib/return-focus";
+import { CommandPalette, type CommandItem } from "@/components/silicon-ui/command-palette/command-palette";
+import { returnFocusTo, useLayerOpener } from "@/components/foundation/return-focus";
 import { closeCommandPalette, setCommandPaletteOpen, useCommandPaletteOpen, useCommands } from "@/lib/commands";
 import styles from "./shell.module.css";
 

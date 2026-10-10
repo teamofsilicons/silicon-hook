@@ -129,7 +129,7 @@ natively, others get an SVG-path fallback painted from the same variables.
 ```
 
 Photos and logos use `data-sq="clip"`; an element that draws with its own `::before`/`::after` uses `data-sq-native`.
-Profile photos are 30 % squircles (Arc's `Avatar`), never circles.
+Profile photos are 30 % squircles (Silicon UI's `Avatar`), never circles.
 
 ## Depth
 
@@ -156,7 +156,7 @@ Profile photos are 30 % squircles (Arc's `Avatar`), never circles.
 
 ## Motion
 
-Arc's motion language: things glide, morph and settle on springs; nothing bounces for show.
+Silicon UI's motion language: things glide, morph and settle on springs; nothing bounces for show.
 
 | Token | Value | For |
 | --- | --- | --- |

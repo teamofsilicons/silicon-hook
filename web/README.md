@@ -1,6 +1,6 @@
 # Silicon Hook console
 
-Next.js 16, React 19, TypeScript, pnpm, and vendored Arc UI. Requires Node 24.
+Next.js 16, React 19, TypeScript, pnpm, and vendored Silicon UI. Requires Node 24.
 The console signs Carbons in through Silicon Accounts and manages their visible
 Silicons. Tokens stay in an encrypted HTTP-only session cookie; the browser calls
 same-origin `/api/*`, which forwards to Hook with the access token.

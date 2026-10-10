@@ -7,7 +7,7 @@
  */
 import { useEffect } from "react";
 import { RotateCcw } from "lucide-react";
-import { Button } from "@/components/arc/button/button";
+import { Button } from "@/components/silicon-ui/button/button";
 import { ButtonLink } from "@/components/foundation/button-link";
 import { Problem } from "@/components/foundation/feedback/problem";
 import { appConfig } from "@/lib/app.config";

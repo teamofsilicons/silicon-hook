@@ -5,7 +5,7 @@
  * few small islands, and the signed-in workspace mounts its providers in app/(workspace)/layout.tsx. Every page renders
  * per request (the nonce changes each time).
  */
-import "@/components/arc/foundation.css";
+import "@/components/silicon-ui/foundation.css";
 import "@/styles/fonts.css";
 import "@/styles/tokens.css";
 import "@/styles/squircle.css";

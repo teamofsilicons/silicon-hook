@@ -8,8 +8,8 @@
  */
 import Link from "next/link";
 import type { AnchorHTMLAttributes, ReactNode } from "react";
-import buttonStyles from "@/components/arc/button/button.module.css";
-import type { ButtonSize, ButtonVariant } from "@/components/arc/button/button";
+import buttonStyles from "@/components/silicon-ui/button/button.module.css";
+import type { ButtonSize, ButtonVariant } from "@/components/silicon-ui/button/button";
 import styles from "./button-link.module.css";
 
 export interface ButtonLinkProps extends Omit<AnchorHTMLAttributes<HTMLAnchorElement>, "href"> {

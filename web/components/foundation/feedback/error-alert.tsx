@@ -5,7 +5,7 @@
  *   <ErrorAlert error={error} title="Items could not be loaded" action={<Button onClick={refetch}>Try again</Button>} />
  */
 import type { ReactNode } from "react";
-import { Alert } from "@/components/arc/alert/alert";
+import { Alert } from "@/components/silicon-ui/alert/alert";
 import type { ApiErrorInit } from "@/lib/errors";
 import { readableTimes } from "@/lib/format";
 import styles from "./error-alert.module.css";

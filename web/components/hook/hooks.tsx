@@ -8,12 +8,12 @@ import { useHookScope } from "./context";
 import { Blank, Copy, Modal, Status } from "./common";
 import { Page, PageHeader, Surface } from "@/components/foundation/layout/layout";
 import { ErrorAlert } from "@/components/foundation/feedback/error-alert";
-import { Button } from "@/components/arc/button/button";
-import { Input } from "@/components/arc/input/input";
-import { Textarea } from "@/components/arc/textarea/textarea";
-import { Checkbox } from "@/components/arc/checkbox/checkbox";
-import { Select } from "@/components/arc/select/select";
-import { ConfirmMorph } from "@/components/arc/confirm-morph/confirm-morph";
+import { Button } from "@/components/silicon-ui/button/button";
+import { Input } from "@/components/silicon-ui/input/input";
+import { Textarea } from "@/components/silicon-ui/textarea/textarea";
+import { Checkbox } from "@/components/silicon-ui/checkbox/checkbox";
+import { Select } from "@/components/silicon-ui/select/select";
+import { ConfirmMorph } from "@/components/silicon-ui/confirm-morph/confirm-morph";
 
 const algorithms = ["HMAC-SHA1", "HMAC-SHA256", "HMAC-SHA384", "HMAC-SHA512", "SHA1", "SHA256", "SHA384", "SHA512", "Ed25519", "ECDSA-SHA256", "RSA-SHA1", "RSA-SHA256"];
 const options = (values: string[]) => values.map(value => ({ value, label: value }));

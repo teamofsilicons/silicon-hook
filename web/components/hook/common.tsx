@@ -1,7 +1,7 @@
 "use client";
-import { Button } from "@/components/arc/button/button";
-import { Badge } from "@/components/arc/badge/badge";
-import { Dialog, DialogContent } from "@/components/arc/dialog/dialog";
+import { Button } from "@/components/silicon-ui/button/button";
+import { Badge } from "@/components/silicon-ui/badge/badge";
+import { Dialog, DialogContent } from "@/components/silicon-ui/dialog/dialog";
 import type { ReactNode } from "react";
 export function Blank({ title, children }: { title: string; children?: ReactNode }) { return <div className="hook-empty" data-sq="surface"><h2>{title}</h2><p>{children}</p></div>; }
 export function Status({ value }: { value: string }) { return <Badge tone={value === "active" ? "success" : value === "deleted" ? "danger" : "neutral"}>{value.replaceAll("_", " ")}</Badge>; }

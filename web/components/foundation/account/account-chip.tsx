@@ -11,7 +11,7 @@
  */
 import type { ReactNode } from "react";
 import { X } from "lucide-react";
-import { Avatar } from "@/components/arc/avatar/avatar";
+import { Avatar } from "@/components/silicon-ui/avatar/avatar";
 import { kindNoun, type AccountKind } from "@/lib/format";
 import styles from "./account-chip.module.css";
 

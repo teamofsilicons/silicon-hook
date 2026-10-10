@@ -6,7 +6,7 @@
  * React reads it through `useTheme()` (components/foundation/theme/use-theme.ts), a useSyncExternalStore over this
  * store, so the server snapshot ("light", "system") renders first and the client value follows after hydration.
  */
-import { motionTokens } from "@/components/arc/lib/motion-tokens";
+import { motionTokens } from "@/components/silicon-ui/lib/motion-tokens";
 import { appConfig } from "@/lib/app.config";
 
 export type Theme = "light" | "dark";

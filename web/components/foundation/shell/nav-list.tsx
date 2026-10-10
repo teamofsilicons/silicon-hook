@@ -9,7 +9,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { LayoutGroup, motion } from "motion/react";
 import { ArrowUpRight, BookOpen, Store } from "lucide-react";
-import { motionTokens } from "@/components/arc/lib/motion-tokens";
+import { motionTokens } from "@/components/silicon-ui/lib/motion-tokens";
 import { appConfig } from "@/lib/app.config";
 import { navigationType, navItemFor } from "@/lib/navigation";
 import styles from "./shell.module.css";

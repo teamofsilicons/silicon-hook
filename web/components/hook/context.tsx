@@ -2,8 +2,8 @@
 import { createContext, useContext, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { listSilicons, type SiliconEntry } from "@/lib/hook/api";
-import { Select } from "@/components/arc/select/select";
-import { Button } from "@/components/arc/button/button";
+import { Select } from "@/components/silicon-ui/select/select";
+import { Button } from "@/components/silicon-ui/button/button";
 import { ErrorAlert } from "@/components/foundation/feedback/error-alert";
 const Context = createContext<{ selected: SiliconEntry | undefined; items: SiliconEntry[]; setUuid: (uuid: string) => void }>({ selected: undefined, items: [], setUuid: () => {} });
 export function HookScope({ children }: { children: ReactNode }) {

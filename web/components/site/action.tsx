@@ -6,7 +6,7 @@
  *   <Action href="/docs/apps/start/publish" variant="secondary">Publish an app</Action>
  */
 import type { AnchorHTMLAttributes, ReactNode } from "react";
-import buttonStyles from "@/components/arc/button/button.module.css";
+import buttonStyles from "@/components/silicon-ui/button/button.module.css";
 import linkStyles from "@/components/foundation/button-link.module.css";
 
 export interface ActionProps extends AnchorHTMLAttributes<HTMLAnchorElement> {

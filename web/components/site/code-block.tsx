@@ -6,7 +6,7 @@
  * without script it stays hidden ([data-js-only]) and the command is plain, selectable text.
  */
 import { Check, Copy } from "lucide-react";
-import copyStyles from "@/components/arc/copy-button/copy-button.module.css";
+import copyStyles from "@/components/silicon-ui/copy-button/copy-button.module.css";
 import { highlight, languageLabel } from "@/lib/highlight";
 import styles from "./code-block.module.css";
 
