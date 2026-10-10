@@ -68,6 +68,20 @@ Building or publishing this repository does not change those running services.
 Rolling back a release does not reverse a migration: keep the backup the installer
 takes before migrating.
 
+## Next.js console deployment
+
+The frontend root is `web/`, Node24 and pnpm10.33.0. Vercel reads `web/vercel.json`;
+the frozen install, typecheck and Next build need no secrets. Runtime values are
+`APP_ID=hook`, `APP_SECRET`, `ACCOUNTS_URL`, optional `ACCOUNTS_API_URL`,
+`APP_API_URL`, `SESSION_SECRET` and `PUBLIC_URL`; see `web/.env.example` and
+[the console guide](../web/README.md). Secrets belong only on the server.
+
+Self-hosting builds `web/Dockerfile` into a non-root Next standalone server on4200.
+Keep HTTPS termination and register the exact production `/auth/callback` at
+Accounts. The previous IAM cookies require a fresh sign-in. Switch the console
+with the matching APIv3 release and retain the preceding Vercel deployment for
+rollback. A frontend rollback cannot reverse database identity migrations.
+
 ## Documentation hosting
 
 The documentation lives at [docs.hook.teamofsilicons.com](https://docs.hook.teamofsilicons.com). Its static Vercel build is generated from `docs/`, with full-text local search, per-page anchors, source links and the current OpenAPI download.

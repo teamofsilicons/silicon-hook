@@ -1,0 +1,156 @@
+/*
+ * The Silicon look, mapped onto Arc's semantic tokens (components/arc/foundation.css, imported first). One look, two
+ * modes (light and dark, or the system's), applied to <html data-theme> and to any subtree that sets data-theme itself
+ * (a preview can show the other mode). Floating layers (menus, dialogs) portal to <body> and follow the page.
+ *
+ * Brand: background #F7F8FA and text #292929 in light, background #02040A and text #F7F8FA in dark, brand blue #1F5FB8
+ * for primary buttons and fills in both. Surfaces, borders and muted text are cool neutrals derived from those.
+ *
+ * Contrast (WCAG 2.2, measured): every text token clears 4.5:1 on --background, --surface, --surface-raised,
+ * --surface-muted and --accent-subtle (over the page or a surface) in its mode. Lowest pairs: light --warning 4.8:1 and
+ * --text-muted #5C6370 4.9:1 on the accent tint over the page, --accent-ink #1F5FB8 5.4:1 on --surface-muted; dark
+ * --text-muted #9BA4B4 6.4:1 and --accent-ink #7DAEF4 7.1:1 on --surface-muted. Two additions to Arc's set exist
+ * because of that:
+ *   --accent-ink   accent-coloured text. Brand blue as text on #02040A is 3.3:1, so dark mode uses a lighter ink.
+ *                  Fills and indicators keep --accent (dark --accent is text-safe too, 6.4:1 on --surface-muted).
+ *   --primary*     filled primary buttons stay brand blue with light text in both modes (white 6.2:1 light, #F7F8FA
+ *                  5.8:1 dark). Arc's own primary button is the inverted foreground; our local edit of
+ *                  button.module.css paints it with these.
+ */
+:root, [data-theme="light"] {
+  color-scheme: light;
+  --brand-blue: #1F5FB8;
+  --brand-light: #F7F8FA;
+  --brand-ink: #292929;
+  --brand-night: #02040A;
+
+  --background: #F7F8FA;
+  --surface: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --surface-muted: #EEF0F4;
+  --foreground: #292929;
+  --text-secondary: #4C5260;
+  --text-muted: #5C6370;
+  --border: #E2E5EB;
+  --border-subtle: #EBEDF1;
+  --border-strong: #CBD0D8;
+
+  --accent: #1F5FB8;
+  --accent-strong: #174C96;
+  --accent-subtle: rgb(31 95 184 / .1);
+  --accent-foreground: #FFFFFF;
+  --accent-ink: #1F5FB8;
+
+  --primary: #1F5FB8;
+  --primary-hover: #1B55A6;
+  --primary-pressed: #184C93;
+  --primary-foreground: #FFFFFF;
+
+  --control-on: #1F5FB8;
+  --control-glyph: #FFFFFF;
+  --control-track: #DDE1E8;
+  --control-track-hover: #D1D6DF;
+  --control-thumb: #FFFFFF;
+  --control-thumb-on: #FFFFFF;
+  --control-thumb-shadow: 0 0 0 .5px rgb(16 24 40 / .08), 0 1px 2px rgb(16 24 40 / .16), 0 2px 6px rgb(16 24 40 / .07);
+  --control-fill: var(--control-on);
+  --control-on-subtle: color-mix(in oklab, var(--control-on) 10%, transparent);
+  --focus-ring: transparent;
+
+  --success: #18703F;
+  --warning: #93560A;
+  --danger: #B42318;
+
+  /* Cool, soft shadows. Only floating layers and lifted cards use them. */
+  --shadow-resting: 0 1px 2px rgb(16 24 40 / .05);
+  --shadow-raised: 0 6px 18px rgb(16 24 40 / .07), 0 1px 3px rgb(16 24 40 / .04);
+  --shadow-floating: 0 20px 48px rgb(16 24 40 / .12), 0 3px 10px rgb(16 24 40 / .05);
+
+  --series-1: #1F5FB8; --series-2: #7A4FC4; --series-3: #B86E0F; --series-4: #17806B;
+
+  /* Type. SF Pro is the system face on Apple devices (its licence does not allow serving it), so text asks for the
+     system first; BDO Grotesk (styles/fonts.css) is the display face and the text face everywhere else. */
+  --font-display: "BDO Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
+  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "BDO Grotesk", system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
+  /* Kept for older styles: the display face (the site has no serif). */
+  --font-serif: var(--font-display);
+  --tracking-display: -.025em;
+
+  /* Squircle tuning: corner-shape radius multiplier (matches Figma's 60 % corner smoothing). See styles/squircle.css. */
+  --sq-k: 1.6;
+
+  /* Dot grid and grain, used sparingly (landing art, branded previews). */
+  --grain-opacity: .06;
+  --dot-color: rgb(41 41 41 / .1);
+  --overlay: rgb(2 4 10 / .34);
+  /* The soft brand wash behind heroes. */
+  --wash: radial-gradient(70% 60% at 50% 0%, rgb(31 95 184 / .09), transparent 70%);
+
+  /* Page chrome. The kit has no floating dock (the account site's --dock-height is 0 here); the clearance keeps the
+     last content of a page clear of the bottom edge and a floating save bar's resting place. */
+  --page-max: 1240px;
+  --page-narrow: 720px;
+  --gutter: clamp(16px, 4vw, 32px);
+  --dock-height: 0px;
+  --dock-clearance: calc(64px + env(safe-area-inset-bottom, 0px));
+  /* The signed-in workspace (components/foundation/shell): a sidebar beside a sticky top bar. */
+  --sidebar-width: 248px;
+  --topbar-height: 64px;
+  /* The app's own colour (lib/app.config.ts accent), set on <html> by the root layout. It tints the app's mark and the
+     landing page's wash only: actions stay brand blue. Without one, the mark is brand blue like every Silicon site's. */
+  --app-accent: var(--app-accent-light, var(--primary));
+}
+
+:root[data-theme="dark"], [data-theme="dark"] {
+  color-scheme: dark;
+  --background: #02040A;
+  --surface: #0B0F18;
+  --surface-raised: #121826;
+  --surface-muted: #1A2130;
+  --foreground: #F7F8FA;
+  --text-secondary: #C2C8D3;
+  --text-muted: #9BA4B4;
+  --border: #1F2635;
+  --border-subtle: #161C28;
+  --border-strong: #2F394B;
+
+  --accent: #6AA0EE;
+  --accent-strong: #A8C8F8;
+  --accent-subtle: rgb(31 95 184 / .24);
+  --accent-foreground: #02040A;
+  --accent-ink: #7DAEF4;
+
+  --primary: #1F5FB8;
+  --primary-hover: #2766C2;
+  --primary-pressed: #1B55A6;
+  --primary-foreground: #F7F8FA;
+
+  --control-on: #2C6AC6;
+  --control-glyph: #FFFFFF;
+  --control-track: #2A3243;
+  --control-track-hover: #333C4F;
+  --control-thumb: #EEF0F4;
+  --control-thumb-on: #FFFFFF;
+  --control-thumb-shadow: 0 0 0 .5px rgb(0 0 0 / .3), 0 1px 2px rgb(0 0 0 / .35), 0 2px 6px rgb(0 0 0 / .2);
+  --control-fill: var(--control-on);
+  --control-on-subtle: color-mix(in oklab, var(--control-on) 16%, transparent);
+  --focus-ring: transparent;
+
+  --success: #4CC38A;
+  --warning: #E9B24F;
+  --danger: #FF8A80;
+
+  --shadow-resting: 0 1px 2px rgb(0 0 0 / .4);
+  --shadow-raised: 0 8px 22px rgb(0 0 0 / .45);
+  --shadow-floating: 0 22px 55px rgb(0 0 0 / .6), 0 3px 10px rgb(0 0 0 / .3);
+
+  --series-1: #6AA0EE; --series-2: #B58BE0; --series-3: #E9B24F; --series-4: #4CC3A6;
+
+  --app-accent: var(--app-accent-dark, var(--primary));
+
+  --grain-opacity: .08;
+  --dot-color: rgb(247 248 250 / .09);
+  --overlay: rgb(2 4 10 / .62);
+  --wash: radial-gradient(70% 60% at 50% 0%, rgb(31 95 184 / .22), transparent 70%);
+}

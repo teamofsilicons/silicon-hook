@@ -1,0 +1,6 @@
+/* The app's mark: a squircle of the app's colour with its glyph in white, like the developer site's and the store's. */
+.mark { display: inline-grid; width: var(--mark-size, 28px); height: var(--mark-size, 28px); flex: none; place-items: center; background: var(--app-accent); color: #FFFFFF; }
+.mark svg { display: block; }
+.wordmark { display: inline-flex; min-width: 0; align-items: center; gap: 10px; color: var(--foreground); font-family: var(--font-display); font-size: 1rem; font-weight: 600; letter-spacing: -.015em; }
+.name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.muted { color: var(--text-secondary); font-weight: 500; }

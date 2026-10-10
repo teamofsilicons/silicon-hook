@@ -1,0 +1,15 @@
+/* Not found, errors and cancelled sign-ins: one calm message in the middle (the developer site's status pages). */
+.problem { display: grid; place-items: center; padding: var(--space-12) var(--gutter); }
+.problem[data-layout="page"] { min-height: calc(100vh - 65px); min-height: calc(100dvh - 65px); }
+.problem[data-layout="inset"] { min-height: min(70vh, 640px); }
+.problem > * { width: min(100%, var(--page-narrow)); }
+.box { display: grid; justify-items: center; gap: var(--space-4); text-align: center; }
+.icon { --sq-r: 16px; --sq-fill: var(--surface); --sq-stroke: var(--border); display: grid; width: 56px; height: 56px; place-items: center; border: 1px solid var(--sq-stroke); background: var(--sq-fill); color: var(--text-secondary); }
+.icon svg { width: 24px; height: 24px; }
+.title { margin: 0; font-family: var(--font-display); font-size: clamp(1.75rem, 1.4rem + 1.4vw, 2.25rem); font-weight: 600; letter-spacing: -.025em; line-height: 1.1; text-wrap: balance; }
+.text { max-width: 46ch; margin: 0; color: var(--text-secondary); line-height: 1.6; text-wrap: pretty; }
+.text p { margin: 0; }
+.text p + p { margin-top: var(--space-2); }
+.actions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2) var(--space-3); margin-top: var(--space-2); }
+.reference { margin-top: var(--space-2); color: var(--text-muted); font-family: var(--font-mono); font-size: var(--text-xs); letter-spacing: 0; overflow-wrap: anywhere; }
+@media (max-width: 479px) { .actions > * { flex: 1 1 100%; } }

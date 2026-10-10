@@ -1,0 +1,2 @@
+/* The toast stack sits in the bottom right corner, above the phone's home indicator. */
+.toasts.toasts { bottom: calc(var(--space-6) + env(safe-area-inset-bottom, 0px)); }

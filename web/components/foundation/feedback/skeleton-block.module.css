@@ -1,0 +1,10 @@
+/* Arc's skeleton look (components/arc/skeleton): a calm, finite pulse, each block a beat after the one before it. */
+.block {
+  --sq-fill: color-mix(in oklab, var(--border-strong) 38%, var(--surface));
+  display: block;
+  max-width: 100%;
+  background: var(--sq-fill);
+  animation: skeleton-block-pulse 1.8s var(--ease-in-out) calc(var(--index, 0) * 90ms) 11 both;
+}
+@keyframes skeleton-block-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .52; } }
+@media (prefers-reduced-motion: reduce) { .block { animation: none; } }

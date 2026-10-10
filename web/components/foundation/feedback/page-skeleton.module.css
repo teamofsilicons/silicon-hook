@@ -1,0 +1,2 @@
+.loading { display: grid; gap: var(--space-6); }
+.header { display: grid; gap: var(--space-3); margin-bottom: var(--space-2); }

@@ -1,0 +1,220 @@
+/*
+ * The public pages' header, menu and footer, after Arc's site-header and site-footer blocks (copied from the developer
+ * site): a calm sticky bar, a hover fill on links, brand-blue primary action, quiet footer columns. Every rounded
+ * surface is a squircle.
+ */
+
+/* Header ----------------------------------------------------------------------------------------------------------- */
+.header {
+  --header-max: var(--page-max);
+  position: sticky;
+  top: 0;
+  z-index: 40;
+  border-bottom: 1px solid var(--border-subtle);
+  background: color-mix(in oklab, var(--background) 84%, transparent);
+  -webkit-backdrop-filter: saturate(1.5) blur(14px);
+  backdrop-filter: saturate(1.5) blur(14px);
+}
+.header[data-wide] { --header-max: 1440px; }
+.bar {
+  display: flex;
+  max-width: var(--header-max);
+  height: var(--site-header-height, 64px);
+  align-items: center;
+  gap: var(--space-2);
+  margin-inline: auto;
+  padding: 0 var(--gutter);
+}
+
+/* The padding (taken back by the negative margin) gives keyboard focus a soft fill to show in. */
+.brand {
+  --sq-r: 12px;
+  --sq-fill: transparent;
+  display: inline-flex;
+  min-width: 0;
+  flex: none;
+  align-items: center;
+  gap: 10px;
+  margin: -6px 0 -6px -8px;
+  padding: 6px 8px;
+  background: var(--sq-fill);
+  color: var(--foreground);
+  font-family: var(--font-display);
+  font-size: 1rem;
+  font-weight: 600;
+  letter-spacing: -.015em;
+  text-decoration: none;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+.brand:hover { color: var(--foreground); }
+.brand:focus-visible { --sq-fill: var(--surface-muted); color: var(--foreground); }
+
+.nav { min-width: 0; margin-left: var(--space-5); }
+.navList { display: flex; align-items: center; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.navLink {
+  --sq-r: 10px;
+  --sq-fill: transparent;
+  position: relative;
+  display: inline-flex;
+  height: 34px;
+  align-items: center;
+  padding: 0 12px;
+  background: var(--sq-fill);
+  color: var(--text-secondary);
+  font-size: var(--text-sm);
+  font-weight: 500;
+  text-decoration: none;
+  white-space: nowrap;
+  transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+.navLink:hover, .navLink:focus-visible { --sq-fill: var(--surface-muted); color: var(--foreground); }
+.navLink[aria-current] { color: var(--foreground); }
+/* The current section: Arc's indicator line under the label. */
+.navLink[aria-current]::after { content: ""; position: absolute; right: 12px; bottom: 3px; left: 12px; height: 2px; border-radius: 2px; background: var(--accent); }
+
+.actions { display: flex; flex: none; align-items: center; gap: var(--space-2); margin-left: auto; }
+.account { flex: none; }
+
+/* Icon buttons (search, theme, menu): Arc's icon-only switch, 38 px on a 12 px squircle. */
+.iconButton {
+  --sq-r: 12px;
+  --sq-fill: transparent;
+  --sq-stroke: transparent;
+  display: inline-grid;
+  width: 38px;
+  height: 38px;
+  flex: none;
+  place-items: center;
+  border: 1px solid var(--sq-stroke);
+  padding: 0;
+  background: var(--sq-fill);
+  color: var(--text-secondary);
+  cursor: pointer;
+  text-decoration: none;
+  -webkit-tap-highlight-color: transparent;
+  transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard), transform var(--duration-instant) var(--ease-standard);
+}
+.iconButton:hover, .iconButton:focus-visible { --sq-fill: var(--surface-muted); color: var(--foreground); }
+.iconButton:active { transform: scale(.96); }
+.iconButton > svg { grid-area: 1 / 1; }
+/* The theme icon follows <html data-theme>, so the right one paints before any script runs. */
+.moon { opacity: 0; transform: rotate(-30deg) scale(.7); }
+.sun, .moon { transition: opacity var(--duration-fast) var(--ease-standard), transform var(--duration-spring) var(--ease-spring); }
+:global(:root[data-theme="dark"]) .sun { opacity: 0; transform: rotate(30deg) scale(.7); }
+:global(:root[data-theme="dark"]) .moon { opacity: 1; transform: none; }
+.menuButton { display: none; }
+
+/* Menu: a native popover sheet from the right edge. */
+.menu {
+  --sq-r: var(--radius-panel);
+  --sq-fill: var(--surface-raised);
+  --sq-stroke: var(--border);
+  position: fixed;
+  inset: 8px 8px 8px auto;
+  width: min(22rem, calc(100vw - 16px));
+  height: auto;
+  max-height: calc(100dvh - 16px);
+  margin: 0;
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--sq-stroke);
+  padding: var(--space-3);
+  background: var(--sq-fill);
+  color: var(--foreground);
+  box-shadow: var(--shadow-floating);
+}
+.menu:popover-open { display: flex; flex-direction: column; gap: var(--space-3); }
+.menu::backdrop { background: var(--overlay); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+@media (prefers-reduced-motion: no-preference) {
+  .menu { transition: opacity var(--duration-standard) var(--ease-enter), transform var(--duration-considered) var(--ease-enter), overlay var(--duration-standard) allow-discrete, display var(--duration-standard) allow-discrete; }
+  .menu:popover-open { opacity: 1; transform: none; }
+  @starting-style { .menu:popover-open { opacity: 0; transform: translateX(16px); } }
+  .menu:not(:popover-open) { opacity: 0; transform: translateX(16px); }
+}
+.menuHead { display: flex; align-items: center; justify-content: space-between; gap: var(--space-3); padding: 0 0 0 var(--space-2); }
+.menuTitle { color: var(--text-muted); font-size: var(--text-sm); font-weight: 500; }
+.menuNav ul { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+.menuLink {
+  --sq-r: 12px;
+  --sq-fill: transparent;
+  display: flex;
+  min-height: 44px;
+  align-items: center;
+  padding: 0 var(--space-3);
+  background: var(--sq-fill);
+  color: var(--foreground);
+  font-size: var(--text-base);
+  font-weight: 500;
+  text-decoration: none;
+}
+.menuLink:hover, .menuLink:focus-visible { --sq-fill: var(--surface-muted); color: var(--foreground); }
+.menuLink[aria-current] { --sq-fill: var(--accent-subtle); color: var(--accent-strong); }
+.menuExtra { border-top: 1px solid var(--border-subtle); padding-top: var(--space-3); }
+.menuFoot { margin-top: auto; padding-top: var(--space-2); }
+.menuAction { width: 100%; }
+
+@media (max-width: 899px) {
+  .nav { display: none; }
+  .menuButton { display: inline-grid; }
+}
+@media (max-width: 479px) {
+  .bar { --site-header-height: 58px; gap: 4px; }
+  .actions .account { display: none; }
+}
+
+/* Footer ----------------------------------------------------------------------------------------------------------- */
+.footer { border-top: 1px solid var(--border-subtle); background: var(--background); }
+.footerInner { max-width: var(--page-max); margin-inline: auto; padding: var(--space-12) var(--gutter) var(--space-8); }
+.footer[data-wide] .footerInner { max-width: 1440px; }
+.footerTop { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.6fr); gap: var(--space-12); }
+.footerIntro { display: grid; align-content: start; gap: var(--space-3); }
+.footerBrand { display: inline-flex; width: max-content; color: var(--foreground); text-decoration: none; }
+.footerBrand:hover { color: var(--foreground); }
+.tagline { max-width: 34ch; margin: 0; color: var(--text-secondary); font-size: var(--text-sm); line-height: 1.6; }
+.columns { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-6); }
+.column h2 { margin: 0 0 var(--space-3); color: var(--foreground); font-size: var(--text-sm); font-weight: 600; }
+.column ul { display: grid; gap: var(--space-2); margin: 0; padding: 0; list-style: none; }
+.footerLink { display: inline-flex; align-items: center; gap: 3px; padding: 2px 0; color: var(--text-secondary); font-size: var(--text-sm); text-decoration: none; transition: color var(--duration-fast) var(--ease-standard); }
+.footerLink:hover, .footerLink:focus-visible { color: var(--foreground); text-decoration: underline; text-underline-offset: .22em; }
+.externalIcon { color: var(--text-muted); }
+.footerBottom { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: var(--space-4) var(--space-6); margin-top: var(--space-10); border-top: 1px solid var(--border-subtle); padding-top: var(--space-5); }
+.copyright { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+
+/* The theme choice: Arc's segmented control, three pressed buttons on one track. */
+.picker { --sq-r: 12px; --sq-fill: var(--surface-muted); display: inline-flex; gap: 2px; padding: 3px; background: var(--sq-fill); }
+.pickerOption {
+  --sq-r: 9px;
+  --sq-fill: transparent;
+  --sq-stroke: transparent;
+  display: inline-flex;
+  height: 30px;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--sq-stroke);
+  padding: 0 10px;
+  background: var(--sq-fill);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--text-xs);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard);
+}
+.pickerOption:hover, .pickerOption:focus-visible { color: var(--foreground); }
+.pickerOption[aria-pressed="true"] { --sq-fill: var(--surface); color: var(--foreground); box-shadow: var(--shadow-resting); }
+/* Keyboard position (as Arc's segmented control here): an accent edge, and a soft fill on an option not chosen. */
+.pickerOption:focus-visible { --sq-stroke: var(--accent); outline: none; }
+.pickerOption:focus-visible:not([aria-pressed="true"]) { --sq-fill: color-mix(in oklab, var(--foreground) 6%, transparent); }
+
+@media (max-width: 760px) {
+  .footerTop { grid-template-columns: minmax(0, 1fr); gap: var(--space-8); }
+}
+@media (max-width: 520px) {
+  .columns { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-8) var(--space-4); }
+  .footerBottom { flex-direction: column; align-items: flex-start; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .brand, .navLink, .iconButton, .sun, .moon, .footerLink, .pickerOption { transition: none; }
+  .iconButton:active { transform: none; }
+}

@@ -1,0 +1,90 @@
+/*
+ * Squircles (lib/squircle/core.ts). Every squircled element carries [data-sq="surface"|"clip"]; [data-sq-fb] is added
+ * only by the SVG-path fallback (browsers without `corner-shape`). Components never set border-radius on a squircled
+ * element: they set --sq-r (the base radius) and paint through --sq-fill / --sq-stroke so the fallback can follow
+ * state changes (hover, pressed, invalid).
+ *
+ * Per-corner factors (--sq-tl, --sq-tr, --sq-br, --sq-bl; 1 or 0) square individual corners, for edge-anchored
+ * drawers and sheets. They are registered as non-inheriting so a drawer's square edge never leaks into the buttons
+ * and inputs inside it (a review finding on the Solid build).
+ */
+@property --sq-tl { syntax: "<number>"; inherits: false; initial-value: 1; }
+@property --sq-tr { syntax: "<number>"; inherits: false; initial-value: 1; }
+@property --sq-br { syntax: "<number>"; inherits: false; initial-value: 1; }
+@property --sq-bl { syntax: "<number>"; inherits: false; initial-value: 1; }
+/* The radius never inherits either: a squircled element without its own --sq-r gets --radius-control, not the radius
+   of the card or dock it sits in. */
+@property --sq-r { syntax: "*"; inherits: false; }
+/* --sq-fill / --sq-stroke do inherit (the fallback's pseudo-elements read them). Their resolved colours let the
+   fallback tell an element's own values from an ancestor's (lib/squircle/core.ts). */
+@property --sq-fill-c { syntax: "<color>"; inherits: false; initial-value: transparent; }
+@property --sq-stroke-c { syntax: "<color>"; inherits: false; initial-value: transparent; }
+
+[data-sq] {
+  --sq-fill-c: var(--sq-fill, transparent);
+  --sq-stroke-c: var(--sq-stroke, transparent);
+  border-radius:
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-tl))
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-tr))
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-br))
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-bl));
+}
+/* Native-only squircles, for elements that draw their own ::before/::after (the fallback paints with those): the
+   fallback leaves them with plain rounded corners. */
+[data-sq-native] {
+  border-radius:
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-tl))
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-tr))
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-br))
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-bl));
+}
+
+/* Native: Chromium 139+ and current Safari draw the superellipse themselves; fills, borders, shadows and overflow
+   clipping all follow the curve and no script runs. The radius is scaled so the visible size matches the fallback. */
+@supports (corner-shape: squircle) {
+  :root:not([data-squircle-fallback]) :is([data-sq], [data-sq-native]) {
+    corner-shape: squircle;
+    border-radius:
+      calc(var(--sq-r, var(--radius-control)) * var(--sq-k, 1.6) * var(--sq-tl))
+      calc(var(--sq-r, var(--radius-control)) * var(--sq-k, 1.6) * var(--sq-tr))
+      calc(var(--sq-r, var(--radius-control)) * var(--sq-k, 1.6) * var(--sq-br))
+      calc(var(--sq-r, var(--radius-control)) * var(--sq-k, 1.6) * var(--sq-bl));
+  }
+}
+
+/* Branded hosted pages may opt out of squircles (Branding.corner_style). :root keeps these above the native rule. */
+:root [data-corner="rounded"] :is([data-sq], [data-sq-native]) {
+  corner-shape: round;
+  border-radius:
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-tl))
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-tr))
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-br))
+    calc(var(--sq-r, var(--radius-control)) * var(--sq-bl));
+}
+:root [data-corner="sharp"] :is([data-sq], [data-sq-native]) { corner-shape: round; border-radius: 0; }
+
+/* Fallback: the element's own paint goes transparent and two pseudo-elements draw the curve: ::before the fill,
+   ::after the border ring (outer path minus inner path). A drop-shadow filter on the element follows the curve. */
+[data-sq-fb] { isolation: isolate; }
+[data-sq-fb="surface"] { background-color: transparent !important; background-image: none !important; border-color: transparent !important; }
+[data-sq-fb]::before,
+[data-sq-fb]::after {
+  content: "";
+  position: absolute;
+  inset: var(--sq-inset, 0px);
+  z-index: -1;
+  pointer-events: none;
+  border-radius: 0;
+  transition: background-color var(--duration-fast) var(--ease-standard);
+}
+[data-sq-fb="surface"]::before { background-color: var(--sq-fill, transparent); clip-path: var(--sq-path); }
+[data-sq-fb]::after { background-color: var(--sq-stroke, transparent); clip-path: var(--sq-ring); }
+[data-sq-fb="clip"] { clip-path: var(--sq-path); border-color: transparent !important; }
+[data-sq-fb="clip"]::before { content: none; }
+[data-sq-fb="clip"]::after { z-index: 1; }
+/* A box-shadow would draw a rounded rectangle around the curve; the fallback swaps it for the same shadow as a filter. */
+[data-sq-fb="surface"][data-sq-shadow] { box-shadow: none !important; filter: var(--sq-drop); }
+
+@media (prefers-reduced-motion: reduce) {
+  [data-sq-fb]::before, [data-sq-fb]::after { transition: none; }
+}

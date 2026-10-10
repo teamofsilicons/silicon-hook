@@ -74,7 +74,7 @@ jobs:
         run: cargo deny --locked check
 
   frontend:
-    name: SolidJS frontend and session gateway
+    name: Next.js console and Accounts session
     runs-on: ubuntu-24.04
     container: node:24-bookworm
     timeout-minutes: 10
@@ -84,12 +84,16 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Enable the pinned package manager
+        run: corepack enable
       - name: Install locked frontend dependencies
-        run: npm ci
-      - name: Type-check and build the frontend and gateway
-        run: npm run build
-      - name: Check session and gateway security invariants
-        run: npm test
+        run: pnpm install --frozen-lockfile
+      - name: Check types and lint
+        run: pnpm typecheck && pnpm lint
+      - name: Check Accounts session security
+        run: pnpm test
+      - name: Build the standalone Next.js console
+        run: NEXT_OUTPUT=standalone pnpm build
 
   docs:
     name: Documentation, packaging and deployment scripts

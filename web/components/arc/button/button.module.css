@@ -1,0 +1,41 @@
+.button { --sq-r: var(--radius-control); --sq-fill: transparent; --sq-stroke: transparent; position: relative; display: inline-flex; min-height: var(--control-height-md); align-items: center; justify-content: center; gap: var(--space-2); border: 1px solid var(--sq-stroke); background: var(--sq-fill); padding: 0 var(--space-4); font: inherit; font-size: var(--text-sm); font-weight: 500; line-height: var(--leading-body); white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent; transition: color var(--duration-fast) var(--ease-standard), background var(--duration-fast) var(--ease-standard), border-color var(--duration-fast) var(--ease-standard), opacity var(--duration-fast) var(--ease-standard), box-shadow var(--duration-fast) var(--ease-standard); }
+.button:disabled { cursor: not-allowed; opacity: .52; }
+.button[aria-busy="true"] { cursor: progress; }
+/* Anchors of floating layers never scale: Radix opens on pointerdown and would measure a shrunken trigger. */
+.button:is([aria-haspopup]:not([aria-haspopup="false"]), [data-state], [role="combobox"]) { transform: none !important; }
+/* The slot's width follows the incoming label on a spring. The label stays centered and may overflow evenly while the slot catches up;
+   the outgoing label pops out of flow against the slot itself, so it keeps its place instead of following the new content box. */
+.labelSlot { position: relative; display: inline-flex; min-width: 0; align-items: center; justify-content: center; transition: opacity var(--duration-fast) var(--ease-standard); }
+.labelSlot[data-morphing] { clip-path: inset(-50% calc(var(--space-3) * -1)); }
+.labelContent { display: inline-flex; flex: none; align-items: center; }
+.labelPhase { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); white-space: nowrap; }
+.labelPhase svg { flex: none; }
+/* Silicon Accounts: the primary button is the brand blue with paper text in both themes (--primary*, styles/tokens.css). */
+.primary { --sq-fill: var(--primary); --sq-stroke: var(--primary); color: var(--primary-foreground); }
+.secondary { --sq-fill: var(--surface); --sq-stroke: var(--border); color: var(--foreground); }
+.ghost { --sq-fill: transparent; --sq-stroke: transparent; color: var(--text-secondary); }
+.danger { --sq-fill: var(--surface); --sq-stroke: var(--border); color: var(--danger); }
+@media (hover: hover) and (pointer: fine) {
+  .primary:hover:not(:disabled) { --sq-fill: var(--primary-hover); --sq-stroke: var(--primary-hover); box-shadow: var(--shadow-resting); }
+  .secondary:hover:not(:disabled) { --sq-fill: var(--surface-muted); box-shadow: var(--shadow-resting); }
+  .ghost:hover:not(:disabled) { --sq-fill: var(--surface-muted); color: var(--foreground); }
+  .danger:hover:not(:disabled) { --sq-stroke: var(--danger); --sq-fill: var(--surface-muted); }
+}
+/* Keyboard position shows with the same fills as hover (Arc draws no focus rings). */
+.primary:focus-visible { --sq-fill: var(--primary-hover); --sq-stroke: var(--primary-hover); }
+.secondary:focus-visible { --sq-fill: var(--surface-muted); --sq-stroke: var(--border-strong); }
+.ghost:focus-visible { --sq-fill: var(--surface-muted); color: var(--foreground); }
+.danger:focus-visible { --sq-stroke: var(--danger); --sq-fill: var(--surface-muted); }
+/* Color feedback on press, so touch and menu triggers (which never scale) still answer the finger. */
+.primary:active:not(:disabled) { --sq-fill: var(--primary-pressed); --sq-stroke: var(--primary-pressed); }
+.secondary:active:not(:disabled), .ghost:active:not(:disabled) { --sq-fill: var(--surface-muted); color: var(--foreground); }
+.danger:active:not(:disabled) { --sq-stroke: var(--danger); --sq-fill: var(--surface-muted); }
+.secondary[aria-expanded="true"], .ghost[aria-expanded="true"] { --sq-fill: var(--surface-muted); color: var(--foreground); }
+.sm { min-height: var(--control-height-sm); padding-inline: var(--space-3); font-size: var(--text-sm); }
+.md { min-height: var(--control-height-md); }
+.lg { min-height: var(--control-height-lg); padding-inline: var(--space-5); font-size: var(--text-sm); }
+.loader { position: absolute; left: 50%; top: 50%; display: grid; width: var(--space-4); height: var(--space-4); margin: calc(var(--space-4) / -2); }
+.spinner { border: 1.5px solid currentColor; border-right-color: transparent; border-radius: 50%; animation: spin .7s linear infinite; }
+.loadingLabel { opacity: 0; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .button { transition: none; } .labelSlot { transition: opacity var(--duration-instant) linear; } .spinner { animation-duration: .01ms; animation-iteration-count: 1; } }

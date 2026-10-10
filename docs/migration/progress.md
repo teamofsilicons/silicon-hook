@@ -736,3 +736,38 @@ upgrade/linking suite 1/1. `cargo clippy --locked -p silicon-hook --all-targets
 Next frontend remain in progress. The inherited throwaway review probe is
 preserved outside the worktree in `.migration/recovery/hook-inherited-review-probe.rs`;
 its actionable assertions are now regression tests.
+
+
+## 2026-10-10 — Next.js and Arc console verified
+
+Replaced the Solid frontend/session gateway with the full Next.js16/React19 Arc
+console: seven product sections, hook creation/signature editing and rotation,
+bulk enable/disable, recovery, Accounts connection setup, history/blocked request
+inspection and exports, delivery receipts and subscriptions, live viewing, named
+sharing/allow-lists, theme and telemetry settings. Runtime-only app secrets and
+sealed Accounts sessions back the BFF. Native Vercel and non-root standalone
+Docker recipes replace the former gateway; CI uses locked pnpm and checks types,
+lint, sessions and production build.
+
+Verification on the isolated local Accounts9589/9590 and Hook4201 stack:
+
+- API/CLI end-to-end:128 passed (`.mig/e2e-16749/report.json`).
+- Web:44 unit tests, typecheck, zero-warning lint and standalone production build.
+- Browser:25/25 complete suite, including hosted sign-in, real refresh rotation,
+  cross-tab sign-out, keyboard and axe WCAG2.2AA in both themes and phone/desktop.
+- Expanded product journey:2/2 with setup; signed and blocked provider requests,
+  custodian CRUD/recovery, viewer403, grants and allow-list, observer subscribe/
+  unsubscribe, bulk toggles, secret and endpoint rotation, Accounts hook setup.
+- Populated screenshots:28 PNGs across seven pages, both themes and1440/390widths;
+  representative desktop/phone views inspected and no horizontal overflow.
+- Packaging/deployment Python checks and bundled CLI documentation check pass.
+
+Evidence: `.mig/web-full-e2e.log`, `.mig/web-product-e2e.log`,
+`.mig/web-unit.log`, `.mig/web-build.log`, `.mig/web-packaging-tests.log`,
+`web/screens/`. Docker image build is still a CI/release gate because the local
+Docker daemon does not respond. Production Ting acceptance and the coordinated
+identity cutover remain release gates. No production deployment performed.
+
+The user has additionally requested standard128-bit account UUIDs and migration
+of existing account IDs across linked apps. That follow-up is being implemented
+as a separate coherent change using one Accounts mapping export.

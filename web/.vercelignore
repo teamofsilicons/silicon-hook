@@ -1,4 +1,7 @@
 node_modules
+.next*
+test-results
+playwright-report
+screens
 .env*
-.sessions
-dist
+!.env.example
