@@ -2871,33 +2871,31 @@ dependencies = [
 
 [[package]]
 name = "silicon-hook-cli"
-version = "0.10.1"
+version = "1.0.0"
 dependencies = [
- "anyhow",
  "axum",
  "clap",
  "fs2",
  "serde",
  "serde_json",
- "sha2 0.10.9",
  "silicon-hook-client",
+ "time",
  "tokio",
- "url",
  "uuid",
  "zeroize",
 ]
 
 [[package]]
 name = "silicon-hook-client"
-version = "0.10.1"
+version = "1.0.0"
 dependencies = [
  "axum",
  "hex",
  "reqwest",
- "semver",
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "silicon-accounts-client",
  "subtle",
  "thiserror",
  "time",

@@ -1,39 +1,37 @@
-//! One-shot management example. Supply HOOK_SLT, optionally HOOK_URL,
-//! HOOK_TEST_KEY, HOOK_ORG, and HOOK_SILICON. No receiving tasks are started.
+//! One-shot management example for a Silicon.
+//!
+//! ```sh
+//! export HOOK_SLT=$(silicon-accounts login --app hook -q)
+//! cargo run -p silicon-hook-client --example management_login
+//! ```
+//!
+//! Optional: `ACCOUNTS_URL`, `HOOK_URL`, `HOOK_SILICON` (another Silicon you look
+//! after or were granted). The example signs out at the end; a long-lived host
+//! keeps both tokens and refreshes one at a time instead.
 
-use silicon_hook_client::{Client, Mutation};
+use silicon_hook_client::{Client, signin::SignIn};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut base = Client::new(
-        &std::env::var("HOOK_URL")
-            .unwrap_or_else(|_| "https://backend.hook.teamofsilicons.com".into()),
+    let sign_in = SignIn::new(
+        &std::env::var("ACCOUNTS_URL")
+            .unwrap_or_else(|_| silicon_hook_client::signin::DEFAULT_ACCOUNTS_URL.into()),
     )?;
-    if let Ok(key) = std::env::var("HOOK_TEST_KEY") {
-        base = base.with_test_key(key)?;
-    }
     let slt = zeroize::Zeroizing::new(std::env::var("HOOK_SLT")?);
-    let tokens = base.login(&slt, &Mutation::new()).await?;
-    let org = tokens
-        .org_id
-        .as_deref()
-        .map(str::to_owned)
-        .or_else(|| std::env::var("HOOK_ORG").ok())
-        .ok_or("set HOOK_ORG when the token has no organization")?;
-    let target = std::env::var("HOOK_SILICON")
-        .ok()
-        .or_else(|| (tokens.actor.kind == "silicon").then(|| tokens.actor.id.clone()))
-        .ok_or("set HOOK_SILICON for a Carbon management session")?;
-    let client = base
-        .with_token(tokens.access_token.expose())
-        .with_organization(&org);
+    let tokens = sign_in.exchange_slt(&slt).await?;
+    let me = tokens
+        .account
+        .clone()
+        .ok_or("the token response names no account")?;
+    let target = std::env::var("HOOK_SILICON").unwrap_or_else(|_| me.uuid.clone());
+    let client = Client::new(
+        &std::env::var("HOOK_URL").unwrap_or_else(|_| silicon_hook_client::DEFAULT_URL.into()),
+    )?
+    .with_token(tokens.access_token.expose());
     let result = client.list_hooks(&target, false).await;
-    // This one-shot example does not retain a session. Long-lived hosts store
-    // both tokens securely and use explicit refresh instead.
-    client
-        .with_token(tokens.refresh_token.expose())
-        .logout(&Mutation::new())
-        .await?;
+    if let Some(refresh) = &tokens.refresh_token {
+        sign_in.revoke(refresh.expose()).await?;
+    }
     println!("{}", serde_json::to_string_pretty(&result?)?);
     Ok(())
 }

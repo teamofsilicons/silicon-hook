@@ -1,60 +1,25 @@
-use crate::{Client, Mutation, Result, models::*};
+//! A Silicon's provider webhooks and their request history.
+//!
+//! `silicon` is the Silicon's current `si:` id or its uuid. The caller must be
+//! the Silicon, its custodian, or an account the Silicon granted access to
+//! (`view` reads, `manage` also changes).
+
 use reqwest::Method;
 use uuid::Uuid;
 
+use crate::{
+    Client, Mutation, Result,
+    models::{
+        BlockedRequest, CreateHook, Event, HistoryPage, Hook, HookWithSecret, Items, Secret,
+        Signature, SigningSecret, UpdateHook,
+    },
+};
+
 impl Client {
-    /// Start separate IAM approval for Ting; never changes login consent.
-    pub async fn authorize_ting(&self, mutation: &Mutation) -> Result<serde_json::Value> {
-        self.call(
-            Method::POST,
-            &["delivery", "authorization"],
-            &[],
-            None::<&()>,
-            Some(mutation),
-        )
-        .await
-    }
-    /// Complete a request using the code shown by IAM. Tokens remain server-side.
-    pub async fn complete_ting_authorization(
-        &self,
-        id: Uuid,
-        code: &Secret,
-        mutation: &Mutation,
-    ) -> Result<serde_json::Value> {
-        self.call(
-            Method::POST,
-            &["delivery", "authorization", "complete"],
-            &[],
-            Some(&serde_json::json!({"authorization_id":id,"authorization_code":code.expose()})),
-            Some(mutation),
-        )
-        .await
-    }
-    /// Read locally stored endpoint status; receiving applications still verify every request.
-    pub async fn ting_authorization(&self) -> Result<serde_json::Value> {
-        self.call(
-            Method::GET,
-            &["delivery", "authorization"],
-            &[],
-            None::<&()>,
-            None,
-        )
-        .await
-    }
-    /// Disconnect locally stored Ting credentials. Global revocation remains in IAM.
-    pub async fn disconnect_ting_authorization(
-        &self,
-        mutation: &Mutation,
-    ) -> Result<serde_json::Value> {
-        self.call(
-            Method::POST,
-            &["delivery", "authorization", "disconnect"],
-            &[],
-            None::<&()>,
-            Some(mutation),
-        )
-        .await
-    }
+    /// The Silicon's hooks; `include_deleted` adds the ones still restorable.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals (`forbidden`, `not_found`…).
     pub async fn list_hooks(&self, silicon: &str, include_deleted: bool) -> Result<Items<Hook>> {
         self.call(
             Method::GET,
@@ -65,6 +30,11 @@ impl Client {
         )
         .await
     }
+
+    /// One hook.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn get_hook(&self, silicon: &str, id: Uuid) -> Result<Hook> {
         self.call(
             Method::GET,
@@ -75,6 +45,11 @@ impl Client {
         )
         .await
     }
+
+    /// Creates a hook. The response carries the generated signing secret once.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn create_hook(
         &self,
         silicon: &str,
@@ -90,6 +65,11 @@ impl Client {
         )
         .await
     }
+
+    /// Changes a hook's metadata, activation or signing policy.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn update_hook(
         &self,
         silicon: &str,
@@ -107,9 +87,12 @@ impl Client {
         .await
     }
 
-    /// Set or replace a BYOS secret, preserving all other signing settings.
-    /// Pass `secret_encoding` when the supplied text uses a different encoding.
-    /// The previous secret stops verifying immediately; the response omits secrets.
+    /// Sets or replaces a hook's secret (bring your own secret) and keeps every
+    /// other setting. Pass `secret_encoding` when the text is not UTF-8 key
+    /// material. The previous secret stops verifying at once.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn set_secret(
         &self,
         silicon: &str,
@@ -133,15 +116,24 @@ impl Client {
         )
         .await
     }
+
+    /// Soft-deletes a hook; it can be restored for 45 days.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn delete_hook(&self, silicon: &str, id: Uuid, mutation: &Mutation) -> Result<()> {
         self.empty(
             Method::DELETE,
             &["silicons", silicon, "hooks", &id.to_string()],
-            None,
             Some(mutation),
         )
         .await
     }
+
+    /// Restores a deleted hook with its URL and secret.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn restore_hook(&self, silicon: &str, id: Uuid, mutation: &Mutation) -> Result<Hook> {
         self.call(
             Method::POST,
@@ -152,6 +144,11 @@ impl Client {
         )
         .await
     }
+
+    /// Retires the hook's URL for good and issues a new one.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn rotate_endpoint(
         &self,
         silicon: &str,
@@ -174,6 +171,11 @@ impl Client {
         )
         .await
     }
+
+    /// Generates a new signing secret, shown once; the old one stops verifying.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn rotate_secret(
         &self,
         silicon: &str,
@@ -196,6 +198,11 @@ impl Client {
         )
         .await
     }
+
+    /// Pauses or resumes several hooks at once (all or nothing).
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn set_enabled(
         &self,
         silicon: &str,
@@ -207,21 +214,17 @@ impl Client {
             Method::PATCH,
             &["silicons", silicon, "hooks"],
             &[],
-            Some(&serde_json::json!({"hook_ids":ids,"enabled":enabled})),
+            Some(&serde_json::json!({"hook_ids": ids, "enabled": enabled})),
             Some(mutation),
         )
         .await
     }
-    pub async fn connect_iam_hook(&self, silicon: &str, mutation: &Mutation) -> Result<IamHook> {
-        self.call(
-            Method::POST,
-            &["silicons", silicon, "hooks", "iam"],
-            &[],
-            None::<&()>,
-            Some(mutation),
-        )
-        .await
-    }
+
+    /// Verified requests, newest first: one hook's, or the whole Silicon's when
+    /// `hook` is `None`. `limit` is 1 to 10,000; continue with `next_cursor`.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn events(
         &self,
         silicon: &str,
@@ -231,6 +234,11 @@ impl Client {
     ) -> Result<HistoryPage<Event>> {
         self.history(silicon, hook, "events", limit, cursor).await
     }
+
+    /// Withheld requests (kept 14 days), filtered like [`Client::events`].
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
     pub async fn blocked_requests(
         &self,
         silicon: &str,
@@ -241,6 +249,7 @@ impl Client {
         self.history(silicon, hook, "blocked-requests", limit, cursor)
             .await
     }
+
     async fn history<T: serde::de::DeserializeOwned>(
         &self,
         silicon: &str,

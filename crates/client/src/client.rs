@@ -5,38 +5,18 @@ use serde::{Serialize, de::DeserializeOwned};
 use tokio::sync::OnceCell;
 use uuid::Uuid;
 
-use crate::models::{Secret, Tokens};
+use crate::{
+    error::{ApiError, Error, Result},
+    models::{DeliveryStatus, LoginStatus, Secret, SignInInformation},
+};
 
-/// A client failure with a stable server error code when available.
-#[derive(Debug, thiserror::Error)]
-pub enum Error {
-    /// A local argument cannot be represented safely on the wire.
-    #[error("{0}")]
-    Invalid(String),
-    /// The transport failed. Credentials are never formatted into request URLs.
-    #[error("Hook could not be reached: {0}")]
-    Transport(#[from] reqwest::Error),
-    /// Hook's structured error response.
-    #[error("{code}: {message} (HTTP {status})")]
-    Api {
-        status: u16,
-        code: String,
-        message: String,
-        request_id: Option<String>,
-        retry_after: Option<u64>,
-    },
-    /// Unexpected response or a service-version mismatch.
-    #[error("Hook returned an incompatible response: {0}")]
-    Protocol(String),
-    /// JSON serialization or decoding failure.
-    #[error("invalid JSON: {0}")]
-    Json(#[from] serde_json::Error),
-}
+/// Production Hook API.
+pub const DEFAULT_URL: &str = "https://backend.hook.teamofsilicons.com";
+/// The API major this client speaks.
+pub const API_VERSION: &str = "v3";
 
-/// Result returned by all client operations.
-pub type Result<T> = std::result::Result<T, Error>;
-
-/// Stable identifier for one logical mutation. Reuse it when retrying.
+/// Stable identifier for one logical mutation. Reuse it when retrying the same
+/// change after an uncertain outcome; Hook then answers with the first result.
 #[derive(Clone, Debug)]
 pub struct Mutation(String);
 
@@ -45,33 +25,44 @@ impl Default for Mutation {
         Self::new()
     }
 }
+
 impl Mutation {
+    /// A fresh key.
+    #[must_use]
     pub fn new() -> Self {
         Self(Uuid::now_v7().to_string())
     }
+
+    /// A caller-chosen key: 8 to 255 visible ASCII characters.
+    ///
+    /// # Errors
+    /// [`Error::Invalid`] for any other key.
     pub fn with_key(key: impl Into<String>) -> Result<Self> {
         let key = key.into();
         if !(8..=255).contains(&key.len()) || !key.bytes().all(|b| b.is_ascii_graphic()) {
             return Err(Error::Invalid(
-                "idempotency keys require 8–255 visible ASCII characters".into(),
+                "an idempotency key must be 8 to 255 visible ASCII characters".into(),
             ));
         }
         Ok(Self(key))
     }
+
+    /// The key.
+    #[must_use]
     pub fn key(&self) -> &str {
         &self.0
     }
 }
 
-/// Immutable service, actor and environment selection. No credentials are persisted.
+/// A Hook API v3 client. Immutable and cheap to clone: `with_*` methods return a
+/// new configuration. It stores no credentials anywhere; the host keeps the
+/// Silicon Accounts tokens (see [`crate::signin`]) and passes the current
+/// access token with [`Client::with_token`].
 #[derive(Clone)]
 pub struct Client {
     pub(crate) base_url: Url,
     pub(crate) http: reqwest::Client,
     pub(crate) token: Option<Secret>,
-    pub(crate) org: Option<String>,
-    pub(crate) test_key: Option<Secret>,
-    pub(crate) test_app_secret: Option<Secret>,
     negotiated: Arc<OnceCell<()>>,
     pub(crate) telemetry: bool,
     pub(crate) trace_id: Uuid,
@@ -80,20 +71,28 @@ pub struct Client {
 impl fmt::Debug for Client {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Client")
-            .field("url", &self.base_url)
-            .field("org", &self.org)
-            .field("testing", &self.is_testing())
+            .field("url", &self.base_url.as_str())
+            .field("signed_in", &self.token.is_some())
             .finish_non_exhaustive()
     }
 }
 
 impl Client {
-    /// Builds a client for HTTPS, or HTTP on a literal loopback/localhost host.
+    /// A client for a pathless HTTPS origin, or plain HTTP on this machine
+    /// (`localhost`, `*.localhost` or a loopback address).
+    ///
+    /// # Errors
+    /// [`Error::Invalid`] for any other URL.
     pub fn new(base_url: &str) -> Result<Self> {
-        let base_url = Url::parse(base_url).map_err(|e| Error::Invalid(e.to_string()))?;
+        let base_url = Url::parse(base_url.trim()).map_err(|error| {
+            Error::Invalid(format!(
+                "`{base_url}` is not a valid Hook URL ({error}); use an origin such as {DEFAULT_URL}"
+            ))
+        })?;
         validate_origin(&base_url)?;
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(30))
+            .connect_timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
             .user_agent(concat!("silicon-hook-client/", env!("CARGO_PKG_VERSION")))
             .build()?;
@@ -101,30 +100,60 @@ impl Client {
             base_url,
             http,
             token: None,
-            org: None,
-            test_key: None,
-            test_app_secret: None,
             negotiated: Arc::default(),
             telemetry: true,
             trace_id: Uuid::now_v7(),
         })
     }
-    /// Controls optional diagnostic events and backend collection for this client.
-    /// `SILICON_HOOK_TELEMETRY=off` always overrides this preference.
+
+    /// The production Hook API.
+    ///
+    /// # Errors
+    /// Only if the HTTP stack cannot be built.
+    pub fn production() -> Result<Self> {
+        Self::new(DEFAULT_URL)
+    }
+
+    /// Sends every request with `Authorization: Bearer <access token>`, a
+    /// Silicon Accounts access token issued to Hook (`aud` = `hook`).
+    #[must_use]
+    pub fn with_token(&self, access_token: impl Into<String>) -> Self {
+        let mut client = self.clone();
+        client.token = Some(Secret::new(access_token));
+        client
+    }
+
+    /// Controls optional diagnostics (default on). `SILICON_HOOK_TELEMETRY=off`
+    /// always wins.
+    #[must_use]
     pub fn with_telemetry(&self, enabled: bool) -> Self {
         let mut client = self.clone();
         client.telemetry = enabled;
         client
     }
+
+    /// The Hook origin.
+    #[must_use]
+    pub fn base_url(&self) -> &Url {
+        &self.base_url
+    }
+
+    /// Whether a token is configured.
+    #[must_use]
+    pub fn is_signed_in(&self) -> bool {
+        self.token.is_some()
+    }
+
     pub(crate) fn telemetry_enabled(&self) -> bool {
         self.telemetry
             && std::env::var("SILICON_HOOK_TELEMETRY").map_or(true, |v| {
                 !matches!(v.to_ascii_lowercase().as_str(), "off" | "false" | "0")
             })
     }
-    /// Sends one best-effort diagnostic event for an authenticated client.
-    /// Context is restricted to documented source/step/outcome/operation names;
-    /// never pass user input. No credentials or payloads are included in the event.
+
+    /// Sends one best-effort diagnostic event (no payloads, no credentials,
+    /// never user input). Only documented names are accepted by Hook; nothing
+    /// is sent without a token or with telemetry off. Waits at most 500 ms.
     pub async fn emit_telemetry(
         &self,
         source: &str,
@@ -137,185 +166,130 @@ impl Client {
         if !self.telemetry_enabled() || self.token.is_none() {
             return;
         }
-        let event = serde_json::json!({"event_id":Uuid::now_v7(),"trace_id":self.trace_id,"source":source,"step":step,"outcome":outcome,"operation":operation,"duration_ms":duration_ms,"progress":progress,"version":env!("CARGO_PKG_VERSION"),"os":std::env::consts::OS,"arch":std::env::consts::ARCH});
-        if let Ok(request) = self.request(
-            reqwest::Method::POST,
-            &["telemetry"],
-            &[],
-            Some(&event),
-            None,
-        ) {
+        let event = serde_json::json!({
+            "event_id": Uuid::now_v7(), "trace_id": self.trace_id, "source": source,
+            "step": step, "outcome": outcome, "operation": operation,
+            "duration_ms": duration_ms, "progress": progress,
+            "version": env!("CARGO_PKG_VERSION"),
+            "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
+        });
+        if let Ok(request) = self.request(Method::POST, &["telemetry"], &[], Some(&event), None) {
             let _ = request.timeout(Duration::from_millis(500)).send().await;
         }
     }
-    /// Compatibility no-op. Dependencies never update themselves at runtime.
-    pub fn with_auto_update(&self, _enabled: bool) -> Self {
-        self.clone()
-    }
-    pub fn with_token(&self, token: impl Into<String>) -> Self {
-        let mut client = self.clone();
-        client.token = Some(Secret::new(token));
-        client
-    }
-    pub fn with_organization(&self, org: impl Into<String>) -> Self {
-        let mut client = self.clone();
-        client.org = Some(org.into());
-        client
-    }
-    pub fn with_test_key(&self, key: impl Into<String>) -> Result<Self> {
-        let key = key.into();
-        if key.len() != 32 || !key.bytes().all(|b| b.is_ascii_alphanumeric()) {
-            return Err(Error::Invalid("test keys require exactly 32 alphanumeric characters; use the key, not the environment ID".into()));
-        }
-        let mut client = self.clone();
-        client.test_key = Some(Secret::new(key));
-        client.test_app_secret = None;
-        Ok(client)
-    }
-    /// Select an IAM application sandbox. Validation happens online on every API call.
-    /// This does not log in an actor or grant environment administration.
-    pub fn with_test_app_secret(&self, secret: impl Into<String>) -> Result<Self> {
-        let secret = secret.into();
-        if secret.len() != 47
-            || !secret.starts_with("ask_")
-            || !secret[4..]
-                .bytes()
-                .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-        {
-            return Err(Error::Invalid(
-                "invalid IAM test app_secret; expected ask_ followed by 43 URL-safe characters"
-                    .into(),
-            ));
-        }
-        let mut client = self.clone();
-        client.test_key = None;
-        client.test_app_secret = Some(Secret::new(secret));
-        client.token = None;
-        client.org = None;
-        Ok(client)
-    }
-    pub fn without_test_environment(&self) -> Self {
-        let mut client = self.clone();
-        client.test_key = None;
-        client.test_app_secret = None;
-        client.token = None;
-        client.org = None;
-        client
-    }
-    pub fn base_url(&self) -> &Url {
-        &self.base_url
-    }
-    pub fn is_testing(&self) -> bool {
-        self.test_key.is_some() || self.test_app_secret.is_some()
-    }
 
-    /// Verifies that the server is Silicon Hook and agrees on API v2.
+    /// Checks that the server is Silicon Hook and serves API v3. Runs once per
+    /// client before the first API call.
+    ///
+    /// # Errors
+    /// [`Error::Protocol`] when the server is not Hook API v3.
     pub async fn negotiate(&self) -> Result<()> {
         self.negotiated
             .get_or_try_init(|| async {
                 let response = self
                     .http
                     .get(self.url(&["api", "version"])?)
-                    .header("silicon-hook-supported-api-versions", "v2")
-                    .header(
-                        "x-hook-telemetry",
-                        if self.telemetry_enabled() {
-                            "on"
-                        } else {
-                            "off"
-                        },
-                    )
+                    .header("silicon-hook-supported-api-versions", API_VERSION)
+                    .header("x-hook-telemetry", self.telemetry_header())
                     .send()
                     .await?;
                 let data: serde_json::Value = self.decode(response).await?;
                 if data.get("service").and_then(|v| v.as_str()) != Some("silicon-hook")
-                    || data.get("selected_api_version").and_then(|v| v.as_str()) != Some("v2")
+                    || data.get("selected_api_version").and_then(|v| v.as_str())
+                        != Some(API_VERSION)
                 {
-                    return Err(Error::Protocol(
-                        "server must identify silicon-hook API v2".into(),
-                    ));
+                    return Err(Error::Protocol(format!(
+                        "{} is not Silicon Hook API {API_VERSION}; it answered {data}",
+                        self.base_url
+                    )));
                 }
                 Ok(())
             })
-            .await
-            .map(|_| ())
-    }
-
-    /// Exchanges an IAM short-lived token. The host owns the returned tokens
-    /// and explicitly refreshes them; login starts no listener or delivery work.
-    pub async fn login(&self, slt: &str, mutation: &Mutation) -> Result<Tokens> {
-        self.authenticate(slt, mutation).await
-    }
-
-    /// Exchanges an SLT without persisting credentials or configuring delivery.
-    pub async fn authenticate(&self, slt: &str, mutation: &Mutation) -> Result<Tokens> {
-        let tokens: Tokens = self
-            .call(
-                Method::POST,
-                &["auth", "login"],
-                &[],
-                Some(&serde_json::json!({"slt":slt})),
-                Some(mutation),
-            )
             .await?;
-        tokens.validate_context(self.org.as_deref())?;
-        Ok(tokens)
+        Ok(())
     }
-    /// Discover the selected production/test application's public IAM configuration.
-    pub async fn iam(&self) -> Result<crate::models::IamInformation> {
-        self.call(Method::GET, &["auth", "iam"], &[], None::<&()>, None)
+
+    /// How to sign in to this Hook. Public; needs no token.
+    ///
+    /// # Errors
+    /// Transport and protocol errors.
+    pub async fn sign_in_information(&self) -> Result<SignInInformation> {
+        self.call(Method::GET, &["auth", "accounts"], &[], None::<&()>, None)
             .await
     }
 
-    /// Check the bearer online. Invalid/revoked credentials produce authenticated=false;
-    /// transport, configuration and authorization errors remain errors.
-    pub async fn login_status(&self) -> Result<crate::models::LoginStatus> {
+    /// Whether Hook accepts the configured token, and whose it is. No token,
+    /// or a token Hook refuses (HTTP 401), gives `authenticated: false` with
+    /// Hook's reason; outages and other errors stay errors.
+    ///
+    /// # Errors
+    /// Transport, protocol and non-401 refusals.
+    pub async fn login_status(&self) -> Result<LoginStatus> {
         if self.token.is_none() {
-            return Ok(crate::models::LoginStatus {
+            return Ok(LoginStatus {
                 authenticated: false,
-                actor: None,
-                org_id: None,
+                uuid: None,
+                id: None,
+                kind: None,
+                reason: Some("no_token".into()),
+                message: None,
             });
         }
         match self
-            .call(Method::GET, &["auth", "status"], &[], None::<&()>, None)
+            .call::<LoginStatus, ()>(Method::GET, &["auth", "status"], &[], None, None)
             .await
         {
-            Err(Error::Api { status: 401, .. }) => Ok(crate::models::LoginStatus {
+            Err(Error::Api(api)) if api.status == 401 => Ok(LoginStatus {
                 authenticated: false,
-                actor: None,
-                org_id: None,
+                uuid: None,
+                id: None,
+                kind: None,
+                reason: Some(api.code),
+                message: Some(api.message),
             }),
             result => result,
         }
     }
 
-    /// Rotates a token pair when explicitly requested by the host. Reuse the
-    /// mutation on uncertain retries and replace both stored tokens atomically.
-    pub async fn refresh(&self, refresh_token: &str, mutation: &Mutation) -> Result<Tokens> {
-        let tokens: Tokens = self
-            .call(
-                Method::POST,
-                &["auth", "refresh"],
-                &[],
-                Some(&serde_json::json!({"refresh_token":refresh_token})),
-                Some(mutation),
-            )
-            .await?;
-        tokens.validate_context(self.org.as_deref())?;
-        Ok(tokens)
-    }
-    pub async fn logout(&self, mutation: &Mutation) -> Result<()> {
-        self.empty(Method::POST, &["auth", "logout"], None, Some(mutation))
+    /// Whether this Hook delivers events through Ting.
+    ///
+    /// # Errors
+    /// Transport, protocol and refusals.
+    pub async fn delivery_status(&self) -> Result<DeliveryStatus> {
+        self.call(Method::GET, &["delivery"], &[], None::<&()>, None)
             .await
     }
+
+    /// The running service version.
+    ///
+    /// # Errors
+    /// Transport and protocol errors.
     pub async fn version(&self) -> Result<serde_json::Value> {
         self.call(Method::GET, &["version"], &[], None::<&()>, None)
             .await
     }
+
+    /// Readiness (`/readyz`), including whether delivery is on.
+    ///
+    /// # Errors
+    /// Transport errors and a not-ready answer.
     pub async fn health(&self) -> Result<serde_json::Value> {
         self.decode(self.http.get(self.url(&["readyz"])?).send().await?)
             .await
+    }
+
+    /// The API contract catalogue (`/api/contracts`).
+    ///
+    /// # Errors
+    /// Transport and protocol errors.
+    pub async fn contracts(&self) -> Result<serde_json::Value> {
+        self.decode(
+            self.http
+                .get(self.url(&["api", "contracts"])?)
+                .send()
+                .await?,
+        )
+        .await
     }
 
     pub(crate) async fn call<T: DeserializeOwned, B: Serialize + ?Sized>(
@@ -333,23 +307,32 @@ impl Client {
             .await?;
         self.decode(response).await
     }
+
     pub(crate) async fn empty(
         &self,
         method: Method,
         path: &[&str],
-        body: Option<&serde_json::Value>,
         mutation: Option<&Mutation>,
     ) -> Result<()> {
         self.negotiate().await?;
         let response = self
-            .request(method, path, &[], body, mutation)?
+            .request::<()>(method, path, &[], None, mutation)?
             .send()
             .await?;
         if !response.status().is_success() {
-            return Err(self.failure(response).await?);
+            return Err(failure(response).await?);
         }
         Ok(())
     }
+
+    fn telemetry_header(&self) -> &'static str {
+        if self.telemetry_enabled() {
+            "on"
+        } else {
+            "off"
+        }
+    }
+
     fn request<B: Serialize + ?Sized>(
         &self,
         method: Method,
@@ -358,33 +341,17 @@ impl Client {
         body: Option<&B>,
         mutation: Option<&Mutation>,
     ) -> Result<reqwest::RequestBuilder> {
-        let mut segments = vec!["api", "v2"];
+        let mut segments = vec!["api", API_VERSION];
         segments.extend_from_slice(path);
         let mut request = self
             .http
             .request(method, self.url(&segments)?)
             .query(query)
-            .header("silicon-hook-api-version", "v2")
+            .header("silicon-hook-api-version", API_VERSION)
             .header("x-request-id", self.trace_id.to_string())
-            .header(
-                "x-hook-telemetry",
-                if self.telemetry_enabled() {
-                    "on"
-                } else {
-                    "off"
-                },
-            );
+            .header("x-hook-telemetry", self.telemetry_header());
         if let Some(token) = &self.token {
             request = request.bearer_auth(token.expose());
-        }
-        if let Some(org) = &self.org {
-            request = request.header("x-org-id", org);
-        }
-        if let Some(key) = &self.test_key {
-            request = request.header("x-hook-test-key", key.expose());
-        }
-        if let Some(secret) = &self.test_app_secret {
-            request = request.header("x-hook-test-app-secret", secret.expose());
         }
         if let Some(mutation) = mutation {
             request = request.header("idempotency-key", mutation.key());
@@ -394,62 +361,73 @@ impl Client {
         }
         Ok(request)
     }
+
     pub(crate) fn url(&self, segments: &[&str]) -> Result<Url> {
         let mut url = self.base_url.clone();
         {
             let mut path = url
                 .path_segments_mut()
-                .map_err(|_| Error::Invalid("invalid base URL".into()))?;
+                .map_err(|()| Error::Invalid("the Hook URL cannot carry a path".into()))?;
             path.clear();
             for segment in segments {
                 if segment.is_empty()
                     || matches!(*segment, "." | "..")
-                    || segment.contains(['/', '\\'])
+                    || segment.contains(['/', '\\', '?', '#'])
                 {
-                    return Err(Error::Invalid("invalid URL path identifier".into()));
+                    return Err(Error::Invalid(format!(
+                        "`{segment}` is not a valid identifier in a Hook URL"
+                    )));
                 }
                 path.push(segment);
             }
         }
         Ok(url)
     }
-    async fn decode<T: DeserializeOwned>(&self, response: reqwest::Response) -> Result<T> {
+
+    pub(crate) async fn decode<T: DeserializeOwned>(
+        &self,
+        response: reqwest::Response,
+    ) -> Result<T> {
         if !response.status().is_success() {
-            return Err(self.failure(response).await?);
+            return Err(failure(response).await?);
         }
         let bytes = bounded_body(response).await?;
         Ok(serde_json::from_slice(&bytes)?)
     }
-    async fn failure(&self, response: reqwest::Response) -> Result<Error> {
-        let status = response.status().as_u16();
-        let retry_after = response
-            .headers()
-            .get("retry-after")
-            .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.parse().ok());
-        let bytes = bounded_body(response).await?;
-        let value: serde_json::Value = serde_json::from_slice(&bytes)
-            .map_err(|_| Error::Protocol(format!("HTTP {status} without a Hook error envelope")))?;
-        let error = &value["error"];
-        Ok(Error::Api {
-            status,
-            code: error["code"].as_str().unwrap_or("unknown_error").into(),
-            message: error["message"].as_str().unwrap_or("Request failed").into(),
-            request_id: error["request_id"].as_str().map(str::to_owned),
-            retry_after,
-        })
-    }
+}
+
+async fn failure(response: reqwest::Response) -> Result<Error> {
+    let status = response.status().as_u16();
+    let retry_after = response
+        .headers()
+        .get("retry-after")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse().ok());
+    let header_request_id = response
+        .headers()
+        .get("x-request-id")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned);
+    let bytes = bounded_body(response).await?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes).map_err(|_| {
+        Error::Protocol(format!(
+            "HTTP {status} without Hook's error envelope; is this URL a Hook API?"
+        ))
+    })?;
+    let error = &value["error"];
+    let text = |name: &str| error[name].as_str().map(str::to_owned);
+    Ok(Error::Api(Box::new(ApiError {
+        status,
+        code: text("code").unwrap_or_else(|| "unknown_error".into()),
+        message: text("message").unwrap_or_else(|| "Hook refused the request.".into()),
+        details: text("details"),
+        hint: text("hint"),
+        request_id: text("request_id").or(header_request_id),
+        retry_after,
+    })))
 }
 
 pub(crate) fn validate_origin(url: &Url) -> Result<()> {
-    let loopback = url.host_str().is_some_and(|host| {
-        host == "localhost"
-            || host.ends_with(".localhost")
-            || host
-                .trim_matches(['[', ']'])
-                .parse::<std::net::IpAddr>()
-                .is_ok_and(|ip| ip.is_loopback())
-    });
     if !url.username().is_empty()
         || url.password().is_some()
         || url.query().is_some()
@@ -457,26 +435,37 @@ pub(crate) fn validate_origin(url: &Url) -> Result<()> {
         || url.host_str().is_none()
         || url.port() == Some(0)
         || !matches!(url.path(), "" | "/")
-        || !(url.scheme() == "https" || url.scheme() == "http" && loopback)
+        || !(url.scheme() == "https" || url.scheme() == "http" && is_loopback(url))
     {
-        return Err(Error::Invalid(
-            "expected a pathless HTTPS service URL (HTTP is allowed only on loopback)".into(),
-        ));
+        return Err(Error::Invalid(format!(
+            "`{url}` is not usable: give a pathless HTTPS origin (plain HTTP only for this machine: localhost or a loopback address)"
+        )));
     }
     Ok(())
+}
+
+pub(crate) fn is_loopback(url: &Url) -> bool {
+    url.host_str().is_some_and(|host| {
+        host == "localhost"
+            || host.ends_with(".localhost")
+            || host
+                .trim_matches(['[', ']'])
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|ip| ip.is_loopback())
+    })
 }
 
 pub(crate) async fn bounded_body(
     mut response: reqwest::Response,
 ) -> Result<zeroize::Zeroizing<Vec<u8>>> {
-    // History pages may contain large bodies; callers should page rather than
-    // materialize 10,000 maximum-size requests at once.
+    // A history page may hold large bodies; page rather than reading 10,000
+    // maximum-size requests at once.
     const MAX: usize = 64 * 1024 * 1024;
     let mut bytes = zeroize::Zeroizing::new(Vec::new());
     while let Some(chunk) = response.chunk().await? {
         if chunk.len() > MAX.saturating_sub(bytes.len()) {
             return Err(Error::Protocol(
-                "response exceeds 64 MiB; request a smaller history page".into(),
+                "the response exceeds 64 MiB; request a smaller history page".into(),
             ));
         }
         bytes.extend_from_slice(&chunk);

@@ -1,4 +1,4 @@
-//! Public project discovery and explicit bug reporting, independent of IAM sessions.
+//! Project links and explicit bug reports. Neither needs a sign-in.
 
 use std::{
     io::Write as _,
@@ -15,7 +15,7 @@ pub const PACKAGE: &str = "https://crates.io/crates/silicon-hook-client";
 /// Submit a user-authored report through an already authenticated GitHub CLI.
 ///
 /// Only the supplied message, optional PR and compiled package version are sent.
-/// No Hook credentials, local logs, environment or ISI are collected. This is an
+/// No Hook credentials, local logs or environment are collected. This is an
 /// explicit side effect: call only when the user asks to submit a report.
 ///
 /// # Errors

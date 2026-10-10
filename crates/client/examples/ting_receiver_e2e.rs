@@ -1,8 +1,10 @@
-//! Controlled integration-test host for the stateless Hook SDK.
+//! A test host for receiving Hook events through Ting with the stateless SDK.
 //!
-//! Run with one private configuration-file path. The host, rather than the SDK,
-//! owns the HTTP listener, durable event acceptance, deduplication, and HTTP204.
-//! This is a fixture driver, not a general-purpose application server.
+//! Run with one private configuration-file path (JSON: hook_url, hook_token,
+//! app_id, recipient_uuid, recipient_id?, webhook_id, callback_secret,
+//! listen_addr, output, ack_gate?). The host, not the SDK, owns the HTTP
+//! listener, durable acceptance, deduplication by event id, and the HTTP 204.
+//! It is a fixture driver, not a general-purpose application server.
 
 use std::{
     fs::{self, File, OpenOptions},
@@ -35,9 +37,9 @@ struct Config {
     hook_url: String,
     hook_token: String,
     app_id: String,
-    org_id: String,
-    recipient_id: String,
-    environment_id: Uuid,
+    recipient_uuid: String,
+    #[serde(default)]
+    recipient_id: Option<String>,
     webhook_id: String,
     callback_secret: String,
     listen_addr: SocketAddr,
@@ -119,10 +121,9 @@ fn record_unavailable(output: &Path, received: &UnavailableEvent) -> Result<bool
         // The payload can expire after an earlier durable acceptance whose
         // HTTP204 was lost. That retry is still already accepted work.
         if saved["key"] != incoming["key"]
+            || saved["event"]["silicon"]["uuid"] != incoming["reference"]["silicon"]["uuid"]
             || [
                 "id",
-                "org_id",
-                "silicon_id",
                 "hook_id",
                 "delivery_sequence",
                 "received_at",
@@ -266,14 +267,12 @@ async fn run() -> Result<(), ()> {
     let client = Client::new(&config.hook_url)
         .map_err(|_| ())?
         .with_telemetry(false)
-        .with_token(config.hook_token)
-        .with_organization(&config.org_id);
+        .with_token(config.hook_token);
     let receiver = Receiver::new(
         DeliveryContext {
             app_id: config.app_id,
-            org_id: config.org_id,
+            recipient_uuid: config.recipient_uuid,
             recipient_id: config.recipient_id,
-            environment_id: config.environment_id,
         },
         &config.webhook_id,
         Secret::new(config.callback_secret),

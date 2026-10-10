@@ -13,7 +13,7 @@ use std::sync::Arc;
 use tokio::sync::Mutex;
 
 #[tokio::test]
-async fn byos_creation_and_replacement_keep_test_routing_and_policy_fields()
+async fn bring_your_own_secret_on_creation_and_replacement_sends_only_the_secret_fields()
 -> Result<(), Box<dyn std::error::Error>> {
     let calls = Arc::new(Mutex::new(Vec::<Value>::new()));
     async fn record(
@@ -21,15 +21,12 @@ async fn byos_creation_and_replacement_keep_test_routing_and_policy_fields()
         headers: HeaderMap,
         Json(body): Json<Value>,
     ) -> (StatusCode, Json<Value>) {
-        assert_eq!(
-            headers["x-hook-test-key"],
-            "ABCDEFGHIJKLMNOPQRSTUVWX12345678"
-        );
-        assert_eq!(headers["x-org-id"], "tos");
         assert_eq!(headers["authorization"], "Bearer test-token");
-        assert_eq!(headers["silicon-hook-api-version"], "v2");
+        assert_eq!(headers["silicon-hook-api-version"], "v3");
+        assert!(headers.contains_key("idempotency-key"));
+        assert!(!headers.contains_key("x-org-id"));
         calls.lock().await.push(body);
-        // An intentional API error avoids coupling this request contract test to hook response fields.
+        // An intentional refusal keeps this test about the request only.
         (
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({"error":{"code":"fixture","message":"recorded"}})),
@@ -38,17 +35,15 @@ async fn byos_creation_and_replacement_keep_test_routing_and_policy_fields()
     let app = Router::new()
         .route(
             "/api/version",
-            get(|| async { Json(json!({"service":"silicon-hook", "selected_api_version":"v2"})) }),
+            get(|| async { Json(json!({"service":"silicon-hook", "selected_api_version":"v3"})) }),
         )
-        .route("/api/v2/silicons/si:cos/hooks", post(record))
-        .route("/api/v2/silicons/si:cos/hooks/{id}", patch(record))
+        .route("/api/v3/silicons/si:cos/hooks", post(record))
+        .route("/api/v3/silicons/si:cos/hooks/{id}", patch(record))
         .with_state(calls.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let client = Client::new(&format!("http://{}", listener.local_addr()?))?
-        .with_auto_update(false)
-        .with_organization("tos")
-        .with_token("test-token")
-        .with_test_key("ABCDEFGHIJKLMNOPQRSTUVWX12345678")?;
+        .with_telemetry(false)
+        .with_token("test-token");
     let server = tokio::spawn(async move { axum::serve(listener, app).await });
     let creation = CreateHook {
         name: "Provider".into(),
@@ -59,12 +54,12 @@ async fn byos_creation_and_replacement_keep_test_routing_and_policy_fields()
         ..CreateHook::default()
     };
     assert!(!format!("{creation:?}").contains("first secret"));
-    assert!(
-        client
-            .create_hook("si:cos", &creation, &Mutation::default())
-            .await
-            .is_err()
-    );
+    let refused = client
+        .create_hook("si:cos", &creation, &Mutation::default())
+        .await
+        .expect_err("the fixture refuses");
+    assert_eq!(refused.code(), Some("fixture"));
+    assert_eq!(refused.status(), Some(422));
     assert!(
         client
             .set_secret(
