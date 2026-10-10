@@ -272,6 +272,8 @@ async fn sign_outs_end_sessions_except_the_ones_hook_revoked_itself() -> Result<
         "Hook ended one sign-in itself; others continue"
     );
 
+    // Silicon Accounts revokes every token of the account, then tells Hook.
+    api.accounts.deactivate(&bob);
     let everywhere = event(
         "evt_s2",
         "membership.signed_out",
@@ -295,6 +297,7 @@ async fn sign_outs_end_sessions_except_the_ones_hook_revoked_itself() -> Result<
     );
 
     let alice = api.accounts.token("CAlice1", "carbon", "c:alice");
+    api.accounts.deactivate(&alice);
     let removed = event(
         "evt_s3",
         "membership.access_removed",
@@ -302,6 +305,71 @@ async fn sign_outs_end_sessions_except_the_ones_hook_revoked_itself() -> Result<
     );
     assert_eq!(api.webhook(&removed).await?.0, StatusCode::NO_CONTENT);
     assert_eq!(status_of(&api, &alice).await?.0, StatusCode::UNAUTHORIZED);
+    Ok(())
+}
+
+/// `iat` counts whole seconds while a sign-out keeps milliseconds: a Silicon
+/// that signs in again right after its STK was rotated holds a token from the
+/// sign-out's own second, which only Silicon Accounts can place.
+#[tokio::test]
+async fn a_token_from_the_sign_out_second_is_settled_by_silicon_accounts() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    setup(&api);
+    let second = accounts::now();
+    let signed_out_at =
+        time::OffsetDateTime::from_unix_timestamp(second)? + time::Duration::milliseconds(500);
+    let stamp = signed_out_at.format(&time::format_description::well_known::Rfc3339)?;
+    let sign_out = json!({
+        "event_id": "evt_same_second", "type": "membership.signed_out", "occurred_at": stamp,
+        "data": {"uuid": "CBob2", "reason": "stk_rotated"},
+    });
+    assert_eq!(api.webhook(&sign_out).await?.0, StatusCode::NO_CONTENT);
+    let token = |iat: i64, lifetime: i64| {
+        api.accounts.sign(
+            &json!({"iss": api.accounts.url, "sub": "CBob2", "aud": "hook",
+            "exp": iat + lifetime, "iat": iat, "kind": "carbon", "id": "c:bob"}),
+        )
+    };
+
+    let asked = api.accounts.introspections();
+    let older = token(second - 1, 600);
+    assert_eq!(status_of(&api, &older).await?.0, StatusCode::UNAUTHORIZED);
+    let newer = token(second + 1, 600);
+    assert_eq!(status_of(&api, &newer).await?.0, StatusCode::OK);
+    assert_eq!(
+        api.accounts.introspections(),
+        asked,
+        "other seconds are settled locally"
+    );
+
+    let after_it = token(second, 601);
+    assert_eq!(
+        status_of(&api, &after_it).await?.0,
+        StatusCode::OK,
+        "issued after the sign-out"
+    );
+    assert_eq!(status_of(&api, &after_it).await?.0, StatusCode::OK);
+    assert_eq!(
+        api.accounts.introspections(),
+        asked + 1,
+        "asked once, then remembered"
+    );
+
+    let before_it = token(second, 602);
+    api.accounts.deactivate(&before_it);
+    let (status, refused) = status_of(&api, &before_it).await?;
+    assert_eq!(
+        (status, refused["error"]["code"].clone()),
+        (StatusCode::UNAUTHORIZED, json!("session_ended")),
+        "issued before the sign-out in the same second"
+    );
+    let message = refused["error"]["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains(&stamp),
+        "the time reads as RFC 3339: {message}"
+    );
     Ok(())
 }
 

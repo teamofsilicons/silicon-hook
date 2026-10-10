@@ -464,7 +464,9 @@ too), `account.updated`, `silicon.custodian_changed` (access moves to the new
 custodian), `membership.signed_out` (except `app_revoked`, tokens issued before
 it are refused), `membership.access_removed` and `account.deleted` (the account's
 tokens stop working; a deleted Silicon's hooks are deleted). Other types are
-acknowledged with `204`.
+acknowledged with `204`. A token's issue time has whole seconds, so a token from
+the very second of a sign-out (a Silicon signing in again right after its STK
+was rotated) is accepted only if Silicon Accounts confirms it is still active.
 
 ## Complete flows
 

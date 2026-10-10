@@ -45,6 +45,7 @@ pub struct StubAccount {
 struct StubState {
     accounts: HashMap<String, StubAccount>,
     inactive_tokens: HashSet<String>,
+    introspections: usize,
     lookups: usize,
     proofs: Vec<Value>,
     keys: Vec<(String, [u8; 32])>,
@@ -165,6 +166,12 @@ impl StubAccounts {
         self.with_state(|state| {
             state.inactive_tokens.insert(token.to_owned());
         });
+    }
+
+    /// Introspection requests served so far.
+    #[must_use]
+    pub fn introspections(&self) -> usize {
+        self.with_state(|state| state.introspections)
     }
 
     /// Account lookups served so far.
@@ -339,9 +346,10 @@ async fn introspect(
         );
     }
     let token = form.get("token").cloned().unwrap_or_default();
-    let inactive = state
-        .lock()
-        .map_or(true, |state| state.inactive_tokens.contains(&token));
+    let inactive = state.lock().map_or(true, |mut state| {
+        state.introspections += 1;
+        state.inactive_tokens.contains(&token)
+    });
     let claims = token
         .split('.')
         .nth(1)

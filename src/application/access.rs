@@ -4,7 +4,7 @@
 use std::time::Duration;
 
 use silicon_accounts_client::{AccountKind, AccountSummary};
-use time::OffsetDateTime;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
 use super::{ApplicationError, HookApplication, service::map_store_error};
 use crate::{
@@ -157,13 +157,18 @@ impl HookApplication {
             ));
         }
         if let Some(revoked_before) = record.revoked_before
-            && issued_at < revoked_before
+            && self
+                .ended_by_sign_out(token, issued_at, revoked_before)
+                .await?
         {
+            let at = revoked_before
+                .format(&Rfc3339)
+                .unwrap_or_else(|_| revoked_before.to_string());
             return Err(refused(
                 401,
                 "session_ended",
                 format!(
-                    "This sign-in ended at {revoked_before} (signed out or Hook's access removed in Silicon Accounts). Sign in again: hook login (Carbons) or hook login --slt with a token from silicon-accounts login --app hook -q (Silicons)."
+                    "This sign-in ended at {at} (signed out or Hook's access removed in Silicon Accounts). Sign in again: hook login (Carbons) or hook login --slt with a token from silicon-accounts login --app hook -q (Silicons)."
                 ),
             ));
         }
@@ -182,6 +187,32 @@ impl HookApplication {
             claims.scopes().into_iter().map(ToOwned::to_owned).collect(),
             claims.fid,
         ))
+    }
+
+    /// Whether a sign-out Hook was told about (at `revoked_before`) ended the
+    /// sign-in this token belongs to. `iat` has whole seconds: a token from an
+    /// earlier second is older, one from a later second newer, and one from
+    /// the sign-out's own second is settled by Silicon Accounts.
+    async fn ended_by_sign_out(
+        &self,
+        token: &str,
+        issued_at: OffsetDateTime,
+        revoked_before: OffsetDateTime,
+    ) -> Result<bool, ApplicationError> {
+        let sign_out_second = revoked_before
+            .replace_nanosecond(0)
+            .unwrap_or(revoked_before);
+        if issued_at < sign_out_second {
+            return Ok(true);
+        }
+        if issued_at >= revoked_before {
+            return Ok(false);
+        }
+        self.accounts
+            .issued_after_sign_out(token, revoked_before)
+            .await
+            .map(|after| !after)
+            .map_err(accounts_unavailable)
     }
 
     /// Confirms with Silicon Accounts that the token is still active, for
