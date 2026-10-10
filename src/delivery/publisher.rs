@@ -5,7 +5,7 @@ use std::time::Duration;
 use time::OffsetDateTime;
 use tokio::sync::watch;
 
-use super::adapter::{DeliveryError, TingAdapter};
+use super::adapter::{DeliveryError, FIRST_PROOF_PAUSE, TingAdapter};
 use crate::infrastructure::{
     postgres::{PostgresStore, StoreError, TingOutboxClaim, TingSendFailure},
     ting::TingError,
@@ -53,12 +53,16 @@ impl Publisher {
                     .complete_ting(&claim, &accepted.id, accepted.silent)
                     .await?;
             }
-            Err(DeliveryError::Proof(error)) => {
-                tracing::warn!(%error, "Hook could not get a Silicon Accounts proof for Ting");
+            Err(DeliveryError::Proof(_)) => {
+                // The adapter logged why and paused further proof requests.
+                self.retry(&claim, TingSendFailure::ProofUnavailable, FIRST_PROOF_PAUSE)
+                    .await?;
+            }
+            Err(DeliveryError::ProofPaused { retry_in, .. }) => {
                 self.retry(
                     &claim,
                     TingSendFailure::ProofUnavailable,
-                    Duration::from_secs(30),
+                    retry_in.max(FIRST_PROOF_PAUSE),
                 )
                 .await?;
             }

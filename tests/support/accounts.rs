@@ -46,6 +46,8 @@ struct StubState {
     accounts: HashMap<String, StubAccount>,
     inactive_tokens: HashSet<String>,
     introspections: usize,
+    refuse_proofs: bool,
+    refused_proofs: usize,
     lookups: usize,
     proofs: Vec<Value>,
     keys: Vec<(String, [u8; 32])>,
@@ -166,6 +168,17 @@ impl StubAccounts {
         self.with_state(|state| {
             state.inactive_tokens.insert(token.to_owned());
         });
+    }
+
+    /// Makes proof requests fail as for an app id Silicon Accounts does not know.
+    pub fn refuse_proofs(&self, refuse: bool) {
+        self.with_state(|state| state.refuse_proofs = refuse);
+    }
+
+    /// Proof requests refused so far.
+    #[must_use]
+    pub fn refused_proofs(&self) -> usize {
+        self.with_state(|state| state.refused_proofs)
     }
 
     /// Introspection requests served so far.
@@ -369,6 +382,14 @@ fn issue(state: &Arc<Mutex<StubState>>, kind: &str, request: &Value) -> Response
     let Ok(mut state) = state.lock() else {
         return error(StatusCode::INTERNAL_SERVER_ERROR, "poisoned", "poisoned");
     };
+    if state.refuse_proofs {
+        state.refused_proofs += 1;
+        return error(
+            StatusCode::BAD_REQUEST,
+            "unknown_receiving_app",
+            "No app with that app_id exists, so it can't receive a proof.",
+        );
+    }
     let mut record = request.clone();
     record["kind"] = json!(kind);
     state.proofs.push(record);

@@ -41,6 +41,14 @@ pub(super) fn delivery_error(error: &DeliveryError) -> AppError {
                 "Silicon Accounts could not issue the proof Hook needs to talk to Ting. Retry shortly.",
             )
         }
+        DeliveryError::ProofPaused { retry_in, .. } => AppError::refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "proof_unavailable",
+            format!(
+                "Silicon Accounts could not issue the proof Hook needs to talk to Ting; Hook asks again in {} seconds.",
+                retry_in.as_secs().max(1)
+            ),
+        ),
         DeliveryError::Ting(error) => ting_error(error),
     }
 }

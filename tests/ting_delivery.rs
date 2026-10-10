@@ -303,6 +303,57 @@ async fn accepted_events_reach_the_silicon_and_its_observers_with_accounts_proof
     Ok(())
 }
 
+/// One cause (here an unknown Ting app at Silicon Accounts) must not become a
+/// proof request per queued send: a refusal pauses proof requests, the sends
+/// stay queued, and the publication status says why.
+#[tokio::test]
+async fn a_refused_proof_pauses_proof_requests_while_sends_stay_queued() -> Result<()> {
+    let ting = StubTing::start().await?;
+    let Some(api) = TestApi::start_with_ting(Some(&ting.url)).await? else {
+        return Ok(());
+    };
+    let (cos, _, _) = setup(&api);
+    api.accounts.refuse_proofs(true);
+    let endpoint = open_hook(&api, &cos).await?;
+    for n in 0..5 {
+        let body = format!("{{\"n\":{n}}}");
+        assert_eq!(
+            api.deliver(&endpoint, &[], body.as_bytes()).await?.0,
+            StatusCode::OK
+        );
+    }
+    let adapter = api
+        .application
+        .delivery()
+        .cloned()
+        .context("delivery is on")?;
+    let publisher = Publisher::new(api.application.store().clone(), adapter);
+    while publisher.publish_one().await? {}
+    assert_eq!(
+        api.accounts.refused_proofs(),
+        1,
+        "one request, then a pause"
+    );
+    assert!(ting.calls("send").is_empty());
+    assert_eq!(
+        queued(&api).await?.len(),
+        5,
+        "every send waits for a later attempt"
+    );
+    let codes: Vec<(Option<String>, i64)> = sqlx::query_as(
+        "SELECT last_error_code, attempts FROM hook_private.ting_outbox WHERE accepted_at IS NULL",
+    )
+    .fetch_all(api.owner.pool())
+    .await?;
+    assert!(
+        codes
+            .iter()
+            .all(|(code, attempts)| code.as_deref() == Some("proof_unavailable") && *attempts == 1),
+        "{codes:?}"
+    );
+    Ok(())
+}
+
 #[tokio::test]
 async fn without_ting_nothing_is_queued_and_the_api_says_delivery_is_off() -> Result<()> {
     let Some(api) = TestApi::start().await? else {

@@ -9,9 +9,16 @@
 //!   `tings.subscribe`) issued from the caller's own Hook access token while
 //!   the request is live; it is used once and never stored.
 //!
+//! - A failed proof request pauses further ones for that scope (30 seconds,
+//!   doubling up to 5 minutes), so a queue of sends cannot turn one cause (an
+//!   unknown Ting app, Silicon Accounts unavailable) into a request per send.
+//!
 //! Nothing here runs unless `HOOK_TING_URL` is set.
 
-use std::sync::Arc;
+use std::{
+    sync::Arc,
+    time::{Duration, Instant},
+};
 
 use secrecy::{ExposeSecret as _, SecretString};
 use time::OffsetDateTime;
@@ -35,12 +42,25 @@ pub const RECEIPT_SCOPE: &str = "sent.query";
 pub const SUBSCRIBE_SCOPE: &str = "tings.subscribe";
 /// A cached proof is renewed this long before it expires.
 const RENEW_BEFORE_EXPIRY: time::Duration = time::Duration::seconds(60);
+/// Pause after a first failed proof request; it doubles with each consecutive
+/// failure up to [`MAX_PROOF_PAUSE`].
+pub const FIRST_PROOF_PAUSE: Duration = Duration::from_secs(30);
+/// Longest pause between proof requests while they keep failing.
+pub const MAX_PROOF_PAUSE: Duration = Duration::from_secs(300);
 
 /// Why a delivery operation failed.
 #[derive(Debug)]
 pub enum DeliveryError {
     /// Silicon Accounts could not issue or refresh the proof.
     Proof(AccountsError),
+    /// A recent proof request failed; Hook asks Silicon Accounts again only
+    /// after the pause.
+    ProofPaused {
+        /// Time left before the next proof request.
+        retry_in: Duration,
+        /// What the last failed request answered.
+        reason: String,
+    },
     /// Ting refused or could not be reached.
     Ting(TingError),
 }
@@ -49,8 +69,39 @@ impl std::fmt::Display for DeliveryError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Proof(error) => write!(formatter, "no proof for Ting: {error}"),
+            Self::ProofPaused { retry_in, reason } => write!(
+                formatter,
+                "no proof for Ting: asking Silicon Accounts again in {}s (last answer: {reason})",
+                retry_in.as_secs().max(1)
+            ),
             Self::Ting(error) => write!(formatter, "Ting: {error}"),
         }
+    }
+}
+
+/// How long proof requests pause after `failures` consecutive failures.
+#[must_use]
+pub fn proof_pause(failures: u32) -> Duration {
+    let doublings = failures.saturating_sub(1).min(8);
+    FIRST_PROOF_PAUSE
+        .saturating_mul(1 << doublings)
+        .min(MAX_PROOF_PAUSE)
+}
+
+#[cfg(test)]
+mod pause_tests {
+    use std::time::Duration;
+
+    use super::proof_pause;
+
+    #[test]
+    fn proof_requests_pause_longer_after_each_failure_up_to_five_minutes() {
+        let seconds = |failures| proof_pause(failures).as_secs();
+        assert_eq!(
+            [0, 1, 2, 3, 4, 5, 40].map(seconds),
+            [30, 30, 60, 120, 240, 300, 300]
+        );
+        assert_eq!(proof_pause(u32::MAX), Duration::from_secs(300));
     }
 }
 
@@ -69,17 +120,28 @@ impl CachedProof {
     }
 }
 
+#[derive(Default)]
+struct CacheState {
+    proof: Option<CachedProof>,
+    /// Consecutive failed proof requests.
+    failures: u32,
+    /// No proof request before this instant.
+    paused_until: Option<Instant>,
+    /// What the last failed request answered.
+    last_failure: String,
+}
+
 /// One App verification proof for Ting, renewed single-flight.
 struct ProofCache {
     scope: &'static str,
-    state: Mutex<Option<CachedProof>>,
+    state: Mutex<CacheState>,
 }
 
 impl ProofCache {
-    const fn new(scope: &'static str) -> Self {
+    fn new(scope: &'static str) -> Self {
         Self {
             scope,
-            state: Mutex::const_new(None),
+            state: Mutex::new(CacheState::default()),
         }
     }
 
@@ -87,21 +149,63 @@ impl ProofCache {
         &self,
         accounts: &AccountsGateway,
         receiving_app: &str,
-    ) -> Result<SecretString, AccountsError> {
+    ) -> Result<SecretString, DeliveryError> {
         // Holding the lock across the network call makes renewal single-flight:
         // a rotating refresh token is never presented twice.
         let mut state = self.state.lock().await;
-        if let Some(cached) = state.as_ref()
+        if let Some(cached) = state.proof.as_ref()
             && cached.fresh()
         {
             return Ok(cached.token.clone());
         }
-        if let Some(refresh) = state.as_ref().and_then(|cached| cached.refresh.clone()) {
+        if let Some(until) = state.paused_until {
+            let now = Instant::now();
+            if now < until {
+                return Err(DeliveryError::ProofPaused {
+                    retry_in: until - now,
+                    reason: state.last_failure.clone(),
+                });
+            }
+        }
+        match Self::obtain(&mut state, accounts, receiving_app, self.scope).await {
+            Ok(token) => {
+                state.failures = 0;
+                state.paused_until = None;
+                Ok(token)
+            }
+            Err(error) => {
+                state.failures = state.failures.saturating_add(1);
+                let pause = proof_pause(state.failures);
+                state.paused_until = Some(Instant::now() + pause);
+                state.last_failure = error.to_string();
+                tracing::warn!(
+                    %error,
+                    scope = self.scope,
+                    receiving_app,
+                    pause_seconds = pause.as_secs(),
+                    "Hook could not get a Silicon Accounts proof for Ting; queued sends wait for the next attempt"
+                );
+                Err(DeliveryError::Proof(error))
+            }
+        }
+    }
+
+    async fn obtain(
+        state: &mut CacheState,
+        accounts: &AccountsGateway,
+        receiving_app: &str,
+        scope: &'static str,
+    ) -> Result<SecretString, AccountsError> {
+        if let Some(refresh) = state
+            .proof
+            .as_ref()
+            .and_then(|cached| cached.refresh.clone())
+        {
             match accounts.refresh_proof(refresh.expose_secret()).await {
                 Ok(issued) => {
                     let cached = cache(issued);
                     let token = cached.token.clone();
-                    *state = Some(cached);
+                    state.proof = Some(cached);
                     return Ok(token);
                 }
                 Err(AccountsError::Rejected { .. }) => {}
@@ -109,18 +213,18 @@ impl ProofCache {
             }
         }
         let issued = accounts
-            .issue_app_verification(receiving_app, &[self.scope])
+            .issue_app_verification(receiving_app, &[scope])
             .await?;
         let cached = cache(issued);
         let token = cached.token.clone();
-        *state = Some(cached);
+        state.proof = Some(cached);
         Ok(token)
     }
 
     /// Forgets the proof token after Ting refused it; the refresh token stays.
     async fn forget_token(&self, refused: &SecretString) {
         let mut state = self.state.lock().await;
-        if let Some(cached) = state.as_mut()
+        if let Some(cached) = state.proof.as_mut()
             && cached.token.expose_secret() == refused.expose_secret()
         {
             cached.expires_at = Some(OffsetDateTime::UNIX_EPOCH);
@@ -200,8 +304,7 @@ impl TingAdapter {
                 .inner
                 .send
                 .token(&self.inner.accounts, &self.inner.receiving_app)
-                .await
-                .map_err(DeliveryError::Proof)?;
+                .await?;
             match self
                 .inner
                 .client
@@ -232,8 +335,7 @@ impl TingAdapter {
             .inner
             .receipts
             .token(&self.inner.accounts, &self.inner.receiving_app)
-            .await
-            .map_err(DeliveryError::Proof)?;
+            .await?;
         let result = self
             .inner
             .client

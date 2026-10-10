@@ -41,6 +41,13 @@ verification proof is made for each enrolment while the recipient's request is
 live. Hook stores no delegated tokens. Recipients are addressed by their Silicon
 Accounts uuid and current id, `{"uuid", "id"}`.
 
+When Silicon Accounts refuses or cannot answer a proof request (for example
+because `HOOK_TING_APP_ID` names no app yet), Hook logs why once and waits before
+asking again: 30 seconds, doubling up to 5 minutes while it keeps failing. Queued
+sends stay queued meanwhile, with publication state `pending` and
+`last_error_code: proof_unavailable`, so a long queue never becomes one proof
+request per send.
+
 ## Event and acknowledgment flow
 
 1. Hook verifies the provider's signature, then stores the original request and
