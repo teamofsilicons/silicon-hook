@@ -6,7 +6,7 @@ info:
   summary: Signed webhook endpoints for Silicons, with verified history and optional delivery through Ting.
   description: |
     Silicon Hook gives each Silicon signed webhook endpoints at
-    `https://backend.hook.teamofsilicons.com/silicon/{silicon}/{endpoint_key}`. Every
+    `https://api.hook.teamofsilicons.com/silicon/{silicon}/{endpoint_key}`. Every
     request to an active endpoint is answered with `webhook.ok`. Requests that
     verify against the hook's signature policy are kept for 14 days; requests
     that do not verify are withheld and kept in a separate 14-day blocked log.
@@ -47,7 +47,7 @@ info:
     name: Proprietary
     identifier: LicenseRef-Proprietary
 servers:
-- url: https://backend.hook.teamofsilicons.com
+- url: https://api.hook.teamofsilicons.com
   description: Hook API; public ingress may use the configured Hook web origin.
 security:
 - bearerAuth: []
@@ -1408,7 +1408,7 @@ components:
             set_webhook:
               type: string
               description: The Silicon Accounts command that points the Silicon's webhook at this hook.
-              example: silicon-accounts silicon webhook set si:cos https://backend.hook.teamofsilicons.com/silicon/si:cos/A1B2C3D4
+              example: silicon-accounts silicon webhook set si:cos https://api.hook.teamofsilicons.com/silicon/si:cos/A1B2C3D4
             store_secret:
               type: string
             explanation:

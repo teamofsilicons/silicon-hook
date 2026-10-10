@@ -36,7 +36,7 @@ pub struct Cli {
         long,
         global = true,
         env = "SILICON_HOOK_URL",
-        help = "Hook API origin [default: https://backend.hook.teamofsilicons.com]"
+        help = "Hook API origin [default: https://api.hook.teamofsilicons.com]"
     )]
     pub url: Option<String>,
     #[arg(

@@ -73,7 +73,7 @@ names `hook silicons`.
 | --- | --- |
 | `--silicon <si:id or uuid>` | The Silicon to act on |
 | `--profile <name>` | A separate saved sign-in and settings (default `default`) |
-| `--url <origin>` | Hook API; env `SILICON_HOOK_URL`; default `https://backend.hook.teamofsilicons.com` |
+| `--url <origin>` | Hook API; env `SILICON_HOOK_URL`; default `https://api.hook.teamofsilicons.com` |
 | `--accounts-url <origin>` | Silicon Accounts; env `ACCOUNTS_URL`; default `https://accounts.teamofsilicons.com` |
 | `--json` | JSON only: no hints, errors as JSON |
 | `--idempotency-key <key>` | Reuse when retrying the same change after an uncertain result |

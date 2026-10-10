@@ -78,7 +78,7 @@ mod tests {
 
     use super::findings;
 
-    const URL: &str = "https://backend.hook.teamofsilicons.com/webhook";
+    const URL: &str = "https://api.hook.teamofsilicons.com/webhook";
 
     #[test]
     fn every_update_to_this_hook_needs_no_warning() {

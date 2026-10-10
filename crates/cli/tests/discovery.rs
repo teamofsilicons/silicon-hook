@@ -32,7 +32,7 @@ async fn accounts_json_is_offline_and_exact() {
             "name": "Silicon Hook",
             "version": env!("CARGO_PKG_VERSION"),
             "accounts_url": "https://accounts.teamofsilicons.com",
-            "api_url": "https://backend.hook.teamofsilicons.com",
+            "api_url": "https://api.hook.teamofsilicons.com",
             "api_version": "v3",
             "docs": "https://docs.hook.teamofsilicons.com",
             "repository": "https://github.com/teamofsilicons/silicon-hook",

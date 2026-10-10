@@ -355,11 +355,11 @@ fn pre_1_0_state_contributes_settings_but_never_credentials() {
     let folder = base.join(".silicon-hook");
     std::fs::create_dir_all(&folder).expect("dir");
     let legacy = serde_json::json!({"profiles": {
-        "default": {"url": "https://backend.hook.teamofsilicons.com", "org": "tos", "silicon": "si:cos",
+        "default": {"url": "https://api.hook.teamofsilicons.com", "org": "tos", "silicon": "si:cos",
             "telemetry": false, "session": {"tokens": {"access_token": "oat_secret", "refresh_token": "ort_secret"}}},
         "lab": {"url": "http://127.0.0.1:8080", "org": null, "silicon": null, "session": null,
             "test_sessions": {"00000000-0000-4000-8000-000000000001": {}}},
-        "fresh": {"url": "https://backend.hook.teamofsilicons.com", "session": null}
+        "fresh": {"url": "https://api.hook.teamofsilicons.com", "session": null}
     }});
     let bytes = serde_json::to_vec(&legacy).expect("json");
     std::fs::write(folder.join(store::LEGACY_FILE), &bytes).expect("write");

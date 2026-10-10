@@ -52,7 +52,7 @@ hook config unset url
 
 | Setting | Flag | Environment | Default |
 | --- | --- | --- | --- |
-| Hook API | `--url` | `SILICON_HOOK_URL` | `https://backend.hook.teamofsilicons.com` |
+| Hook API | `--url` | `SILICON_HOOK_URL` | `https://api.hook.teamofsilicons.com` |
 | Silicon Accounts | `--accounts-url` | `ACCOUNTS_URL` | `https://accounts.teamofsilicons.com` |
 | Default Silicon | `--silicon` | | the signed-in Silicon |
 | Telemetry | | `SILICON_HOOK_TELEMETRY=off` | on |

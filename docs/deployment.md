@@ -52,7 +52,7 @@ the matching CLI, client and web before switching consumers.
 ## Where Hook runs
 
 - **API, worker and PostgreSQL**: one ARM64 EC2 host behind Caddy at
-  `https://backend.hook.teamofsilicons.com` (also the provider ingress host). Releases
+  `https://api.hook.teamofsilicons.com` (also the provider ingress host). Releases
   are native systemd bundles installed with `deploy/native/install.py`, which takes
   Hook's Silicon Accounts secrets on the first 1.0 install, backs up before it migrates
   and rolls back a failed switch ([native releases](../deploy/native/README.md),

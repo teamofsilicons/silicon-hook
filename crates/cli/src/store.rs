@@ -32,7 +32,7 @@ pub const STATE_FILE: &str = "profiles.json";
 pub const LOCK_FILE: &str = "profiles.lock";
 pub const LEGACY_FILE: &str = "state.json";
 const DIR_NAME: &str = ".silicon-hook";
-const LEGACY_DEFAULT_URL: &str = "https://backend.hook.teamofsilicons.com";
+const LEGACY_DEFAULT_URL: &str = "https://api.hook.teamofsilicons.com";
 
 pub fn now() -> i64 {
     SystemTime::now()

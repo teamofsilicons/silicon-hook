@@ -10,13 +10,13 @@ contract is [`openapi.yaml`](../../openapi.yaml).
 Management, history and delivery operations use:
 
 ```text
-https://backend.hook.teamofsilicons.com/api/v3
+https://api.hook.teamofsilicons.com/api/v3
 ```
 
 Each hook a Silicon creates has a public endpoint:
 
 ```text
-https://backend.hook.teamofsilicons.com/silicon/{silicon}/{endpoint_key}
+https://api.hook.teamofsilicons.com/silicon/{silicon}/{endpoint_key}
 ```
 
 `{silicon}` is the Silicon's current id (`si:scout`) or its Silicon Accounts
@@ -321,7 +321,7 @@ Silicon Accounts: payload concat(request.headers["x-accounts-timestamp"], ".", r
 
 ## Ingress
 
-### `ANY https://backend.hook.teamofsilicons.com/silicon/{silicon}/{endpoint_key}`
+### `ANY https://api.hook.teamofsilicons.com/silicon/{silicon}/{endpoint_key}`
 
 Receives a provider request. `POST` is the common case, but every method is
 captured because some providers verify endpoints with `GET`. An optional trailing

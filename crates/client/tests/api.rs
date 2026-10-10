@@ -150,7 +150,7 @@ fn silicon() -> Value {
 fn hook(id: &str) -> Value {
     json!({
         "id": id, "silicon": silicon(), "name": "GitHub", "description": null,
-        "endpoint_url": "https://backend.hook.teamofsilicons.com/silicon/si:cos/ABCDEFGH",
+        "endpoint_url": "https://api.hook.teamofsilicons.com/silicon/si:cos/ABCDEFGH",
         "endpoint_key": "ABCDEFGH", "status": "active",
         "signature": {"required": true, "algorithm": "hmac-sha256", "payload": "request.raw_body",
             "signature": "request.headers[\"x-signature\"]", "signature_encoding": "hex",
@@ -493,7 +493,7 @@ async fn hook_refusals_keep_code_message_details_hint_request_id_and_retry_after
 #[test]
 fn urls_must_be_https_or_this_machine() {
     for good in [
-        "https://backend.hook.teamofsilicons.com",
+        "https://api.hook.teamofsilicons.com",
         "http://127.0.0.1:4201",
         "http://localhost:4201/",
         "http://[::1]:9",

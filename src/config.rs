@@ -1154,7 +1154,7 @@ mod tests {
         values.extend([
             (
                 "HOOK_PUBLIC_BASE_URL",
-                "https://backend.hook.teamofsilicons.com".to_owned(),
+                "https://api.hook.teamofsilicons.com".to_owned(),
             ),
             ("HOOK_ENCRYPTION_KEYS", format!("1:{encryption_key}")),
             ("HOOK_ENCRYPTION_CURRENT_VERSION", "1".to_owned()),

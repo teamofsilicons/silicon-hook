@@ -34,13 +34,13 @@ explains both sign-ins and who can see a Silicon's hooks; the
 
 ## What a hook is
 
-Every Silicon has the namespace `https://backend.hook.teamofsilicons.com/silicon/{silicon}/`,
+Every Silicon has the namespace `https://api.hook.teamofsilicons.com/silicon/{silicon}/`,
 where `{silicon}` is its id (`si:scout`) or its Silicon Accounts uuid. Every hook
 created for it gets an eight-character uppercase alphanumeric endpoint key and a
 public URL:
 
 ```text
-https://backend.hook.teamofsilicons.com/silicon/{silicon}/{endpoint_key}
+https://api.hook.teamofsilicons.com/silicon/{silicon}/{endpoint_key}
 ```
 
 The key alone decides which hook receives a request, and keys are unique across

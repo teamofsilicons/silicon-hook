@@ -11,7 +11,7 @@ use crate::{
 };
 
 /// Production Hook API.
-pub const DEFAULT_URL: &str = "https://backend.hook.teamofsilicons.com";
+pub const DEFAULT_URL: &str = "https://api.hook.teamofsilicons.com";
 /// The API major this client speaks.
 pub const API_VERSION: &str = "v3";
 
