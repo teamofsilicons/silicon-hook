@@ -498,6 +498,7 @@ escaping); headings are now slugged from plain text.
 | aaef145 | Close the Ting loop end to end: the Silicon's receiving host hydrates from Hook |
 | 70624f7 | Check a denied device code end to end and describe the whole e2e run |
 | 887d8cf | Check at startup that every account event Hook acts on reaches it |
+| 1498516 | Record the end-to-end stage in the migration log, decisions and cutover runbook |
 
 ### Tests (final run, 2026-10-10, after 887d8cf)
 
