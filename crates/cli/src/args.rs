@@ -163,6 +163,9 @@ pub enum Command {
         kind: Rotate,
     },
     /// Read verified requests, newest first; --hook for one hook, else the whole Silicon.
+    #[command(
+        after_help = "Examples:\n  hook events --limit 20\n  hook events --hook <id> --limit 5\n  hook events --cursor <next_cursor>            the next page\n  hook event <event-id>                         one event in full"
+    )]
     Events(History),
     /// Read withheld (unverified) requests, kept 14 days.
     Blocked(History),
@@ -171,11 +174,17 @@ pub enum Command {
     /// Where one event's delivery through Ting stands.
     Publication { event_id: Uuid },
     /// Who can see and manage the Silicon's hooks: list, grant, revoke, leave.
+    #[command(
+        after_help = "Examples:\n  hook --silicon si:scout access list\n  hook --silicon si:scout access grant c:ada --level view\n  hook --silicon si:scout access grant si:helper --level manage\n  hook --silicon si:scout access revoke c:ada\n  hook --silicon si:scout access leave        (a grantee gives up its own access)\nThe Silicon and its custodian always have full access. A Silicon looked after by another custodian accepts a grant only after it allowed you: see hook allow-list --help."
+    )]
     Access {
         #[command(subcommand)]
         action: Access,
     },
     /// Accounts the Silicon accepts access grants from although their custodian is not its custodian.
+    #[command(
+        after_help = "Run by the Silicon (or its custodian) that will receive access:\n  hook --silicon si:helper allow-list add c:ada     (c:ada and the Silicons it looks after may now grant si:helper access)\n  hook --silicon si:helper allow-list list\n  hook --silicon si:helper allow-list remove c:ada"
+    )]
     AllowList {
         #[command(subcommand)]
         action: AllowList,
@@ -192,11 +201,17 @@ pub enum Command {
         secret_file: Option<String>,
     },
     /// Delivery through Ting: enrol yourself, and (Carbons) subscribe to a Silicon's events.
+    #[command(
+        after_help = "Examples:\n  hook system delivery                          is delivery through Ting on for this Hook?\n  hook receiving register                       enrol yourself with Ting\n  hook --silicon si:scout receiving subscribe   (a Carbon with access) copies of future events\nWhen the server has no Ting these answer delivery_disabled; read events with hook events."
+    )]
     Receiving {
         #[command(subcommand)]
         action: Receiving,
     },
     /// Read or change local settings: URLs, default Silicon, telemetry, home directory.
+    #[command(
+        after_help = "Examples:\n  hook config show\n  hook config set silicon si:scout\n  hook config set url http://127.0.0.1:4201 && hook config set accounts-url http://localhost:9590\n  hook config set telemetry off\n  hook --profile lab login                      a second sign-in in the same home"
+    )]
     Config {
         #[command(subcommand)]
         action: Config,
@@ -297,14 +312,17 @@ pub enum Access {
     List,
     /// Give a Carbon or Silicon view or manage access (the Silicon or its custodian only).
     Grant {
-        #[arg(value_name = "C:ID|SI:ID|UUID")]
+        #[arg(
+            value_name = "C:ID|SI:ID|UUID",
+            help = "The Carbon or Silicon to give access to"
+        )]
         account: String,
         #[arg(long, value_parser = ["view", "manage"], help = "view: read hooks and history; manage: also create and change hooks")]
         level: String,
     },
     /// Remove an account's access (the Silicon or its custodian only).
     Revoke {
-        #[arg(value_name = "C:ID|SI:ID|UUID")]
+        #[arg(value_name = "C:ID|SI:ID|UUID", help = "The account whose access ends")]
         account: String,
     },
     /// Give up your own access to the Silicon.
@@ -317,12 +335,12 @@ pub enum AllowList {
     List,
     /// Allow an account (and its Silicons' grants) to give this Silicon access.
     Add {
-        #[arg(value_name = "C:ID|SI:ID|UUID")]
+        #[arg(value_name = "C:ID|SI:ID|UUID", help = "The account to allow")]
         account: String,
     },
     /// Remove an account; grants it already gave stay until revoked.
     Remove {
-        #[arg(value_name = "C:ID|SI:ID|UUID")]
+        #[arg(value_name = "C:ID|SI:ID|UUID", help = "The account to remove")]
         account: String,
     },
 }
