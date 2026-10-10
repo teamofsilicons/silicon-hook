@@ -257,7 +257,15 @@ async fn sign_outs_end_sessions_except_the_ones_hook_revoked_itself() -> Result<
         return Ok(());
     };
     setup(&api);
-    let bob = api.accounts.token("CBob2", "carbon", "c:bob");
+    // Predate the event so an accidental account-wide cutoff cannot be hidden
+    // by the same-second online introspection fallback.
+    let now = accounts::now();
+    let bob = api.accounts.sign(&json!({
+        "iss": api.accounts.url, "sub": "CBob2", "aud": accounts::APP_ID,
+        "exp": now + 600, "iat": now - 10, "nbf": now - 10,
+        "jti": "prior-bob-session", "kind": "carbon", "id": "c:bob",
+        "mid": "hook:CBob2", "fid": "f-CBob2", "scope": "profile"
+    }));
     assert_eq!(status_of(&api, &bob).await?.0, StatusCode::OK);
 
     let own_logout = event(

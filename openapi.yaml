@@ -6,7 +6,7 @@ info:
   summary: Signed webhook endpoints for Silicons, with verified history and optional delivery through Ting.
   description: |
     Silicon Hook gives each Silicon signed webhook endpoints at
-    `https://hook.teamofsilicons.com/silicon/{silicon}/{endpoint_key}`. Every
+    `https://backend.hook.teamofsilicons.com/silicon/{silicon}/{endpoint_key}`. Every
     request to an active endpoint is answered with `webhook.ok`. Requests that
     verify against the hook's signature policy are kept for 14 days; requests
     that do not verify are withheld and kept in a separate 14-day blocked log.
@@ -1408,7 +1408,7 @@ components:
             set_webhook:
               type: string
               description: The Silicon Accounts command that points the Silicon's webhook at this hook.
-              example: silicon-accounts silicon webhook set si:cos https://hook.teamofsilicons.com/silicon/si:cos/A1B2C3D4
+              example: silicon-accounts silicon webhook set si:cos https://backend.hook.teamofsilicons.com/silicon/si:cos/A1B2C3D4
             store_secret:
               type: string
             explanation:
@@ -1743,7 +1743,7 @@ components:
         version: {type: string, minLength: 1, maxLength: 32, pattern: '^[0-9.]+$'}
         operation:
           type: string
-          enum: [login, logout, whoami, refresh, webhook, unhook, hooks, events, blocked, deliveries, env, config, daemon, docs, commands, system, report, about, overview, live, testing, connections, relay, iam, create, set-secret, list, show, update, delete, restore, enable, disable, rotate, connect-iam, listen, accounts, silicons, access, allow-list, connect-accounts, event, publication, receiving]
+          enum: [login, logout, whoami, refresh, webhook, unhook, hooks, events, blocked, deliveries, env, config, daemon, docs, commands, system, report, about, overview, live, testing, connections, relay, create, set-secret, list, show, update, delete, restore, enable, disable, rotate, listen, accounts, silicons, access, allow-list, connect-accounts, event, publication, receiving]
         duration_ms: {type: integer, minimum: 0}
         progress: {type: integer, minimum: 0, maximum: 4294967295}
         status: {type: integer, minimum: 0, maximum: 65535}

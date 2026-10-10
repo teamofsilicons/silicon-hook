@@ -210,6 +210,36 @@ pub struct RekeyedRows {
     pub audit_actors: u64,
 }
 
+async fn reject_kind_mismatches(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ids: &[String],
+    kinds: &[String],
+    uuids: &[Option<String>],
+) -> Result<(), LinkError> {
+    let mismatches = sqlx::query_as::<_, (String, String, String)>(
+        "SELECT row.id, row.uuid, account.kind
+         FROM unnest($1::text[], $2::text[], $3::text[]) AS row(id, kind, uuid)
+         JOIN hook_private.accounts AS account ON account.uuid = row.uuid
+         WHERE account.kind <> row.kind",
+    )
+    .bind(ids)
+    .bind(kinds)
+    .bind(uuids)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if !mismatches.is_empty() {
+        return Err(LinkError::Conflicts(
+            mismatches
+                .into_iter()
+                .map(|(id, uuid, kind)| {
+                    format!("{id} cannot be linked to {uuid}: that account is a {kind}")
+                })
+                .collect(),
+        ));
+    }
+    Ok(())
+}
+
 /// What one `link-identities` run did (or would do, in a dry run).
 #[derive(Clone, Debug, Serialize)]
 pub struct LinkReport {
@@ -336,6 +366,7 @@ pub async fn link_identities(
     .bind(&ids)
     .fetch_all(&mut *transaction)
     .await?;
+    reject_kind_mismatches(&mut transaction, &ids, &kinds, &uuids).await?;
     if !conflicts.is_empty() {
         return Err(LinkError::Conflicts(
             conflicts

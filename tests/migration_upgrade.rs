@@ -5,7 +5,8 @@
 
 mod support;
 
-use std::{path::PathBuf, process::Command};
+use std::path::PathBuf;
+use tokio::process::Command;
 
 use anyhow::{Context as _, Result};
 use http::{Method, StatusCode};
@@ -75,7 +76,7 @@ async fn iam_era_fixture(pool: &PgPool) -> Result<()> {
 }
 
 /// Runs the real `hook-migrate link-identities` binary against the test database.
-fn link(api: &TestApi, mapping: &str, dry_run: bool) -> Result<(bool, Value, String)> {
+async fn link(api: &TestApi, mapping: &str, dry_run: bool) -> Result<(bool, Value, String)> {
     let directory = std::env::temp_dir().join(format!("hook-link-{}", Uuid::now_v7()));
     std::fs::create_dir_all(&directory)?;
     let file: PathBuf = directory.join("mapping.csv");
@@ -85,13 +86,15 @@ fn link(api: &TestApi, mapping: &str, dry_run: bool) -> Result<(bool, Value, Str
         .current_dir(&directory)
         .env("HOOK_ENVIRONMENT", "development")
         .env("HOOK_LOG_FILTER", "error")
+        .env("ACCOUNTS_API_URL", &api.accounts.url)
+        .env("HOOK_APP_SECRET", support::accounts::APP_SECRET)
         .env("HOOK_MIGRATOR_DATABASE_URL", api.database_url())
         .args(["link-identities", "--file"])
         .arg(&file);
     if dry_run {
         command.arg("--dry-run");
     }
-    let output = command.output().context("run hook-migrate")?;
+    let output = command.output().await.context("run hook-migrate")?;
     std::fs::remove_dir_all(&directory)?;
     let report = serde_json::from_slice(&output.stdout).unwrap_or(Value::Null);
     Ok((
@@ -196,9 +199,19 @@ async fn an_iam_era_database_upgrades_keeps_its_urls_and_links_to_accounts() -> 
         "unlinked IAM-era hooks have no Accounts owner yet"
     );
 
+    // A cached Carbon must never receive a Silicon namespace, even in a dry run.
+    let alice = api.accounts.token("CAlice1", "carbon", "c:alice");
+    api.call(Method::GET, "/api/v3/auth/status", Some(&alice), None)
+        .await?;
+    let (ok, _, stderr) = link(&api, "iam_public_id,accounts_uuid\nsi:cos,CAlice1\n", true).await?;
+    assert!(!ok, "kind mismatch was accepted");
+    assert!(stderr.contains("that account is a carbon"), "{stderr}");
+
+    api.accounts
+        .add_silicon("Gh0st", "si:ghost", Some(("CAlice1", "c:alice")));
     let mapping =
         "# reviewed\niam_principal_id,accounts_uuid\nsi:cos,8HV\nc:alice,CAlice1\nsi:ghost,Gh0st\n";
-    let (ok, dry, stderr) = link(&api, mapping, true)?;
+    let (ok, dry, stderr) = link(&api, mapping, true).await?;
     assert!(ok, "{stderr}");
     assert_eq!(dry["dry_run"], true);
     assert_eq!(dry["linked"], 3);
@@ -218,13 +231,13 @@ async fn an_iam_era_database_upgrades_keeps_its_urls_and_links_to_accounts() -> 
     .await?;
     assert_eq!(unchanged, None, "a dry run changes nothing");
 
-    let (ok, real, stderr) = link(&api, mapping, false)?;
+    let (ok, real, stderr) = link(&api, mapping, false).await?;
     assert!(ok, "{stderr}");
     assert_eq!(
         (real["dry_run"].clone(), real["rekeyed"].clone()),
         (json!(false), dry["rekeyed"].clone())
     );
-    let again = link(&api, mapping, false)?.1;
+    let again = link(&api, mapping, false).await?.1;
     assert!(
         again["rekeyed"]
             .as_object()
@@ -299,12 +312,13 @@ async fn an_iam_era_database_upgrades_keeps_its_urls_and_links_to_accounts() -> 
     );
 
     // A uuid already linked elsewhere is refused; an empty uuid unlinks.
-    let (ok, _, stderr) = link(&api, "iam_public_id,accounts_uuid\nsi:old,8HV\n", false)?;
+    let (ok, _, stderr) = link(&api, "iam_public_id,accounts_uuid\nsi:old,8HV\n", false).await?;
     assert!(
         !ok && stderr.contains("8HV is linked to si:cos"),
         "{stderr}"
     );
-    let (ok, unlinked, stderr) = link(&api, "iam_public_id,accounts_uuid\nsi:cos,\n", false)?;
+    let (ok, unlinked, stderr) =
+        link(&api, "iam_public_id,accounts_uuid\nsi:cos,\n", false).await?;
     assert!(ok, "{stderr}");
     assert_eq!(unlinked["unlinked"], 1);
     let (_, after) = api
@@ -320,7 +334,8 @@ async fn an_iam_era_database_upgrades_keeps_its_urls_and_links_to_accounts() -> 
         &api,
         "iam_public_id,accounts_uuid\nsi:cos,8HV\nsi:cos,8HV\n",
         false,
-    )?;
+    )
+    .await?;
     assert!(
         !ok && stderr.contains("already mapped on line 2"),
         "{stderr}"

@@ -719,3 +719,20 @@ whose stand-in receiver is `ting`; before: `proof failures logged in 8 s: 5`, af
   secret is `secret_stored_now`.
 - The Ting stand-in and the receiving host are started by the harness; `down` stops the dev processes, and the
   harness stops its own relay and host in `finally` blocks (pids `accounts-relay`, `receiving-host`).
+
+## 2026-10-10 — Codex continuation: backend review fixes
+
+Fixed the self-UUID authorization fast path so Carbons cannot own hook namespaces.
+Grant responses now report the actual granter kind and public ID. The sign-out
+regression uses a genuinely earlier token and catches account-wide revocation on
+`app_revoked`. Identity mapping now verifies each destination online before writes,
+refusing wrong-kind, missing, and non-active accounts; cached kinds are checked
+inside the transaction too. Runbook includes a pre-window endpoint-key collision
+query; OpenAPI uses the actual provider ingress host and current command names.
+
+Verified: real PostgreSQL access suite 7/7, webhook suite 6/6, populated legacy
+upgrade/linking suite 1/1. `cargo clippy --locked -p silicon-hook --all-targets
+--all-features -- -D warnings` and `cargo fmt --all` pass. Full live rerun and
+Next frontend remain in progress. The inherited throwaway review probe is
+preserved outside the worktree in `.migration/recovery/hook-inherited-review-probe.rs`;
+its actionable assertions are now regression tests.

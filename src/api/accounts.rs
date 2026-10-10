@@ -232,9 +232,15 @@ pub(super) async fn grant(
         .grant_access(&context, &account, level, request_id.as_deref())
         .await
         .map_err(map_application_error)?;
+    let mut item = grant_item(&grant, &[grantee]);
+    item.granted_by = AccountResponse::of(
+        context.actor().uuid(),
+        context.actor().kind(),
+        context.actor().id().map(PublicId::as_str),
+    );
     Ok(Json(serde_json::json!({
         "silicon": SiliconResponse::from(context.silicon()),
-        "grant": grant_item(&grant, &[grantee]),
+        "grant": item,
     })))
 }
 

@@ -401,7 +401,10 @@ impl HookApplication {
         actor: &Actor,
         segment: &str,
     ) -> Result<AuthorizationContext, ApplicationError> {
-        let silicon = if AccountUuid::looks_like(segment) && segment == actor.uuid().as_str() {
+        let silicon = if actor.kind() == ActorKind::Silicon
+            && AccountUuid::looks_like(segment)
+            && segment == actor.uuid().as_str()
+        {
             // A Silicon naming itself by uuid needs no lookup.
             self.store
                 .account(actor.uuid())

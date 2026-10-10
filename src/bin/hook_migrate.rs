@@ -8,7 +8,7 @@ use silicon_hook::{
     config::MigrationSettings,
     infrastructure::postgres::{
         self,
-        identity_links::{link_identities, parse_mapping},
+        identity_links::{IdentityMapping, link_identities, parse_mapping},
     },
     telemetry,
 };
@@ -80,6 +80,7 @@ async fn link(args: &[String]) -> anyhow::Result<()> {
     let bytes = std::fs::read(&file)
         .with_context(|| format!("could not read the mapping file {}", file.display()))?;
     let mapping = parse_mapping(&bytes).map_err(|errors| anyhow::anyhow!("{errors}"))?;
+    verify_mapping_accounts(&mapping).await?;
     let settings = MigrationSettings::from_env()?;
     telemetry::init(&settings.process)?;
     let pool = postgres::connect(&settings.database, "hook-migrate-link").await?;
@@ -88,5 +89,49 @@ async fn link(args: &[String]) -> anyhow::Result<()> {
         .map_err(|error| anyhow::anyhow!("{error}"))?;
     pool.close().await;
     println!("{}", serde_json::to_string_pretty(&report)?);
+    Ok(())
+}
+
+async fn verify_mapping_accounts(mapping: &IdentityMapping) -> anyhow::Result<()> {
+    if mapping.rows.iter().all(|row| row.accounts_uuid.is_none()) {
+        return Ok(());
+    }
+    let secret = std::env::var("HOOK_APP_SECRET")
+        .context("link-identities requires HOOK_APP_SECRET to verify the mapped accounts before changing ownership")?;
+    let url = std::env::var("ACCOUNTS_API_URL")
+        .or_else(|_| std::env::var("ACCOUNTS_URL"))
+        .unwrap_or_else(|_| "https://accounts.teamofsilicons.com".to_owned());
+    let client = silicon_accounts_client::AccountsClient::builder()
+        .base_url(url)
+        .timeout(std::time::Duration::from_secs(10))
+        .build()?;
+    let app_id = std::env::var("HOOK_APP_ID").unwrap_or_else(|_| "hook".to_owned());
+    let app = client.as_app(app_id, secret);
+    for row in &mapping.rows {
+        let Some(uuid) = &row.accounts_uuid else {
+            continue;
+        };
+        let account = app.lookup(uuid.as_str()).await.with_context(|| {
+            format!(
+                "could not verify {} -> {uuid}; no identity links were changed",
+                row.iam_public_id
+            )
+        })?;
+        anyhow::ensure!(
+            account.uuid == uuid.as_str(),
+            "Silicon Accounts returned a different uuid for {uuid}"
+        );
+        anyhow::ensure!(
+            account.kind.as_str() == row.iam_public_id.kind().as_str(),
+            "{} cannot be linked to {uuid}: that account is a {}",
+            row.iam_public_id,
+            account.kind.as_str()
+        );
+        anyhow::ensure!(
+            account.status == "active",
+            "{uuid} is {}; only active accounts may receive identity links",
+            account.status
+        );
+    }
     Ok(())
 }

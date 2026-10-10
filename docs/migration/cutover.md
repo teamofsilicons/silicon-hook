@@ -57,6 +57,25 @@ readlink /opt/silicon-hook/current
 
 `hook-migrate` applies whatever is pending (0018 if missing, then 0019).
 
+Before stopping writers, check for endpoint keys shared by live or retired hooks:
+
+```sql
+SELECT environment_id, endpoint_key, count(*)
+FROM (
+  SELECT environment_id, endpoint_key FROM hook.hooks
+  UNION ALL
+  SELECT environment_id, endpoint_key FROM hook_private.retired_endpoint_keys
+) AS keys
+GROUP BY environment_id, endpoint_key
+HAVING count(*) > 1;
+```
+
+Resolve every row while the old service is still running; rotate one conflicting live endpoint
+and update its provider configuration. A collision involving retained keys also needs an
+operator-reviewed remediation; do not remove retained records merely to pass the check.
+Migration 0019 refuses collisions transactionally.
+
+
 ### 2. Hook's sign-in setup at Silicon Accounts
 
 The web needs its callback, the CLI needs the device flow and public-client exchange (Silicons sign in with an SLT,
@@ -354,3 +373,12 @@ custodian circle and sharing, restart safety, Silicon Accounts cut off mid-run, 
 (including renewal and the Silicon's receiving host hydrating the event), and the packaged CLI's discovery
 commands. Run it again before the cutover: `HOOK_DEV_STACK_FILE=… HOOK_E2E_MINT=… HOOK_E2E_TSX=…
 HOOK_E2E_ACCOUNTS_CLI=… scripts/e2e-accounts.sh` (see the root README).
+
+### Identity mapping validation
+
+`hook-migrate link-identities` requires `HOOK_APP_SECRET` (and `ACCOUNTS_URL` or
+`ACCOUNTS_API_URL` for a non-production Accounts endpoint). Dry runs and applies
+verify every destination with Silicon Accounts, reject deleted or unclaimed
+accounts, and reject Carbon/Silicon kind mismatches before changing any rows.
+All identity pairings still require operator review: matching public handles alone
+does not establish that the old and new accounts have the same owner.

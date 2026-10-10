@@ -83,6 +83,32 @@ async fn grant(
 }
 
 #[tokio::test]
+async fn a_carbon_cannot_own_a_namespace_by_using_its_uuid() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let p = people(&api);
+    for selector in ["CBob2", "c:bob"] {
+        for suffix in ["hooks", "access", "allow-list", "events"] {
+            let (status, body) = api
+                .call(
+                    Method::GET,
+                    &format!("/api/v3/silicons/{selector}/{suffix}"),
+                    Some(&p.bob),
+                    None,
+                )
+                .await?;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{selector}/{suffix}: {body}");
+            assert_eq!(body["error"]["code"], "not_a_silicon");
+        }
+        let (status, body) = create_hook(&api, selector, &p.bob, "Forbidden").await?;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"]["code"], "not_a_silicon");
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn the_silicon_and_its_custodian_have_full_control_and_nobody_else_has_any() -> Result<()> {
     let Some(api) = TestApi::start().await? else {
         return Ok(());
@@ -198,6 +224,8 @@ async fn grants_give_view_or_manage_and_a_grantee_can_leave() -> Result<()> {
     assert_eq!(status, StatusCode::OK, "{granted}");
     assert_eq!(granted["grant"]["level"], "view");
     assert_eq!(granted["grant"]["granted_by"]["uuid"], "CAlice1");
+    assert_eq!(granted["grant"]["granted_by"]["id"], "c:alice");
+    assert_eq!(granted["grant"]["granted_by"]["kind"], "carbon");
     assert_eq!(list_hooks(&api, "si:cos", &p.bob).await?.0, StatusCode::OK);
     assert_eq!(
         api.call(
