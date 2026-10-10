@@ -261,7 +261,14 @@ def ensure_webhook(config, secrets):
         raise Failure(f"GET {base} answered {status}: {current}")
     known = secrets.get("WEBHOOK_SECRET") and secrets.get("WEBHOOK_URL") == config.webhook_url
     if known and current.get("url") == config.webhook_url and current.get("secret_set"):
-        return "kept"
+        if current.get("events") is None:
+            return "kept"
+        # Hook acts on several updates; picks made elsewhere would hide some (PUT keeps the secret).
+        status, saved, _ = http("PUT", base, body={"url": config.webhook_url, "events": None}, basic=creds,
+                                headers={"Idempotency-Key": f"hook-dev-{uuid.uuid4()}"})
+        if status != 200:
+            raise Failure(f"PUT {base} answered {status}: {redact(saved)}")
+        return "kept (every update restored)"
     # A new secret first (kept by the PUT that follows), saved before Hook needs it.
     status, generated, _ = http("POST", f"{base}/generate-secret", basic=creds,
                                 headers={"Idempotency-Key": f"hook-dev-{uuid.uuid4()}"})

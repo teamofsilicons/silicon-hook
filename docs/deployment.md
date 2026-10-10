@@ -23,7 +23,12 @@ replaced it.
 Hook's sign-in setup at Silicon Accounts needs the webhook pointed at
 `https://<hook backend>/webhook` with the six account events (`account.id_changed`,
 `account.updated`, `account.deleted`, `membership.signed_out`, `membership.access_removed`,
-`silicon.custodian_changed`).
+`silicon.custodian_changed`). Set it with every update, `PUT /v1/apps/hook/webhook` and
+`{"url": "https://<hook backend>/webhook", "events": null}`: setting only the URL keeps
+update picks made earlier, and the recommended picks leave out `custodian_change`. At
+startup `hook-api` reads the webhook settings once and logs either that every event it acts
+on reaches it, or exactly what is missing (an update, the signing secret, a paused
+subscription, another URL).
 
 ## Upgrade to Hook 1.0
 

@@ -4,3 +4,4 @@ pub mod accounts;
 pub mod crypto;
 pub mod postgres;
 pub mod ting;
+pub mod webhook_settings;

@@ -92,6 +92,14 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
             "HOOK_ACCOUNTS_WEBHOOK_SECRET is not set: Silicon Accounts webhook deliveries will be refused"
         );
     }
+    let accounts = dependencies.application.accounts().clone();
+    let webhook_url = settings
+        .server
+        .public_base_url
+        .join("webhook")
+        .map(String::from)
+        .unwrap_or_default();
+    tokio::spawn(async move { check_webhook_settings(&accounts, &webhook_url).await });
     let app = router(dependencies, &settings.server);
     let listener = tokio::net::TcpListener::bind(settings.server.bind_addr)
         .await
@@ -144,6 +152,29 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
     }
     pool.close().await;
     result
+}
+
+/// Says once, at startup, whether Silicon Accounts delivers every account
+/// event Hook acts on to this Hook. Never blocks startup.
+async fn check_webhook_settings(accounts: &AccountsGateway, webhook_url: &str) {
+    match accounts.webhook_settings().await {
+        Ok(settings) => {
+            let found = crate::infrastructure::webhook_settings::findings(&settings, webhook_url);
+            if found.is_empty() {
+                tracing::info!(
+                    url = webhook_url,
+                    "Silicon Accounts delivers every account event Hook acts on to this Hook"
+                );
+            }
+            for finding in found {
+                tracing::warn!("{finding}");
+            }
+        }
+        Err(error) => tracing::warn!(
+            %error,
+            "could not read Hook's webhook settings at Silicon Accounts; check that account events reach {webhook_url}"
+        ),
+    }
 }
 
 fn spawn_server(

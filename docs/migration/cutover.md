@@ -184,17 +184,28 @@ management answers 503 and provider requests are refused while the API restarts 
    It backs up both databases and the configuration (online, then again with both services stopped), applies
    0018/0019 to `hook_prod`, reapplies the runtime grants, switches `current`, starts both units and waits for
    `/readyz`. Keep the printed `backup` path: it is the rollback point. `hook_test` is backed up and left alone.
-4. **Point Silicon Accounts' webhook at Hook** (from the Carbon's machine; the secret made in step 3 is kept):
+4. **Point Silicon Accounts' webhook at Hook, with every update** (from the Carbon's machine; the secret made in
+   step 3 is kept). Send `"events": null` explicitly: setting the URL keeps any update picks made earlier, and
+   Silicon Apps' recommended picks leave out `custodian_change`, without which custodian changes reach Hook only
+   through its 5-minute re-checks. The CLI's `app webhook set` cannot choose updates, so use the API:
 
    ```sh
    # run at cutover
-   silicon-accounts --url https://accounts.teamofsilicons.com app webhook set \
-     https://backend.hook.teamofsilicons.com/webhook --app-secret-stdin < ~/.silicon-hook/app-secret
-   silicon-accounts --url https://accounts.teamofsilicons.com app webhook test --app-secret-stdin < ~/.silicon-hook/app-secret
+   curl -s -X PUT -u "hook:$(cat ~/.silicon-hook/app-secret)" -H 'Idempotency-Key: hook-1.0-webhook-url' \
+     -H 'Content-Type: application/json' \
+     -d '{"url": "https://backend.hook.teamofsilicons.com/webhook", "events": null}' \
+     https://accounts.teamofsilicons.com/v1/apps/hook/webhook
+   # expect {"url": "https://backend.hook.teamofsilicons.com/webhook", "secret": null, "events": null}
+   curl -s -u "hook:$(cat ~/.silicon-hook/app-secret)" https://accounts.teamofsilicons.com/v1/apps/hook/webhook
+   # expect "secret_set": true, "events": null, "status": "active"
+   silicon-accounts --url https://accounts.teamofsilicons.com app webhook test --app-id hook \
+     --app-secret-stdin < ~/.silicon-hook/app-secret
    ```
 
    On the host, `journalctl -u silicon-hook-api --since -5min | grep 'event_type=ping'` shows the ping arrived and
-   verified. A new webhook gets every account update; Hook acts on the six it needs and acknowledges the rest.
+   verified. hook-api also checks the webhook settings once at startup: restart it after this step (or read the
+   log of its next start) and look for `Silicon Accounts delivers every account event Hook acts on to this Hook`;
+   any other line names what is missing (an update, the secret, a paused subscription, another URL).
 5. **Link the stored identities.** Draft again against production (step 7 above, with
    `HOOK_MIGRATOR_DATABASE_URL` from `/etc/silicon-hook/migration.env` unchanged), compare it with the reviewed
    rehearsal file, then:
@@ -303,13 +314,19 @@ curl -s -o /dev/null -w '%{http_code}\n' https://backend.hook.teamofsilicons.com
 ## Turning Ting delivery on
 
 When Ting accepts Silicon Accounts proofs (enrolment with a User verification proof for receiving app `ting`, scope
-`tings.subscribe`; sends and receipts with App verification proofs, scopes `tings.send` and `sent.query`):
+`tings.subscribe`; sends and receipts with App verification proofs, scopes `tings.send` and `sent.query`). If Ting's
+app at Silicon Accounts is not called `ting`, also set `HOOK_TING_APP_ID` to its id:
 
 ```sh
 # run when Ting is ready — on the host
 echo 'HOOK_TING_URL=https://backend.ting.teamofsilicons.com/' >> /etc/silicon-hook/api.env
+# only if Ting's app id is not `ting`:  echo 'HOOK_TING_APP_ID=<its app id>' >> /etc/silicon-hook/api.env
 systemctl restart silicon-hook-api
 ```
+
+If Silicon Accounts refuses Hook's proofs (for example `unknown_receiving_app` because the id is wrong), the log
+says so once with a pause before the next request, and queued sends stay `pending` with
+`last_error_code: proof_unavailable` until it is fixed; nothing is lost.
 
 Hook then queues references for new events only (nothing was queued while delivery was off). Recipients enrol again
 (`POST /api/v3/delivery/recipient`); Carbon observers subscribe again.

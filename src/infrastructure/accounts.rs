@@ -463,6 +463,16 @@ impl AccountsGateway {
         Err(last.map_or(WebhookRejection::NotConfigured, WebhookRejection::Signature))
     }
 
+    /// Reads Hook's app webhook settings (`GET /v1/apps/{app_id}/webhook`):
+    /// endpoint, signing secret present, chosen updates and status.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when Accounts refuses or cannot answer.
+    pub async fn webhook_settings(&self) -> Result<serde_json::Value, AccountsError> {
+        Ok(self.app().webhook_settings().await?)
+    }
+
     fn app(&self) -> silicon_accounts_client::AppClient<'_> {
         self.inner
             .client
