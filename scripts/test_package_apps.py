@@ -184,6 +184,13 @@ class Discovery(unittest.TestCase):
     def test_correct_answers_pass(self):
         self.assertTrue(self.run_discovery())
 
+    def test_runs_a_copy_when_the_mode_bits_are_lost(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = fake_hook(directory)
+            script.chmod(0o644)  # what a downloaded workflow artifact looks like
+            self.assertTrue(package_apps.discovery(script, self.target, VERSION, "require"))
+            self.assertEqual(stat.S_IMODE(script.stat().st_mode), 0o644)
+
     def test_wrong_answers_are_refused(self):
         cases = {
             "accounts": ('{"app_id": "dm"}', "app_id"),

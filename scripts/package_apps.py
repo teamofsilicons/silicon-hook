@@ -214,8 +214,9 @@ def json_object(text, command):
     return value
 
 
-def discovery(binary, target, version, mode):
+def discovery(original, target, version, mode):
     """Run the commands Silicon Apps runs at upload, signed out, in an empty home. False when it cannot run here."""
+    binary = Path(original)
     if TARGETS[target] != host_system():
         if mode == "require":
             raise PackageError(f"discovery is required, but a {target} binary cannot run on this {host_system()} machine")
@@ -223,7 +224,16 @@ def discovery(binary, target, version, mode):
               "discovery commands at upload")
         return False
     with tempfile.TemporaryDirectory(prefix="hook-discovery-") as directory:
-        home = Path(directory)
+        # Run a private copy named like the installed command and marked
+        # executable (downloaded workflow artifacts lose their mode bits), from
+        # inside an empty home that holds nothing else.
+        work = Path(directory)
+        home = work / "home"
+        home.mkdir()
+        (work / "bin").mkdir()
+        binary = work / "bin" / binary_name(target)
+        shutil.copyfile(original, binary)
+        binary.chmod(0o755)
         try:
             code, out, err = run_clean(binary, ["--help"], home)
         except OSError as error:
