@@ -302,10 +302,10 @@ class Harness:
     def sql(self, query):
         return dev_accounts.psql(self.dev, self.dev.database_url(database=self.dev.database), query)
 
-    def dev_command(self, *args):
+    def dev_command(self, *args, env=None):
         result = subprocess.run([sys.executable, str(SCRIPTS / "dev_accounts.py"), *args],
-                                capture_output=True, text=True, env={**os.environ, "HOOK_DEV_SKIP_BUILD": "1"},
-                                timeout=300)
+                                capture_output=True, text=True,
+                                env={**os.environ, "HOOK_DEV_SKIP_BUILD": "1", **(env or {})}, timeout=300)
         if result.returncode != 0:
             raise Stop(f"dev-accounts {' '.join(args)} failed: {result.stderr.strip()[-500:]}")
         return json.loads(result.stdout)

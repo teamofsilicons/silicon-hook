@@ -37,6 +37,7 @@ def scenario_5(h):
     profile_update(h)
     stk_rotation(h)
     same_second_sign_in(h)
+    renamed_grantee(h)
     custodian_change(h)
     deletion(h)
     access_removed(h)
@@ -181,6 +182,20 @@ def same_second_sign_in(h):
             "lands; its earlier token is refused",
             status_new == 200 and status_old == 401,
             {"sign_out_at": occurred, "new_token_same_second": same_second, "new": status_new, "old": status_old})
+
+
+def renamed_grantee(h):
+    """Grants are stored by uuid and shown by the grantee's current id."""
+    s2 = h.s2
+    new_id = f"si:hook-e2e-s2r-{h.suffix}"
+    before = h.delivery_ids()
+    status, _ = h.accounts("POST", f"/v1/me/silicons/{s2.uuid}/id", h.c2, body={"id": new_id})
+    h.wait_delivery("account.id_changed", s2.uuid, before)
+    s2.id = new_id
+    code, listed, err = h.hook(h.c1.home, "--silicon", h.s1.id, "access", "list")
+    grants = {g["account"]["uuid"]: g["account"]["id"] for g in (listed or {}).get("grants", [])} if code == 0 else err
+    h.check("after S2 is renamed, S1's access list shows S2's grant under its new id",
+            status == 200 and isinstance(grants, dict) and grants.get(s2.uuid) == new_id, grants)
 
 
 def custodian_change(h):

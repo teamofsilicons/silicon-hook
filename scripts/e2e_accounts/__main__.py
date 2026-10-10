@@ -16,6 +16,8 @@ webhook registered on the stack), then runs, with real tokens:
      without app_revoked, custodian change, deletion, access removal), replays and
      forged deliveries
   8  restart safety
+  9  Silicon Accounts stops answering (a relay on base+3 is cut): reads, sign-in
+     status and ingress keep working, sensitive routes say accounts_unavailable
   6  Hook as a proof issuer, to a Ting stand-in that verifies every proof
   7  the discovery commands from a packaged Silicon Apps archive
 
@@ -37,6 +39,7 @@ from support import SCRIPTS, Harness, Stop
 import scenario_api
 import scenario_cli
 import scenario_events
+import scenario_outage
 import scenario_package
 import scenario_ting
 
@@ -74,6 +77,7 @@ def main():
         scenario_api.scenario_4(h)
         scenario_events.scenario_5(h)
         scenario_events.scenario_8(h)
+        scenario_outage.scenario_9(h)
         scenario_ting.scenario_6(h)
         if not args.skip_package:
             scenario_package.scenario_7(h)
