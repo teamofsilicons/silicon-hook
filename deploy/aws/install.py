@@ -1,5 +1,12 @@
 #!/usr/bin/env python3
-"""Install an isolated Hook runtime on the dedicated host; never prints secrets."""
+"""Set up a new dedicated Hook host (PostgreSQL, Caddy, API and worker containers); never prints secrets.
+
+This is the original host setup, kept for rebuilding the host. Releases on an
+existing host use the native bundle (deploy/native/install.py). accounts.json
+holds Hook's Silicon Accounts settings: HOOK_APP_SECRET and
+HOOK_ACCOUNTS_WEBHOOK_SECRET are required. The web console runs on Vercel, so
+Caddy sends everything to the API.
+"""
 import base64
 import json
 import os
@@ -26,9 +33,16 @@ if credentials.exists():
 else:
     creds = {k: secrets.token_hex(32) for k in ['postgres', 'api', 'worker']}
     creds.update({k: base64.urlsafe_b64encode(secrets.token_bytes(32)).decode().rstrip('=') for k in ['encryption', 'cursor']})
-    creds['session'] = base64.b64encode(secrets.token_bytes(32)).decode()
     credentials.write_text(json.dumps(creds))
-iam = json.loads((root / 'iam.json').read_text())
+ACCOUNTS_KEYS = {'ACCOUNTS_URL', 'ACCOUNTS_API_URL', 'HOOK_APP_ID', 'HOOK_APP_SECRET', 'HOOK_ACCOUNTS_WEBHOOK_SECRET',
+                 'HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET', 'HOOK_ACCOUNTS_TIMEOUT_SECONDS', 'HOOK_TING_URL',
+                 'HOOK_TING_APP_ID'}
+accounts = json.loads((root / 'accounts.json').read_text())
+if set(accounts) - ACCOUNTS_KEYS:
+    raise RuntimeError('accounts.json may hold only Silicon Accounts settings: ' + ', '.join(sorted(ACCOUNTS_KEYS)))
+for key in ('HOOK_APP_SECRET', 'HOOK_ACCOUNTS_WEBHOOK_SECRET'):
+    if not accounts.get(key):
+        raise RuntimeError(f'accounts.json is missing {key}')
 tls = root / 'db-tls'
 tls.mkdir(exist_ok=True)
 tls.chmod(0o755)
@@ -70,7 +84,6 @@ else:
 
 sql = fr"""
 SELECT 'CREATE DATABASE hook_prod' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='hook_prod')\gexec
-SELECT 'CREATE DATABASE hook_test' WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname='hook_test')\gexec
 SELECT 'CREATE ROLE silicon_hook_api LOGIN PASSWORD ''{creds['api']}'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='silicon_hook_api')\gexec
 SELECT 'CREATE ROLE silicon_hook_worker LOGIN PASSWORD ''{creds['worker']}'' NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT NOREPLICATION' WHERE NOT EXISTS (SELECT FROM pg_roles WHERE rolname='silicon_hook_worker')\gexec
 """
@@ -86,9 +99,9 @@ common = {
     'HOOK_DATABASE_MAX_CONNECTIONS': '6', 'HOOK_DATABASE_MIN_CONNECTIONS': '1',
     'HOOK_ENCRYPTION_KEYS': '1:' + creds['encryption'], 'HOOK_ENCRYPTION_CURRENT_VERSION': '1',
     'HOOK_CURSOR_SIGNING_KEY': creds['cursor'],
-    'HOOK_IAM_BASE_URL': 'https://backend.iam.teamofsilicons.com', 'HOOK_IAM_APP_ID': 'hook',
-    **iam,
 }
+# Only hook-api talks to Silicon Accounts; the worker and the migrator never get its secrets.
+api_accounts = {'ACCOUNTS_URL': 'https://accounts.teamofsilicons.com', 'HOOK_APP_ID': 'hook', **accounts}
 telemetry = {}
 for line in (root/'telemetry.env').read_text().splitlines():
     if line.strip() and not line.lstrip().startswith('#'):
@@ -102,15 +115,14 @@ spool.mkdir(exist_ok=True)
 os.chown(spool, 10001, 10001)
 spool.chmod(0o700)
 for role in ['api', 'worker']:
-    export = {**telemetry, 'HOOK_TELEMETRY_SPOOL_DIR': '/var/lib/hook-telemetry'} if role == 'worker' else {}
-    envfile(role + '.env', {**common, **export, 'HOOK_DATABASE_URL': db(role, 'hook_prod'), 'HOOK_TEST_DATABASE_URL': db(role, 'hook_test')})
-envfile('migration.env', {**common, 'HOOK_MIGRATOR_DATABASE_URL': db('postgres', 'hook_prod'), 'HOOK_TEST_MIGRATOR_DATABASE_URL': db('postgres', 'hook_test')})
+    export = {**telemetry, 'HOOK_TELEMETRY_SPOOL_DIR': '/var/lib/hook-telemetry'} if role == 'worker' else api_accounts
+    envfile(role + '.env', {**common, **export, 'HOOK_DATABASE_URL': db(role, 'hook_prod')})
+envfile('migration.env', {**common, 'HOOK_MIGRATOR_DATABASE_URL': db('postgres', 'hook_prod')})
 run('docker', 'run', '--rm', '--network', 'host', '--env-file', str(root/'migration.env'),
     '-v', f'{tls}:/run/hook-db:ro', '--entrypoint', '/usr/local/bin/hook-migrate', 'silicon-hook:production')
-for database in ['hook_prod', 'hook_test']:
-    run('docker', 'exec', '-i', 'hook-postgres', 'psql', '-U', 'postgres', '-d', database,
-        '-v', 'ON_ERROR_STOP=1', '-v', 'api_role=silicon_hook_api', '-v', 'worker_role=silicon_hook_worker',
-        input=(root/'grant-runtime.sql').read_text(), text=True, stdout=subprocess.DEVNULL)
+run('docker', 'exec', '-i', 'hook-postgres', 'psql', '-U', 'postgres', '-d', 'hook_prod',
+    '-v', 'ON_ERROR_STOP=1', '-v', 'api_role=silicon_hook_api', '-v', 'worker_role=silicon_hook_worker',
+    input=(root/'grant-runtime.sql').read_text(), text=True, stdout=subprocess.DEVNULL)
 
 for role in ['api', 'worker']:
     name = 'hook-' + role
@@ -124,32 +136,15 @@ for role in ['api', 'worker']:
         *(['-v', f'{spool}:/var/lib/hook-telemetry'] if role == 'worker' else []),
         '--entrypoint', '/usr/local/bin/hook-'+role, 'silicon-hook:production')
 
-sessions = root/'sessions'
-sessions.mkdir(exist_ok=True)
-os.chown(sessions, 1000, 1000)
-sessions.chmod(0o700)
-envfile('gateway.env', {
-    'NODE_ENV': 'production', 'HOST': '127.0.0.1', 'PORT': '4317',
-    'HOOK_WEB_ORIGIN': 'https://backend.hook.teamofsilicons.com',
-    'HOOK_FRONTEND_ORIGIN': 'https://hook.teamofsilicons.com',
-    'HOOK_API_UPSTREAM': 'http://127.0.0.1:8080',
-    'HOOK_SESSION_DIR': '/var/lib/hook-web/sessions', 'HOOK_SESSION_KEY': creds['session']})
+# The browser gateway of Hook before 1.0 is retired: the web console is a
+# Next.js app on Vercel. A gateway left from an earlier setup is stopped with
+# its restart disabled (kept for rollback), and Caddy proxies only the API.
 if 'hook-gateway' in existing:
+    run('docker', 'update', '--restart=no', 'hook-gateway')
     run('docker', 'stop', '-t', '30', 'hook-gateway')
-    run('docker', 'rm', 'hook-gateway')
-run('docker', 'run', '-d', '--name', 'hook-gateway', '--restart', 'unless-stopped', '--network', 'host',
-    '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
-    '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3',
-    '--env-file', str(root/'gateway.env'), '-v', f'{sessions}:/var/lib/hook-web/sessions', 'silicon-hook-gateway:production')
 (root/'Caddyfile').write_text('''backend.hook.teamofsilicons.com {
     header Strict-Transport-Security "max-age=31536000"
-    @console path /console/* /auth/callback /auth/callback/*
-    handle @console {
-        reverse_proxy 127.0.0.1:4317
-    }
-    handle {
-        reverse_proxy 127.0.0.1:8080
-    }
+    reverse_proxy 127.0.0.1:8080
 }
 ''')
 if 'hook-https' in existing:
@@ -158,7 +153,7 @@ else:
     run('docker', 'run', '-d', '--name', 'hook-https', '--restart', 'unless-stopped', '--network', 'host',
         '-v', f'{root}/Caddyfile:/etc/caddy/Caddyfile:ro', '-v', 'hook-caddy:/data',
         '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3', 'caddy:2')
-print('Hook runtime installed; verify HTTPS readiness and IAM sign-in.')
+print('Hook runtime installed; verify HTTPS readiness and Silicon Accounts sign-in.')
 
 bucket = os.environ.get('HOOK_BACKUP_BUCKET')
 if bucket:

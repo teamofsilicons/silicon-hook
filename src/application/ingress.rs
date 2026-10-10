@@ -13,7 +13,9 @@ use crate::{
         safety::BlockCheck,
         signature::{HookContext, VerificationOutcome, verify},
     },
-    infrastructure::postgres::{AcceptEvent, EndpointResolution, RecordBlockedRequest, StoreError},
+    infrastructure::postgres::{
+        AcceptEvent, EndpointResolution, EventDelivery, RecordBlockedRequest, StoreError,
+    },
 };
 
 impl HookApplication {
@@ -36,7 +38,7 @@ impl HookApplication {
     ) -> Result<ReceiveOutcome, ApplicationError> {
         let (hook, now) = match self
             .store
-            .resolve_endpoint(&command.silicon_id, &command.endpoint_key)
+            .resolve_endpoint(&command.silicon_segment, &command.endpoint_key)
             .await
             .map_err(map_store_error)?
         {
@@ -45,6 +47,13 @@ impl HookApplication {
                 database_time: at,
             } => (*hook, database_time(at)?),
             EndpointResolution::Retired => return Err(ApplicationError::EndpointRetired),
+            EndpointResolution::AccountDeleted => {
+                return Err(ApplicationError::refused(
+                    410,
+                    "account_deleted",
+                    "The Silicon this endpoint belonged to was deleted; it accepts no more requests.",
+                ));
+            }
             EndpointResolution::Inactive | EndpointResolution::Unknown => {
                 return Err(ApplicationError::NotFound);
             }
@@ -61,9 +70,10 @@ impl HookApplication {
             }
         }
 
+        // `hook.url` in signature expressions is the URL the provider called.
         let hook_url = endpoint_url(
             &self.public_base_url,
-            &command.silicon_id,
+            &command.silicon_segment,
             &command.endpoint_key,
         )?;
         let mut request = capture(&self.public_base_url, command, now)?;
@@ -117,14 +127,15 @@ impl HookApplication {
         hook: Hook,
         request: CapturedRequest,
     ) -> Result<ReceiveOutcome, ApplicationError> {
-        let request = if self.environment_identity().is_some() {
-            request.without_credentials()
-        } else {
-            request
-        };
+        // Delivery is queued only while Ting is configured and the hook belongs
+        // to a Silicon Accounts Silicon (an IAM-era hook not linked yet has
+        // nobody to address).
+        let delivery = self.ting.as_ref().map(|_| EventDelivery {
+            app_id: self.accounts.app_id().to_owned(),
+        });
         self.store
             .accept_event(AcceptEvent {
-                delivery_app_id: self.delivery_app_id.clone(),
+                delivery,
                 event_id: EventId::new(),
                 hook,
                 request,
@@ -140,11 +151,6 @@ impl HookApplication {
         request: CapturedRequest,
         reason: BlockReason,
     ) -> Result<ReceiveOutcome, ApplicationError> {
-        let request = if self.environment_identity().is_some() {
-            request.without_credentials()
-        } else {
-            request
-        };
         let strike = self
             .store
             .record_unverified_request(hook.id(), request.remote_ip(), request.received_at())

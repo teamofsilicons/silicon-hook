@@ -1,24 +1,26 @@
 [package]
 name = "silicon-hook-client"
-version = "0.10.1"
+version = "1.0.0"
 edition = "2024"
 rust-version = "1.98"
-description = "Stateless Rust client for Silicon Hook management and internal Ting event delivery"
+description = "Stateless Rust client for Silicon Hook: a Silicon's signed provider webhooks, Silicon Accounts sign-in for Hook, and event references delivered through Ting"
 license = "Apache-2.0"
 readme = "../../docs/client/README.md"
 repository = "https://github.com/teamofsilicons/silicon-hook"
+keywords = ["webhooks", "silicon", "hook", "accounts"]
+categories = ["api-bindings", "web-programming::http-client"]
 
 [dependencies]
 sha2 = "0.10.9"
 hex = "0.4.3"
 subtle = "2.6.1"
-semver = "1.0.27"
-reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "query"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["form", "json", "rustls", "query"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+silicon-accounts-client = "0.4.0"
 thiserror = "2.0.17"
 time = { version = "0.3.55", features = ["formatting", "parsing", "serde"] }
-tokio = { version = "1.53.1", features = ["sync"] }
+tokio = { version = "1.53.1", features = ["sync", "time"] }
 url = { version = "2.5.7", features = ["serde"] }
 uuid = { version = "1.26.0", features = ["serde", "v4", "v7"] }
 zeroize = { version = "1.8.2", features = ["derive"] }

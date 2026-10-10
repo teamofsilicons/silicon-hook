@@ -1,530 +1,418 @@
-//! Application and PostgreSQL invariants for Hook's Ting delivery boundary.
+//! Delivery through Ting in the Silicon Accounts era: with `HOOK_TING_URL`
+//! set, every accepted event is queued for its Silicon (and observing
+//! Carbons) and sent with a Silicon Accounts proof; without it nothing is
+//! queued and the API says delivery is off.
 
-use std::{sync::Arc, time::Duration};
+mod support;
 
-use anyhow::{Context as _, Result, bail};
-use base64::{Engine as _, engine::general_purpose::STANDARD};
-use bytes::Bytes;
-use hmac::{Hmac, Mac as _};
-use serde_json::Value;
-use sha2::Sha256;
-use silicon_hook::{
-    application::{
-        ApplicationError, Clock, CreateHookCommand, HookApplication, HookWithSecret,
-        ManagementContext, ReceiveOutcome, ReceiveRequestCommand, SigningPatch,
-    },
-    delivery::EventReference,
-    domain::{
-        ActorKind, ActorRef, AuthorizationContext, EncryptionKeyId, EventRecord, HookName,
-        HookTimeZone, OrganizationId, OrganizationRole, SigningSecret, SiliconId,
-        request::MAX_BODY_BYTES,
-    },
-    infrastructure::{
-        crypto::{CursorCodec, SecretCipher, SecretKey, SecretKeyring},
-        postgres::{PostgresStore, TingOutboxClaim, migrate},
-    },
-};
-use sqlx::{PgPool, postgres::PgPoolOptions};
-use testcontainers::{ContainerAsync, ImageExt as _, core::ExecCommand, runners::AsyncRunner as _};
-use testcontainers_modules::postgres::Postgres;
-use time::OffsetDateTime;
-use url::Url;
-use uuid::Uuid;
+use std::sync::{Arc, Mutex};
 
-const ORG: &str = "org:ting-integration";
-const SILICON: &str = "silicon:ting-integration";
-const MESSAGE_ID: &str = "provider-event-1";
-const TIMESTAMP: &str = "1700000000";
+use anyhow::{Context as _, Result};
+use axum::{Json, Router, extract::State, http::HeaderMap, routing::post};
+use http::{Method, StatusCode};
+use serde_json::{Value, json};
+use silicon_hook::delivery::publisher::Publisher;
+use support::api::{TestApi, event};
 
-struct Database {
-    owner: PgPool,
-    store: PostgresStore,
-    api_url: String,
-    _container: ContainerAsync<Postgres>,
+type Calls = Arc<Mutex<Vec<(String, String, Value)>>>;
+
+/// A stub Ting that accepts every send and records what it received.
+struct StubTing {
+    url: String,
+    calls: Calls,
 }
 
-impl Database {
+impl StubTing {
     async fn start() -> Result<Self> {
-        let grants = std::fs::read("deploy/postgres/grant-runtime.sql")?;
-        let container = Postgres::default()
-            .with_tag("16-alpine")
-            .with_copy_to("/opt/grant-runtime.sql", grants)
-            .start()
-            .await?;
-        let host = container.get_host().await?;
-        let port = container.get_host_port_ipv4(5432).await?;
-        let owner = PgPoolOptions::new()
-            .max_connections(4)
-            .connect(&format!(
-                "postgres://postgres:postgres@{host}:{port}/postgres"
-            ))
-            .await?;
-        migrate(&owner).await?;
-        sqlx::raw_sql(
-            "CREATE ROLE ting_delivery_api LOGIN PASSWORD 'test-api' NOSUPERUSER NOINHERIT;
-             CREATE ROLE ting_delivery_worker LOGIN PASSWORD 'test-worker' NOSUPERUSER NOINHERIT;",
-        )
-        .execute(&owner)
-        .await?;
-        let mut result = container
-            .exec(ExecCommand::new([
-                "psql",
-                "--username=postgres",
-                "--dbname=postgres",
-                "--set=api_role=ting_delivery_api",
-                "--set=worker_role=ting_delivery_worker",
-                "--file=/opt/grant-runtime.sql",
-            ]))
-            .await?;
-        let _stdout = result.stdout_to_vec().await?;
-        let stderr = result.stderr_to_vec().await?;
-        if result.exit_code().await? != Some(0) {
-            bail!(
-                "runtime grants failed: {}",
-                String::from_utf8_lossy(&stderr)
-            );
-        }
-        let api_url = format!("postgres://ting_delivery_api:test-api@{host}:{port}/postgres");
-        let pool = PgPoolOptions::new()
-            .max_connections(4)
-            .connect(&api_url)
-            .await?;
-        Ok(Self {
-            owner,
-            store: PostgresStore::new(pool),
-            api_url,
-            _container: container,
-        })
+        let calls = Calls::default();
+        let app = Router::new()
+            .route("/v1/tings", post(send))
+            .route("/v1/subscriptions", post(subscribe))
+            .route("/v1/sent/query", post(query))
+            .with_state(calls.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+        let url = format!("http://{}/", listener.local_addr()?);
+        tokio::spawn(async move {
+            let _ = axum::serve(listener, app).await;
+        });
+        Ok(Self { url, calls })
     }
 
-    async fn scoped_store(&self, environment: Uuid, generation: i64) -> Result<PostgresStore> {
-        let options = self
-            .api_url
-            .parse::<sqlx::postgres::PgConnectOptions>()?
-            .options([
-                ("hook.environment_id", environment.to_string()),
-                ("hook.environment_generation", generation.to_string()),
-            ]);
-        Ok(PostgresStore::new(
-            PgPoolOptions::new()
-                .max_connections(4)
-                .connect_with(options)
-                .await?,
-        ))
+    fn calls(&self, path: &str) -> Vec<(String, Value)> {
+        self.calls
+            .lock()
+            .map(|calls| {
+                calls
+                    .iter()
+                    .filter(|(called, _, _)| called == path)
+                    .map(|(_, authorization, body)| (authorization.clone(), body.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 }
 
-#[derive(Debug)]
-struct FixedClock(OffsetDateTime);
-
-impl Clock for FixedClock {
-    fn now(&self) -> OffsetDateTime {
-        self.0
-    }
-}
-
-fn authorization(org: &str, actor: &str) -> Result<AuthorizationContext> {
-    Ok(AuthorizationContext::new(
-        OrganizationId::new(org)?,
-        ActorRef::try_new(ActorKind::Silicon, actor)?,
-        OrganizationRole::Member,
-        std::iter::empty::<SiliconId>(),
-    ))
-}
-
-fn application(store: PostgresStore) -> Result<HookApplication> {
-    let key_id = EncryptionKeyId::new("ting-test-key")?;
-    let keyring = SecretKeyring::new(key_id.clone(), [(key_id, SecretKey::from_bytes([17; 32]))])?;
-    Ok(HookApplication::new(
-        store,
-        Arc::new(SecretCipher::new(keyring)),
-        Arc::new(CursorCodec::new(SecretKey::from_bytes([29; 32]))),
-        Arc::new(FixedClock(OffsetDateTime::now_utc())),
-        Url::parse("https://hook.ting-integration.test/")?,
-    ))
-}
-
-async fn create_hook(app: &HookApplication, key: &str) -> Result<HookWithSecret> {
-    Ok(app
-        .create_hook(CreateHookCommand {
-            context: ManagementContext {
-                authorization: authorization(ORG, SILICON)?,
-                idempotency_key: key.to_owned(),
-                request_id: None,
-            },
-            silicon_id: SiliconId::new(SILICON)?,
-            name: HookName::new("Provider")?,
-            description: None,
-            time_zone: HookTimeZone::new("UTC")?,
-            signing: SigningPatch::default(),
-        })
-        .await?)
-}
-
-fn signed_headers(secret: &SigningSecret, body: &[u8]) -> Result<Vec<(String, String)>> {
-    let mut mac = <Hmac<Sha256> as hmac::Mac>::new_from_slice(secret.as_str().as_bytes())
-        .context("valid HMAC key")?;
-    mac.update(MESSAGE_ID.as_bytes());
-    mac.update(b".");
-    mac.update(TIMESTAMP.as_bytes());
-    mac.update(b".");
-    mac.update(body);
-    Ok(vec![
-        (
-            "content-type".to_owned(),
-            "application/octet-stream".to_owned(),
-        ),
-        ("webhook-id".to_owned(), MESSAGE_ID.to_owned()),
-        ("webhook-timestamp".to_owned(), TIMESTAMP.to_owned()),
-        (
-            "webhook-signature".to_owned(),
-            format!("v1,{}", STANDARD.encode(mac.finalize().into_bytes())),
-        ),
-    ])
-}
-
-fn request(
-    created: &HookWithSecret,
-    headers: Vec<(String, String)>,
-    body: Bytes,
-) -> Result<ReceiveRequestCommand> {
-    Ok(ReceiveRequestCommand {
-        silicon_id: SiliconId::new(SILICON)?,
-        endpoint_key: created.hook.endpoint_key().clone(),
-        method: "POST".to_owned(),
-        path: format!("/silicon/{SILICON}/{}", created.hook.endpoint_key()),
-        query: None,
-        headers,
-        body,
-        remote_ip: "203.0.113.42".parse()?,
+/// Records a call and returns its number among calls to the same path.
+fn record(calls: &Calls, path: &str, headers: &HeaderMap, body: &Value) -> usize {
+    let authorization = headers
+        .get("authorization")
+        .and_then(|value| value.to_str().ok())
+        .unwrap_or_default()
+        .to_owned();
+    calls.lock().map_or(0, |mut calls| {
+        calls.push((path.to_owned(), authorization, body.clone()));
+        calls.iter().filter(|(called, _, _)| called == path).count()
     })
 }
 
-async fn accept(app: &HookApplication, hook: &HookWithSecret, body: Bytes) -> Result<EventRecord> {
-    let secret = hook.signing_secret.as_ref().context("generated secret")?;
-    let command = request(hook, signed_headers(secret, &body)?, body)?;
-    match app.receive_request(command).await? {
-        ReceiveOutcome::Accepted(event) => Ok(event),
-        ReceiveOutcome::Blocked(_) => bail!("valid signature was rejected"),
+async fn send(
+    State(calls): State<Calls>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    let serial = record(&calls, "send", &headers, &body);
+    let mut accepted = json!({"id": format!("msg_{serial}"), "key": body["key"], "status": "accepted",
+        "silent": false, "created_at": "2026-10-10T00:00:00Z"});
+    if body["delivery"] == "required" {
+        accepted["delivery"] = json!("required");
     }
+    (StatusCode::ACCEPTED, Json(accepted))
 }
 
-async fn claim_one(store: &PostgresStore) -> Result<TingOutboxClaim> {
-    let mut claims = store.claim_ting(10, Duration::from_secs(60)).await?;
-    assert_eq!(claims.len(), 1);
-    claims.pop().context("one queued notification")
+async fn subscribe(
+    State(calls): State<Calls>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> (StatusCode, Json<Value>) {
+    record(&calls, "subscribe", &headers, &body);
+    (
+        StatusCode::CREATED,
+        Json(
+            json!({"id": "sub_1", "app_id": body["app_id"], "for": body["for"],
+        "active": true, "required_delivery": false}),
+        ),
+    )
 }
 
-fn reference(claim: &TingOutboxClaim) -> Result<(Value, EventReference)> {
-    let envelope: Value = serde_json::from_slice(&claim.request_body)?;
-    let reference = serde_json::from_value(envelope["data"]["data"]["metadata"].clone())?;
-    Ok((envelope, reference))
+async fn query(
+    State(calls): State<Calls>,
+    headers: HeaderMap,
+    Json(body): Json<Value>,
+) -> Json<Value> {
+    record(&calls, "query", &headers, &body);
+    let sent = calls.lock().ok().and_then(|calls| {
+        calls
+            .iter()
+            .filter(|(path, _, _)| path == "send")
+            .enumerate()
+            .find(|(index, _)| body["id"] == format!("msg_{}", index + 1))
+            .map(|(_, (_, _, sent))| sent.clone())
+    });
+    let sent = sent.unwrap_or_default();
+    let mut detail = json!({"id": body["id"], "type": "hook.webhook.received", "for": sent["for"],
+        "read": true, "silent": false,
+        "deliveries": [{"webhook_id": "wh_1", "delivery_acked": true, "read_acked": true}]});
+    if sent["delivery"] == "required" {
+        detail["delivery"] = json!("required");
+    }
+    Json(detail)
+}
+
+fn setup(api: &TestApi) -> (String, String, String) {
+    let stub = &api.accounts;
+    stub.add_carbon("CAlice1", "c:alice");
+    stub.add_carbon("CBob2", "c:bob");
+    stub.add_carbon("CDave4", "c:dave");
+    stub.add_silicon("SCos1", "si:cos", Some(("CAlice1", "c:alice")));
+    (
+        stub.token("SCos1", "silicon", "si:cos"),
+        stub.token("CAlice1", "carbon", "c:alice"),
+        stub.token("CBob2", "carbon", "c:bob"),
+    )
+}
+
+async fn open_hook(api: &TestApi, cos: &str) -> Result<String> {
+    let body = json!({"name": "Open", "signature": {"required": false}});
+    let (status, hook) = api
+        .call(
+            Method::POST,
+            "/api/v3/silicons/si:cos/hooks",
+            Some(cos),
+            Some(&body),
+        )
+        .await?;
+    assert_eq!(status, StatusCode::CREATED, "{hook}");
+    Ok(format!(
+        "/silicon/si:cos/{}",
+        hook["endpoint_key"].as_str().unwrap_or_default()
+    ))
+}
+
+async fn queued(api: &TestApi) -> Result<Vec<(String, bool)>> {
+    Ok(sqlx::query_as(
+        "SELECT recipient_id, observer_subscription_id IS NOT NULL FROM hook_private.ting_outbox
+         WHERE accepted_at IS NULL ORDER BY recipient_id",
+    )
+    .fetch_all(api.owner.pool())
+    .await?)
 }
 
 #[tokio::test]
-async fn signature_rejection_never_queues_and_outbox_failure_rolls_back_acceptance() -> Result<()> {
-    let database = Database::start().await?;
-    let app = application(database.store.clone())?;
-    let hook = create_hook(&app, "atomic-create-0001").await?;
-    let body = Bytes::from_static(b"verified provider payload");
-    let secret = hook.signing_secret.as_ref().context("generated secret")?;
-    let wrong_signature = signed_headers(secret, b"different content")?;
-    let rejected = app
-        .receive_request(request(&hook, wrong_signature, body.clone())?)
-        .await?;
-    assert!(matches!(rejected, ReceiveOutcome::Blocked(_)));
-    assert_eq!(
-        sqlx::query_as::<_, (i64, i64, i64)>(
-            "SELECT (SELECT count(*) FROM hook.events),
-                    (SELECT count(*) FROM hook_private.ting_outbox),
-                    (SELECT count(*) FROM hook.blocked_requests)",
-        )
-        .fetch_one(&database.owner)
-        .await?,
-        (0, 0, 1)
-    );
-
-    // A storage failure after the event INSERT must roll back the complete
-    // acceptance, including its sequence and hook activity timestamp.
-    sqlx::raw_sql(
-        "CREATE FUNCTION hook_private.reject_test_ting() RETURNS trigger LANGUAGE plpgsql AS $$
-             BEGIN RAISE EXCEPTION 'injected outbox failure' USING ERRCODE='23514'; END $$;
-         CREATE TRIGGER reject_test_ting BEFORE INSERT ON hook_private.ting_outbox
-             FOR EACH ROW EXECUTE FUNCTION hook_private.reject_test_ting();",
-    )
-    .execute(&database.owner)
-    .await?;
-    assert!(accept(&app, &hook, body.clone()).await.is_err());
-    assert_eq!(
-        sqlx::query_as::<_, (i64, i64, i64)>(
-            "SELECT (SELECT count(*) FROM hook.events),
-                    (SELECT count(*) FROM hook_private.ting_outbox),
-                    (SELECT count(*) FROM hook_private.delivery_sequences)",
-        )
-        .fetch_one(&database.owner)
-        .await?,
-        (0, 0, 0)
-    );
-    assert!(
-        sqlx::query_scalar::<_, bool>(
-            "SELECT last_received_at IS NULL FROM hook.hooks WHERE id=$1"
-        )
-        .bind(hook.hook.id().as_uuid())
-        .fetch_one(&database.owner)
-        .await?
-    );
-    sqlx::raw_sql(
-        "DROP TRIGGER reject_test_ting ON hook_private.ting_outbox;
-         DROP FUNCTION hook_private.reject_test_ting();",
-    )
-    .execute(&database.owner)
-    .await?;
-    let event = accept(&app, &hook, body).await?;
-    assert_eq!(event.delivery_sequence().get(), 1);
-    let claim = claim_one(&database.store).await?;
-    let (envelope, reference) = reference(&claim)?;
-    assert_eq!(reference.id, event.id());
-    assert_eq!(envelope["for"], SILICON);
-    assert_eq!(envelope["type"], "hook.webhook.received");
-    assert_eq!(claim.event_id, event.id().as_uuid());
-    Ok(())
-}
-
-#[tokio::test]
-async fn maximum_provider_payload_uses_compact_ting_and_current_authorized_hydration() -> Result<()>
-{
-    let database = Database::start().await?;
-    let app = application(database.store.clone())?;
-    let hook = create_hook(&app, "large-create-0001").await?;
-    let marker = b"provider-private-payload-must-stay-in-hook";
-    let mut bytes = vec![b'x'; MAX_BODY_BYTES];
-    bytes[..marker.len()].copy_from_slice(marker);
-    let body = Bytes::from(bytes);
-    let secret = hook.signing_secret.as_ref().context("generated secret")?;
-    let mut headers = signed_headers(secret, &body)?;
-    headers.push((
-        "authorization".to_owned(),
-        "Bearer provider-only-secret".to_owned(),
-    ));
-    let outcome = app
-        .receive_request(request(&hook, headers, body.clone())?)
-        .await?;
-    let ReceiveOutcome::Accepted(event) = outcome else {
-        bail!("maximum-size signed body was rejected");
+#[allow(clippy::too_many_lines, reason = "one delivery scenario, step by step")]
+async fn accepted_events_reach_the_silicon_and_its_observers_with_accounts_proofs() -> Result<()> {
+    let ting = StubTing::start().await?;
+    let Some(api) = TestApi::start_with_ting(Some(&ting.url)).await? else {
+        return Ok(());
     };
-    let claim = claim_one(&database.store).await?;
-    assert!(
-        claim.request_body.len() < 4_096,
-        "notification must stay compact"
-    );
-    let text = std::str::from_utf8(&claim.request_body)?;
-    assert!(!text.contains(std::str::from_utf8(marker)?));
-    assert!(!text.contains("provider-only-secret"));
-    assert!(!text.contains("webhook-signature"));
-    let (envelope, pointer) = reference(&claim)?;
-    assert_eq!(envelope["data"]["type"], "new_event");
-    assert_eq!(pointer.id, event.id());
-    assert_eq!(pointer.environment_id, Uuid::nil());
-    assert_eq!(pointer.environment_generation, 0);
-    let silicon = SiliconId::new(SILICON)?;
-    let expected = Some((pointer.environment_id, pointer.environment_generation));
-    let hydrated = app
-        .get_event(
-            &authorization(ORG, SILICON)?,
-            &silicon,
-            pointer.id,
-            expected,
-        )
+    let (cos, alice, bob) = setup(&api);
+    let (_, status) = api
+        .call(Method::GET, "/api/v3/delivery", Some(&cos), None)
         .await?;
-    assert_eq!(hydrated.request().body(), &body);
-    assert_eq!(hydrated.request().body().len(), MAX_BODY_BYTES);
-    assert!(matches!(
-        app.get_event(
-            &authorization("org:foreign", SILICON)?,
-            &silicon,
-            pointer.id,
-            expected
-        )
-        .await,
-        Err(ApplicationError::NotFound)
-    ));
-    assert!(matches!(
-        app.get_event(
-            &authorization(ORG, "silicon:foreign")?,
-            &silicon,
-            pointer.id,
-            expected
-        )
-        .await,
-        Err(ApplicationError::NotFound)
-    ));
-    assert!(matches!(
-        app.get_event(
-            &authorization(ORG, SILICON)?,
-            &silicon,
-            pointer.id,
-            Some((Uuid::new_v4(), 1))
-        )
-        .await,
-        Err(ApplicationError::NotFound)
-    ));
-    let visible_carbon = AuthorizationContext::new(
-        OrganizationId::new(ORG)?,
-        ActorRef::try_new(ActorKind::Carbon, "carbon:observer")?,
-        OrganizationRole::Member,
-        [silicon.clone()],
+    assert_eq!(status, json!({"enabled": true, "transport": "ting"}));
+
+    let subscription = "/api/v3/silicons/si:cos/delivery/subscription";
+    let (status, observed) = api
+        .call(Method::POST, subscription, Some(&alice), None)
+        .await?;
+    assert_eq!(status, StatusCode::OK, "{observed}");
+    assert_eq!(observed["receiving"], true);
+    let enrolment = ting.calls("subscribe");
+    assert_eq!(enrolment.len(), 1);
+    assert!(
+        enrolment[0].0.starts_with("Proof sap_stub_"),
+        "{enrolment:?}"
     );
     assert_eq!(
-        app.get_event(&visible_carbon, &silicon, pointer.id, expected)
+        enrolment[0].1["for"],
+        json!({"uuid": "CAlice1", "id": "c:alice"})
+    );
+    assert_eq!(
+        api.call(Method::POST, subscription, Some(&bob), None)
             .await?
-            .request()
-            .body(),
-        &body
+            .0,
+        StatusCode::FORBIDDEN
     );
-    let carbon_without_visibility = AuthorizationContext::new(
-        OrganizationId::new(ORG)?,
-        ActorRef::try_new(ActorKind::Carbon, "carbon:observer")?,
-        OrganizationRole::Member,
-        std::iter::empty::<SiliconId>(),
+    assert_eq!(
+        api.call(Method::POST, subscription, Some(&cos), None)
+            .await?
+            .0,
+        StatusCode::FORBIDDEN
     );
-    assert!(matches!(
-        app.get_event(&carbon_without_visibility, &silicon, pointer.id, expected)
-            .await,
-        Err(ApplicationError::NotFound)
-    ));
+
+    let endpoint = open_hook(&api, &cos).await?;
+    assert_eq!(
+        api.deliver(&endpoint, &[], b"{\"n\":1}").await?.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        queued(&api).await?,
+        vec![("CAlice1".to_owned(), true), ("SCos1".to_owned(), false)]
+    );
+
+    let ting_adapter = api
+        .application
+        .delivery()
+        .cloned()
+        .context("delivery is on")?;
+    let publisher = Publisher::new(api.application.store().clone(), ting_adapter);
+    while publisher.publish_one().await? {}
+    assert_eq!(queued(&api).await?, vec![]);
+    let sends = ting.calls("send");
+    assert_eq!(sends.len(), 2);
+    for (authorization, body) in &sends {
+        assert!(
+            authorization.starts_with("Proof sap_stub_"),
+            "{authorization}"
+        );
+        assert_eq!(body["type"], "hook.webhook.received");
+        assert_eq!(
+            body["data"]["data"]["metadata"]["silicon"],
+            json!({"uuid": "SCos1", "id": "si:cos"})
+        );
+    }
+    let to_silicon = sends
+        .iter()
+        .find(|(_, body)| body["for"]["uuid"] == "SCos1")
+        .context("send to Cos")?;
+    assert_eq!(
+        (
+            to_silicon.1["for"]["id"].clone(),
+            to_silicon.1["delivery"].clone()
+        ),
+        (json!("si:cos"), json!("required"))
+    );
+    let to_alice = sends
+        .iter()
+        .find(|(_, body)| body["for"]["uuid"] == "CAlice1")
+        .context("copy for Alice")?;
+    assert!(
+        to_alice.1.get("delivery").is_none(),
+        "observer copies are ordinary notifications"
+    );
+    let proofs = api.accounts.proofs();
+    assert!(
+        proofs
+            .iter()
+            .any(|proof| proof["kind"] == "app_verification"
+                && proof["receiving_app"] == "ting"
+                && proof["scopes"] == json!(["tings.send"])),
+        "{proofs:?}"
+    );
+    assert!(
+        proofs
+            .iter()
+            .any(|proof| proof["kind"] == "user_verification"
+                && proof["subject_token"] == alice.as_str()
+                && proof["scopes"] == json!(["tings.subscribe"])),
+        "{proofs:?}"
+    );
+
+    let event_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM hook.events")
+        .fetch_one(api.owner.pool())
+        .await?;
+    let path = format!("/api/v3/silicons/si:cos/events/{event_id}/publication");
+    let (status, publication) = api.call(Method::GET, &path, Some(&cos), None).await?;
+    assert_eq!(status, StatusCode::OK, "{publication}");
+    assert_eq!(
+        (
+            publication["state"].clone(),
+            publication["recipient"].clone()
+        ),
+        (json!("accepted_by_ting"), json!("SCos1"))
+    );
+    assert_eq!(
+        publication["recipient_receipt"]["read"], true,
+        "{publication}"
+    );
+
+    // A custodian that hands the Silicon over stops receiving its events.
+    api.accounts
+        .set_custodian("SCos1", Some(("CDave4", "c:dave")));
+    let moved = event(
+        "evt_move",
+        "silicon.custodian_changed",
+        &json!({"uuid": "SCos1",
+        "from": {"uuid": "CAlice1", "id": "c:alice"}, "to": {"uuid": "CDave4", "id": "c:dave"}}),
+    );
+    assert_eq!(api.webhook(&moved).await?.0, StatusCode::NO_CONTENT);
+    assert_eq!(
+        api.deliver(&endpoint, &[], b"{\"n\":2}").await?.0,
+        StatusCode::OK
+    );
+    assert_eq!(queued(&api).await?, vec![("SCos1".to_owned(), false)]);
     Ok(())
 }
 
-async fn insert_environment(database: &Database, id: Uuid) -> Result<()> {
-    sqlx::query(
-        "INSERT INTO hook_control.environments
-             (id,org_id,creator_kind,creator_id,name,key_hash,iam_key_hash,
-              creation_request_hash,creation_input_hash,encrypted_credentials,honeycomb_state)
-         VALUES ($1,$2,'carbon','carbon:owner','Ting integration',$3,$4,$5,$6,'{}'::jsonb,'ready')",
+/// One cause (here an unknown Ting app at Silicon Accounts) must not become a
+/// proof request per queued send: a refusal pauses proof requests, the sends
+/// stay queued, and the publication status says why.
+#[tokio::test]
+async fn a_refused_proof_pauses_proof_requests_while_sends_stay_queued() -> Result<()> {
+    let ting = StubTing::start().await?;
+    let Some(api) = TestApi::start_with_ting(Some(&ting.url)).await? else {
+        return Ok(());
+    };
+    let (cos, _, _) = setup(&api);
+    api.accounts.refuse_proofs(true);
+    let endpoint = open_hook(&api, &cos).await?;
+    for n in 0..5 {
+        let body = format!("{{\"n\":{n}}}");
+        assert_eq!(
+            api.deliver(&endpoint, &[], body.as_bytes()).await?.0,
+            StatusCode::OK
+        );
+    }
+    let adapter = api
+        .application
+        .delivery()
+        .cloned()
+        .context("delivery is on")?;
+    let publisher = Publisher::new(api.application.store().clone(), adapter);
+    while publisher.publish_one().await? {}
+    assert_eq!(
+        api.accounts.refused_proofs(),
+        1,
+        "one request, then a pause"
+    );
+    assert!(ting.calls("send").is_empty());
+    assert_eq!(
+        queued(&api).await?.len(),
+        5,
+        "every send waits for a later attempt"
+    );
+    let codes: Vec<(Option<String>, i64)> = sqlx::query_as(
+        "SELECT last_error_code, attempts FROM hook_private.ting_outbox WHERE accepted_at IS NULL",
     )
-    .bind(id)
-    .bind(ORG)
-    .bind([1_u8; 32].as_slice())
-    .bind([2_u8; 32].as_slice())
-    .bind([3_u8; 32].as_slice())
-    .bind([4_u8; 32].as_slice())
-    .execute(&database.owner)
+    .fetch_all(api.owner.pool())
     .await?;
+    assert!(
+        codes
+            .iter()
+            .all(|(code, attempts)| code.as_deref() == Some("proof_unavailable") && *attempts == 1),
+        "{codes:?}"
+    );
     Ok(())
 }
 
 #[tokio::test]
-#[allow(
-    clippy::too_many_lines,
-    reason = "one clean must invalidate old claims and preserve production"
-)]
-async fn clean_fences_old_claims_and_references_without_touching_production() -> Result<()> {
-    let database = Database::start().await?;
-    let production = application(database.store.clone())?;
-    let production_hook = create_hook(&production, "production-create-0001").await?;
-    let production_event = accept(
-        &production,
-        &production_hook,
-        Bytes::from_static(b"production"),
-    )
-    .await?;
-    let environment = Uuid::now_v7();
-    insert_environment(&database, environment).await?;
-    let old_store = database.scoped_store(environment, 1).await?;
-    let old_app = production.for_test_environment(old_store.clone(), environment, 1);
-    let old_hook = create_hook(&old_app, "test-create-0001").await?;
-    let old_event = accept(&old_app, &old_hook, Bytes::from_static(b"before clean")).await?;
-    let old_claim = claim_one(&old_store).await?;
-    let (_, old_pointer) = reference(&old_claim)?;
-    assert_eq!(old_pointer.environment_id, environment);
-    assert_eq!(old_pointer.environment_generation, 1);
-    assert_eq!(old_claim.environment_generation, 1);
-    let current_generation: i64 = sqlx::query_scalar("SELECT hook_control.clean_environment($1)")
-        .bind(environment)
-        .fetch_one(&database.owner)
+async fn without_ting_nothing_is_queued_and_the_api_says_delivery_is_off() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let (cos, alice, _) = setup(&api);
+    let (_, status) = api
+        .call(Method::GET, "/api/v3/delivery", Some(&cos), None)
         .await?;
-    assert_eq!(current_generation, 2);
-    assert_eq!(
-        sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM hook_private.ting_outbox WHERE environment_id=$1"
-        )
-        .bind(environment)
-        .fetch_one(&database.owner)
-        .await?,
-        0
-    );
-    assert!(!old_store.ting_claim_is_current(&old_claim).await?);
+    assert_eq!(status["enabled"], false);
     assert!(
-        old_store
-            .claim_ting(1, Duration::from_secs(60))
-            .await
-            .is_err()
+        status["reason"]
+            .as_str()
+            .is_some_and(|reason| reason.contains("HOOK_TING_URL"))
     );
-    assert!(
-        old_store
-            .complete_ting(&old_claim, "msg_stale", false)
-            .await
-            .is_err()
-    );
-    let auth = authorization(ORG, SILICON)?;
-    let silicon = SiliconId::new(SILICON)?;
-    assert!(matches!(
-        old_app
-            .get_event(&auth, &silicon, old_event.id(), Some((environment, 1)))
-            .await,
-        Err(ApplicationError::StateConflict)
-    ));
+    let (_, ready) = api.call(Method::GET, "/readyz", None, None).await?;
+    assert_eq!(ready["delivery"]["ting"], "disabled");
+    for (path, token) in [
+        ("/api/v3/delivery/recipient", &cos),
+        ("/api/v3/silicons/si:cos/delivery/subscription", &alice),
+    ] {
+        let (status, refused) = api.call(Method::POST, path, Some(token), None).await?;
+        assert_eq!(
+            (status, refused["error"]["code"].clone()),
+            (StatusCode::CONFLICT, json!("delivery_disabled")),
+            "{path}"
+        );
+    }
 
-    let current_store = database
-        .scoped_store(environment, current_generation)
+    let endpoint = open_hook(&api, &cos).await?;
+    assert_eq!(api.deliver(&endpoint, &[], b"{}").await?.0, StatusCode::OK);
+    assert_eq!(queued(&api).await?, vec![]);
+    let event_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM hook.events")
+        .fetch_one(api.owner.pool())
         .await?;
-    let current_app =
-        production.for_test_environment(current_store.clone(), environment, current_generation);
-    assert!(matches!(
-        current_app
-            .get_event(&auth, &silicon, old_pointer.id, Some((environment, 1)))
-            .await,
-        Err(ApplicationError::NotFound)
-    ));
-    assert!(
-        !current_store
-            .complete_ting(&old_claim, "msg_stale", false)
-            .await?
-    );
-    let new_hook = create_hook(&current_app, "test-create-0001").await?;
-    let new_event = accept(&current_app, &new_hook, Bytes::from_static(b"after clean")).await?;
-    assert_eq!(new_event.delivery_sequence().get(), 1);
-    assert_ne!(new_event.id(), old_event.id());
-    let new_claim = claim_one(&current_store).await?;
-    let (_, new_pointer) = reference(&new_claim)?;
-    assert_eq!(new_pointer.environment_generation, 2);
-    assert_eq!(new_claim.environment_generation, 2);
-    assert_ne!(new_claim.idempotency_key, old_claim.idempotency_key);
+    let (status, publication) = api
+        .call(
+            Method::GET,
+            &format!("/api/v3/silicons/si:cos/events/{event_id}/publication"),
+            Some(&cos),
+            None,
+        )
+        .await?;
     assert_eq!(
-        current_app
-            .get_event(&auth, &silicon, new_pointer.id, Some((environment, 2)))
-            .await?
-            .request()
-            .body()
-            .as_ref(),
-        b"after clean"
+        (status, publication["state"].clone()),
+        (StatusCode::OK, json!("delivery_disabled"))
     );
+    let (status, events) = api
+        .call(
+            Method::GET,
+            "/api/v3/silicons/si:cos/events",
+            Some(&cos),
+            None,
+        )
+        .await?;
     assert_eq!(
-        production
-            .get_event(
-                &auth,
-                &silicon,
-                production_event.id(),
-                Some((Uuid::nil(), 0))
-            )
-            .await?
-            .request()
-            .body()
-            .as_ref(),
-        b"production"
+        (status, events["items"].as_array().map(Vec::len)),
+        (StatusCode::OK, Some(1)),
+        "events are still kept"
     );
-    let production_claim = claim_one(&database.store).await?;
-    assert_eq!(production_claim.environment_id, Uuid::nil());
-    assert_eq!(production_claim.event_id, production_event.id().as_uuid());
     Ok(())
 }

@@ -5,8 +5,8 @@ use std::net::IpAddr;
 use bytes::Bytes;
 
 use crate::domain::{
-    AuthorizationContext, BlockedRequest, BlockedRequestId, DeliveryCursor, EndpointKey, EventId,
-    EventRecord, Hook, HookDescription, HookId, HookName, HookTimeZone, SigningSecret, SiliconId,
+    AuthorizationContext, BlockedRequest, BlockedRequestId, EndpointKey, EventId, EventRecord,
+    Hook, HookDescription, HookId, HookName, HookTimeZone, SigningSecret,
     signature::{
         Expression, SecretEncoding, SignatureAlgorithm, SignatureConfig, SignatureEncoding,
     },
@@ -15,7 +15,7 @@ use crate::domain::{
 /// Request attribution shared by authorized management mutations.
 #[derive(Clone, Debug)]
 pub struct ManagementContext {
-    /// IAM-derived authorization facts for this request.
+    /// The actor's established access to the target Silicon's hooks.
     pub authorization: AuthorizationContext,
     /// Caller-supplied idempotency key.
     pub idempotency_key: String,
@@ -79,10 +79,8 @@ impl SigningPatch {
 /// Input for normal hook creation.
 #[derive(Clone, Debug)]
 pub struct CreateHookCommand {
-    /// Authorized mutation context.
+    /// Authorized mutation context (it names the target Silicon).
     pub context: ManagementContext,
-    /// Target Silicon.
-    pub silicon_id: SiliconId,
     /// Validated display and provider name.
     pub name: HookName,
     /// Optional validated description.
@@ -96,10 +94,8 @@ pub struct CreateHookCommand {
 /// Input for a hook mutation with no JSON body.
 #[derive(Clone, Debug)]
 pub struct HookMutationCommand {
-    /// Authorized mutation context.
+    /// Authorized mutation context (it names the target Silicon).
     pub context: ManagementContext,
-    /// Target Silicon.
-    pub silicon_id: SiliconId,
     /// Target hook.
     pub hook_id: HookId,
 }
@@ -107,10 +103,8 @@ pub struct HookMutationCommand {
 /// Input for a non-idempotency-keyed hook deletion.
 #[derive(Clone, Debug)]
 pub struct DeleteHookCommand {
-    /// IAM-derived authorization facts for this request.
+    /// The actor's established access to the target Silicon's hooks.
     pub authorization: AuthorizationContext,
-    /// Target Silicon.
-    pub silicon_id: SiliconId,
     /// Target hook.
     pub hook_id: HookId,
     /// Correlation identifier assigned at the HTTP boundary.
@@ -147,10 +141,8 @@ impl HookPatch {
 /// Input for updating one hook.
 #[derive(Clone, Debug)]
 pub struct UpdateHookCommand {
-    /// IAM-derived authorization facts for this request.
+    /// The actor's established access to the target Silicon's hooks.
     pub authorization: AuthorizationContext,
-    /// Target Silicon.
-    pub silicon_id: SiliconId,
     /// Target hook.
     pub hook_id: HookId,
     /// Fields to change.
@@ -162,10 +154,8 @@ pub struct UpdateHookCommand {
 /// Input for changing the desired enabled state of one or more hooks.
 #[derive(Clone, Debug)]
 pub struct SetHooksEnabledCommand {
-    /// IAM-derived authorization facts for this request.
+    /// The actor's established access to the target Silicon's hooks.
     pub authorization: AuthorizationContext,
-    /// Target Silicon.
-    pub silicon_id: SiliconId,
     /// Target hooks. The application validates uniqueness and the batch bound.
     pub hook_ids: Vec<HookId>,
     /// Desired ingress state: `true` enables and `false` disables.
@@ -174,47 +164,20 @@ pub struct SetHooksEnabledCommand {
     pub request_id: Option<String>,
 }
 
-/// Input for finding or creating the Silicon's IAM hook before it is
-/// registered with IAM.
+/// Input for finding or creating the Silicon's "Silicon Accounts" hook.
 #[derive(Clone, Debug)]
-pub struct ConnectIamHookCommand {
-    /// Authorized mutation context.
+pub struct ConnectAccountsHookCommand {
+    /// Authorized mutation context (it names the target Silicon).
     pub context: ManagementContext,
-    /// Silicon whose IAM hook is being connected.
-    pub silicon_id: SiliconId,
-}
-
-/// Input for storing the signing secret IAM issued for the Silicon's webhook.
-#[derive(Clone)]
-pub struct BindIamHookSecretCommand {
-    /// Authorized mutation context.
-    pub context: ManagementContext,
-    /// Silicon whose IAM hook is being connected.
-    pub silicon_id: SiliconId,
-    /// The IAM hook prepared for this Silicon.
-    pub hook_id: HookId,
-    /// Secret IAM signs deliveries with.
-    pub signing_secret: SigningSecret,
-}
-
-impl std::fmt::Debug for BindIamHookSecretCommand {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter
-            .debug_struct("BindIamHookSecretCommand")
-            .field("context", &self.context)
-            .field("silicon_id", &self.silicon_id)
-            .field("hook_id", &self.hook_id)
-            .field("signing_secret", &"[REDACTED]")
-            .finish()
-    }
 }
 
 /// Raw public-ingress input preserved exactly as the provider sent it.
 #[derive(Clone, Debug)]
 pub struct ReceiveRequestCommand {
-    /// Silicon encoded in the endpoint path.
-    pub silicon_id: SiliconId,
-    /// Six-character endpoint routing key.
+    /// Silicon segment of the URL exactly as received (an id the Silicon has
+    /// held, its uuid, or the IAM-era id an old hook was created under).
+    pub silicon_segment: String,
+    /// Eight-character endpoint routing key.
     pub endpoint_key: EndpointKey,
     /// HTTP method token.
     pub method: String,
@@ -274,10 +237,8 @@ impl ReceiveOutcome {
 /// Authorized history query for verified or blocked requests.
 #[derive(Clone, Debug)]
 pub struct ListHistoryCommand {
-    /// IAM-derived authorization facts for this request.
+    /// The actor's established access to the target Silicon's hooks.
     pub authorization: AuthorizationContext,
-    /// Target Silicon.
-    pub silicon_id: SiliconId,
     /// Optional hook filter.
     pub hook_id: Option<HookId>,
     /// Number of rows, from 1 through 10,000.
@@ -293,41 +254,6 @@ pub struct HistoryPage<T> {
     pub items: Vec<T>,
     /// Opaque cursor for the next page.
     pub next_cursor: Option<String>,
-}
-
-/// Authorized pull of ordered deliveries.
-#[derive(Clone, Debug)]
-pub struct PullDeliveriesCommand {
-    /// IAM-derived authorization facts for this request.
-    pub authorization: AuthorizationContext,
-    /// Target Silicon stream.
-    pub silicon_id: SiliconId,
-    /// Explicit stream position; the consumer's acknowledged cursor when absent.
-    pub after_sequence: Option<i64>,
-    /// Number of events, from 1 through 1,000.
-    pub limit: u32,
-}
-
-/// Ordered deliveries after a position.
-#[derive(Clone, Debug)]
-pub struct DeliveryBatch {
-    /// Events in ascending sequence order.
-    pub items: Vec<EventRecord>,
-    /// The consumer's acknowledged position.
-    pub cursor: DeliveryCursor,
-    /// Highest sequence allocated for the Silicon.
-    pub latest_sequence: i64,
-}
-
-/// Authorized acknowledgment of ordered deliveries.
-#[derive(Clone, Debug)]
-pub struct AcknowledgeDeliveriesCommand {
-    /// IAM-derived authorization facts for this request.
-    pub authorization: AuthorizationContext,
-    /// Target Silicon stream.
-    pub silicon_id: SiliconId,
-    /// Highest sequence the consumer has processed.
-    pub through_sequence: i64,
 }
 
 /// Hook metadata paired with its bounded one-time signing credential.

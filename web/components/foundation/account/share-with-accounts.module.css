@@ -1,0 +1,21 @@
+/*
+ * The share field, in Arc's tag-input shape: one squircle control holding the account chips and the text field, a
+ * strong edge while focused, a danger edge when what was typed is not an account id.
+ */
+.field { display: grid; min-width: 0; gap: var(--space-2); }
+.label { color: var(--foreground); font-size: var(--text-sm); font-weight: 500; }
+.control { --sq-r: var(--radius-control); --sq-fill: var(--surface); --sq-stroke: var(--border); display: flex; min-width: 0; min-height: var(--control-height-md); flex-wrap: wrap; align-items: center; gap: 6px; border: 1px solid var(--sq-stroke); padding: 5px 6px; background: var(--sq-fill); cursor: text; transition: border-color var(--duration-fast) var(--ease-standard); }
+@media (hover: hover) and (pointer: fine) { .control:hover:not(:focus-within) { --sq-stroke: var(--border-strong); } }
+.control:focus-within { --sq-stroke: var(--foreground); }
+.control[data-invalid] { --sq-stroke: var(--danger); }
+.control[data-disabled] { opacity: .6; cursor: not-allowed; }
+.chips { display: contents; margin: 0; padding: 0; list-style: none; }
+.item { display: inline-flex; min-width: 0; max-width: 100%; }
+.input { min-width: 140px; height: 30px; flex: 1 1 140px; border: 0; padding: 0 6px; background: transparent; color: var(--foreground); font: inherit; font-size: var(--text-sm); }
+.input:focus, .input:focus-visible { outline: none; }
+.input::placeholder { color: var(--text-muted); }
+.problem { display: grid; gap: 2px; color: var(--danger); font-size: var(--text-xs); line-height: var(--leading-body); }
+.problem p { margin: 0; }
+.problem strong { font-weight: 600; }
+.hint { margin: 0; color: var(--text-muted); font-size: var(--text-xs); line-height: var(--leading-body); }
+@media (prefers-reduced-motion: reduce) { .control { transition: none; } }

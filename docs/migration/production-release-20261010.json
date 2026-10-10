@@ -1,0 +1,73 @@
+{
+  "app_id": "hook",
+  "date": "2026-10-10",
+  "scope": "Parallel Accounts app rollout; existing IAM Silicons, custody, stores, services and clients preserved",
+  "public_api": "https://api.hook.teamofsilicons.com",
+  "public_website": "https://hook.teamofsilicons.com",
+  "legacy_api": "https://backend.hook.teamofsilicons.com",
+  "runtime_source": "49db2fd473e104e594fe823d2310d6eb8bbf50c9",
+  "ui_source": "1a6fa6fcd4e2c5eab3117c3a5b1a6b8681f5aaef",
+  "cli_source": "49db2fd473e104e594fe823d2310d6eb8bbf50c9",
+  "cli_version": "1.0.0",
+  "cli_native_manifest": {
+    "app_id": "hook",
+    "version": "1.0.0",
+    "source_commit": "49db2fd473e104e594fe823d2310d6eb8bbf50c9",
+    "verifier_commit": "e118d39f304a6864065e869e861f63e0b8a131a6",
+    "workflow": "https://github.com/teamofsilicons/silicon-hook/actions/runs/38058408120",
+    "reports": [
+      "hook-linux-aarch64.json",
+      "hook-linux-x86_64.json",
+      "hook-macos-aarch64.json",
+      "hook-macos-x86_64.json",
+      "hook-windows-aarch64.json",
+      "hook-windows-x86_64.json"
+    ]
+  },
+  "public_github_releases": [
+    "https://github.com/teamofsilicons/silicon-hook/releases/tag/v1.0.0"
+  ],
+  "crates_published": {
+    "silicon-hook-client": "1.0.0",
+    "silicon-hook-cli": "1.0.0"
+  },
+  "authenticated_browser": {
+    "keyboardConfirmation": true,
+    "authenticated": true,
+    "authMethod": "genuine CLI session in existing BFF sealed-cookie format",
+    "pageErrors": [],
+    "themes": [
+      "light",
+      "dark"
+    ],
+    "viewports": [
+      "desktop",
+      "mobile"
+    ],
+    "spacing": "1.5rem"
+  },
+  "webhook_signed_ping": "delivered",
+  "temporary_fixture": {
+    "uuid": "6af7bf6a-2fec-4f09-a502-c11447b8f4ac",
+    "account_deletion": "Permanently deleted after DM/Extend/Commit/Hook and Remind verification; existing IAM accounts untouched",
+    "android_device": "removed; access revoked; session ended; owned emulator stopped",
+    "cleanup_receipt": ".migration/live/parallel/release-validation-cleanup.private.json",
+    "receiver": "Deleted after verified Remind timer delivery; subscription removed and reminder archived",
+    "revocation_proof": "Unexpired fixture Hook access token returns HTTP 401 after account deletion",
+    "dm_messages": "Both fixture messages replaced with tombstones; private local relay stopped"
+  },
+  "evidence_directory": ".migration/live/parallel/hook/",
+  "pr": "https://github.com/teamofsilicons/silicon-hook/pull/6",
+  "post_release_backup": {
+    "destination": "s3://silicon-hook-standalone-artifacts-lxpfsbc0jpuk/parallel-accounts-20261010/hook/backups/20261010T151443Z.tar.gz",
+    "sha256": "723adb54a23ed41c73969fdcd0787864544eaa5b32bfdd2d9a312a8b7d7ea890",
+    "bytes": 13888669,
+    "restore_verified": true,
+    "restore_network": "none",
+    "created_at": "2026-10-10T15:14:39.671971+00:00"
+  },
+  "optional_dependencies": {
+    "ting": "Not configured on fresh Accounts service; native product reads and retained events remain available"
+  },
+  "merge_evidence_url": "https://github.com/teamofsilicons/silicon-hook/pull/6"
+}

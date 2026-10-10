@@ -1,20 +1,19 @@
 //! HTTP API composition root: management, ingress, history, and realtime.
 
+mod accounts;
+mod auth;
 mod contracts;
 mod delivery;
 mod dto;
-mod environments;
 mod extractors;
 mod handlers;
-mod lifecycle;
 mod middleware;
-mod receivers;
 mod routes;
+mod scope;
 mod state;
 mod subscriptions;
 mod telemetry_events;
 mod version;
-mod ws;
 
 use std::{net::SocketAddr, sync::Arc};
 
@@ -25,58 +24,38 @@ use self::state::ApiState;
 use crate::{
     application::{HookApplication, SystemClock},
     config::{ApiSettings, CryptoSettings},
+    delivery::adapter::TingAdapter,
     domain::EncryptionKeyId,
     infrastructure::{
+        accounts::AccountsGateway,
         crypto::{CursorCodec, SecretCipher, SecretKey, SecretKeyring},
-        iam::IamClient,
-        postgres::{
-            DeliveryWakeups, PostgresStore, connect, connect_options, spawn_delivery_listener,
-        },
+        postgres::{PostgresStore, connect},
+        ting::TingClient,
     },
     shutdown,
 };
 
 pub use dto::{CapturedRequestResponse, EventResponse};
 pub use version::{API_VERSION_HEADER, SUPPORTED_API_VERSIONS, SUPPORTED_API_VERSIONS_HEADER};
-pub use ws::{
-    ClientFrame, EventData, HEARTBEAT_CLOSE_CODE, HEARTBEAT_CLOSE_REASON, PROTOCOL_VERSION,
-    ServerFrame,
-};
 
-use crate::config::{RealtimeSettings, ServerSettings};
+use crate::config::ServerSettings;
 
 /// Everything the HTTP router needs, so embedders and end-to-end tests can
 /// build it without a running process.
 #[derive(Clone, Debug)]
 pub struct ApiDependencies {
-    /// Application services over PostgreSQL.
+    /// Application services over PostgreSQL, Silicon Accounts and (optionally) Ting.
     pub application: HookApplication,
-    /// Shared test database control plane, when configured.
-    pub environments: Option<crate::application::environments::EnvironmentService>,
-    /// Online IAM adapter.
-    pub iam: IamClient,
-    /// Internal Ting HTTP boundary; never accepts a caller-selected origin.
-    pub ting: crate::infrastructure::ting::TingClient,
     /// Trusted reverse-proxy hops for client address resolution.
     pub trusted_proxy_hops: u8,
-    /// WebSocket delivery policy.
-    pub realtime: RealtimeSettings,
-    /// Local fan-out of delivery notifications.
-    pub wakeups: DeliveryWakeups,
 }
 
 /// Builds the complete HTTP router.
-pub fn router(mut dependencies: ApiDependencies, server: &ServerSettings) -> axum::Router {
-    dependencies.iam = dependencies.application.ting_iam(dependencies.iam);
+pub fn router(dependencies: ApiDependencies, server: &ServerSettings) -> axum::Router {
     routes::router(
         ApiState {
             application: dependencies.application,
-            environments: dependencies.environments,
-            iam: dependencies.iam,
-            ting: dependencies.ting,
             trusted_proxy_hops: dependencies.trusted_proxy_hops,
-            realtime: dependencies.realtime,
-            wakeups: dependencies.wakeups,
         },
         server,
     )
@@ -88,25 +67,39 @@ pub fn router(mut dependencies: ApiDependencies, server: &ServerSettings) -> axu
 ///
 /// Returns an error when a required dependency or listener cannot start.
 pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
+    for warning in &settings.obsolete_variables {
+        tracing::warn!("{warning}");
+    }
     let pool = connect(&settings.database, "silicon-hook-api")
         .await
         .context("failed to connect API database pool")?;
     let store = PostgresStore::new(pool.clone());
-    let wakeups = DeliveryWakeups::new();
-    let dependencies = build_dependencies(&settings, store, wakeups.clone()).await?;
-    let activity_service = dependencies.environments.clone();
-    let publisher = crate::delivery::publisher::Publisher::new(
-        dependencies.application.clone(),
-        dependencies.iam.clone(),
-        dependencies.ting.clone(),
-    );
-    let test_publication = dependencies.environments.clone().map(|service| {
-        (
-            dependencies.application.clone(),
-            service,
-            dependencies.ting.clone(),
-        )
-    });
+    let dependencies = build_dependencies(&settings, store.clone())?;
+    let publisher = dependencies
+        .application
+        .delivery()
+        .cloned()
+        .map(|ting| crate::delivery::publisher::Publisher::new(store, ting));
+    if publisher.is_some() {
+        tracing::info!("delivery through Ting is enabled");
+    } else {
+        tracing::warn!(
+            "HOOK_TING_URL is not set: delivery through Ting is disabled. Hook still receives, verifies and stores every event, and queues nothing for Ting."
+        );
+    }
+    if !dependencies.application.accounts().webhook_configured() {
+        tracing::warn!(
+            "HOOK_ACCOUNTS_WEBHOOK_SECRET is not set: Silicon Accounts webhook deliveries will be refused"
+        );
+    }
+    let accounts = dependencies.application.accounts().clone();
+    let webhook_url = settings
+        .server
+        .public_base_url
+        .join("webhook")
+        .map(String::from)
+        .unwrap_or_default();
+    tokio::spawn(async move { check_webhook_settings(&accounts, &webhook_url).await });
     let app = router(dependencies, &settings.server);
     let listener = tokio::net::TcpListener::bind(settings.server.bind_addr)
         .await
@@ -122,36 +115,13 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
     tracing::info!(%local_addr, "Silicon Hook API listening");
 
     let (shutdown_sender, shutdown_receiver) = tokio::sync::watch::channel(false);
-    let mut publisher_task = tokio::spawn(crate::delivery::publisher::run(
-        publisher,
-        settings.ting.poll_interval,
-        shutdown_receiver.clone(),
-    ));
-    let mut test_publisher_task = test_publication.map(|(application, service, ting)| {
-        tokio::spawn(crate::delivery::publisher::run_tests(
-            application,
-            service,
-            ting,
+    let mut publisher_task = publisher.map(|publisher| {
+        tokio::spawn(crate::delivery::publisher::run(
+            publisher,
             settings.ting.poll_interval,
             shutdown_receiver.clone(),
         ))
     });
-    let listener_options = connect_options(&settings.database, "silicon-hook-listener")?;
-    let mut notification_task = tokio::spawn(spawn_delivery_listener(
-        listener_options,
-        wakeups.clone(),
-        shutdown_receiver.clone(),
-    ));
-    let mut test_notification_task = if let Some(database) = &settings.test_database {
-        Some(tokio::spawn(spawn_delivery_listener(
-            connect_options(database, "silicon-hook-test-listener")?,
-            wakeups,
-            shutdown_receiver.clone(),
-        )))
-    } else {
-        None
-    };
-    let activity_task = tokio::spawn(report_activity(activity_service, shutdown_receiver.clone()));
     let mut server_task = spawn_server(listener, app, shutdown_receiver);
 
     let result = tokio::select! {
@@ -177,18 +147,34 @@ pub async fn serve(settings: ApiSettings) -> anyhow::Result<()> {
     };
 
     let _stopped = shutdown_sender.send(true);
-    stop_task(settings.shutdown.timeout, &mut publisher_task).await;
-    if let Some(task) = &mut test_publisher_task {
+    if let Some(task) = &mut publisher_task {
         stop_task(settings.shutdown.timeout, task).await;
     }
-    stop_task(settings.shutdown.timeout, &mut notification_task).await;
-    if let Some(task) = &mut test_notification_task {
-        stop_task(settings.shutdown.timeout, task).await;
-    }
-    activity_task.abort();
-    let _ = activity_task.await;
     pool.close().await;
     result
+}
+
+/// Says once, at startup, whether Silicon Accounts delivers every account
+/// event Hook acts on to this Hook. Never blocks startup.
+async fn check_webhook_settings(accounts: &AccountsGateway, webhook_url: &str) {
+    match accounts.webhook_settings().await {
+        Ok(settings) => {
+            let found = crate::infrastructure::webhook_settings::findings(&settings, webhook_url);
+            if found.is_empty() {
+                tracing::info!(
+                    url = webhook_url,
+                    "Silicon Accounts delivers every account event Hook acts on to this Hook"
+                );
+            }
+            for finding in found {
+                tracing::warn!("{finding}");
+            }
+        }
+        Err(error) => tracing::warn!(
+            %error,
+            "could not read Hook's webhook settings at Silicon Accounts; check that account events reach {webhook_url}"
+        ),
+    }
 }
 
 fn spawn_server(
@@ -229,66 +215,35 @@ fn flatten_server_result(
     }
 }
 
-async fn build_dependencies(
+fn build_dependencies(
     settings: &ApiSettings,
     store: PostgresStore,
-    wakeups: DeliveryWakeups,
 ) -> anyhow::Result<ApiDependencies> {
     let cipher = Arc::new(build_secret_cipher(&settings.crypto)?);
-    let iam = IamClient::connect(&settings.iam)
-        .await
-        .context("failed to connect to Silicon IAM")?
-        .with_ting_grants(store.clone(), cipher.clone());
-    let mut environments = if let Some(database) = &settings.test_database {
-        Some(
-            crate::application::environments::EnvironmentService::connect(
-                database.clone(),
-                cipher.clone(),
-                iam.clone(),
-            )
-            .await?,
-        )
-    } else {
-        None
-    };
-    if let Ok(token) = std::env::var("HOOK_HONEYCOMB_SERVICE_TOKEN") {
-        let service = environments
-            .take()
-            .context("Honeycomb lifecycle requires HOOK_TEST_DATABASE_URL")?;
-        environments = Some(
-            service.with_honeycomb_control(
-                secrecy::SecretString::from(token),
-                settings
-                    .iam
-                    .app_id
-                    .clone()
-                    .context("Honeycomb lifecycle requires IAM application ID")?,
-                std::env::var("HOOK_HONEYCOMB_URL")
-                    .unwrap_or_else(|_| "https://backend.honeycomb.teamofsilicons.com".into())
-                    .parse()?,
-            )?,
-        );
+    let accounts = AccountsGateway::new(&settings.accounts)
+        .map_err(|error| anyhow::anyhow!("failed to configure Silicon Accounts: {error}"))?;
+    let mut application = HookApplication::new(
+        store,
+        cipher,
+        Arc::new(CursorCodec::new(SecretKey::from_base64url(
+            settings.crypto.cursor_signing_key.expose_secret(),
+        )?)),
+        Arc::new(SystemClock),
+        settings.server.public_base_url.clone(),
+        accounts.clone(),
+    );
+    if let Some(origin) = &settings.ting.base_url {
+        let client = TingClient::new(origin.as_str(), settings.ting.request_timeout)
+            .map_err(|error| anyhow::anyhow!("failed to configure Ting delivery: {error}"))?;
+        application = application.with_delivery(TingAdapter::new(
+            client,
+            accounts,
+            settings.ting.app_id.clone(),
+        ));
     }
     Ok(ApiDependencies {
-        application: HookApplication::new(
-            store,
-            cipher,
-            Arc::new(CursorCodec::new(SecretKey::from_base64url(
-                settings.crypto.cursor_signing_key.expose_secret(),
-            )?)),
-            Arc::new(SystemClock),
-            settings.server.public_base_url.clone(),
-        )
-        .with_delivery_application(iam.application_id().unwrap_or("hook")),
-        ting: crate::infrastructure::ting::TingClient::new(
-            settings.ting.base_url.as_str(),
-            settings.ting.request_timeout,
-        )?,
-        iam,
-        environments,
+        application,
         trusted_proxy_hops: settings.server.trusted_proxy_hops,
-        realtime: settings.realtime,
-        wakeups,
     })
 }
 
@@ -307,22 +262,4 @@ fn build_secret_cipher(settings: &CryptoSettings) -> anyhow::Result<SecretCipher
         .collect::<anyhow::Result<Vec<_>>>()?;
     let keyring = SecretKeyring::new(current_key_id, entries)?;
     Ok(SecretCipher::new(keyring))
-}
-
-async fn report_activity(
-    service: Option<crate::application::environments::EnvironmentService>,
-    mut stop: tokio::sync::watch::Receiver<bool>,
-) {
-    let Some(service) = service else {
-        return;
-    };
-    let mut timer = tokio::time::interval(std::time::Duration::from_secs(30));
-    loop {
-        tokio::select! {
-            _ = stop.changed() => break,
-            _ = timer.tick() => if let Err(error) = service.report_activity().await {
-                tracing::warn!(%error, "test activity report remains pending");
-            }
-        }
-    }
 }

@@ -1,122 +1,118 @@
-//! Authenticated management of internal Ting delivery and event hydration.
+//! Delivery through Ting at the HTTP boundary: whether it is on, enrolling the
+//! caller as a recipient, and one event's publication status.
+//!
+//! When `HOOK_TING_URL` is unset these routes say so explicitly
+//! (`delivery_disabled`) instead of failing: Hook still receives, verifies and
+//! stores every event.
 
-use axum::{
-    Extension, Json,
-    body::Bytes,
-    extract::{Path, Query, rejection::QueryRejection},
-};
-use http::HeaderMap;
-use secrecy::{ExposeSecret as _, SecretString};
-use serde::{Deserialize, Serialize};
+use axum::{Extension, Json, body::Bytes, extract::Path};
+use http::{HeaderMap, StatusCode};
+use serde::Serialize;
 use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::{
-    extractors,
-    handlers::{authorize_management, map_application_error, parse_json},
+    auth::{self, Check},
+    handlers::{map_application_error, require_empty_body, secret_response_headers},
     state::ApiState,
 };
 use crate::{
-    api::EventResponse,
-    delivery::credentials::{PublisherCredentialError, PublisherMetadata},
-    domain::{Action, ActorKind, EventId, OrganizationId, OrganizationRole, SiliconId, authorize},
+    delivery::adapter::{DeliveryError, TingAdapter},
+    domain::{Action, EventId, authorize},
     error::AppError,
-    infrastructure::{
-        iam::IamError,
-        ting::{TingDeliveryMode, TingError},
-    },
+    infrastructure::ting::{TingDeliveryMode, TingError, TingReceipt, TingRecipient},
 };
 
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct ProvisionPublisherRequest {
-    slt: SecretString,
-    #[serde(default)]
-    replace_rejected: bool,
+pub(super) const DELIVERY_DISABLED: &str = "Delivery through Ting is turned off on this Hook (HOOK_TING_URL is not set). Hook still receives, verifies and stores every event; read them with the events API.";
+
+pub(super) fn delivery(state: &ApiState) -> Result<&TingAdapter, AppError> {
+    state.application.delivery().ok_or_else(|| {
+        AppError::refused(StatusCode::CONFLICT, "delivery_disabled", DELIVERY_DISABLED)
+    })
 }
 
-pub(super) async fn provision_publisher(
+pub(super) fn delivery_error(error: &DeliveryError) -> AppError {
+    match error {
+        DeliveryError::Proof(error) => {
+            tracing::warn!(%error, "no Silicon Accounts proof for Ting");
+            AppError::refused(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "proof_unavailable",
+                "Silicon Accounts could not issue the proof Hook needs to talk to Ting. Retry shortly.",
+            )
+        }
+        DeliveryError::ProofPaused { retry_in, .. } => AppError::refused(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "proof_unavailable",
+            format!(
+                "Silicon Accounts could not issue the proof Hook needs to talk to Ting; Hook asks again in {} seconds.",
+                retry_in.as_secs().max(1)
+            ),
+        ),
+        DeliveryError::Ting(error) => ting_error(error),
+    }
+}
+
+fn ting_error(error: &TingError) -> AppError {
+    match error {
+        TingError::Rejected {
+            status: 429,
+            retry_after,
+            ..
+        } => AppError::RateLimited {
+            retry_after: retry_after.unwrap_or(std::time::Duration::from_secs(1)),
+        },
+        TingError::Rejected { code, .. } => AppError::refused(
+            StatusCode::BAD_GATEWAY,
+            "ting_rejected",
+            format!("Ting refused the request ({code})."),
+        ),
+        _ => AppError::ProviderUnavailable,
+    }
+}
+
+/// `GET /api/v3/delivery`: whether Hook delivers through Ting.
+pub(super) async fn status(
     Extension(state): Extension<ApiState>,
     headers: HeaderMap,
-    body: Bytes,
-) -> Result<(HeaderMap, Json<PublisherMetadata>), AppError> {
-    extractors::require_json(&headers)?;
-    let key = extractors::idempotency_key(&headers)?;
-    let request: ProvisionPublisherRequest = parse_json(&body)?;
-    let authorization = authorize_management(&state, &headers, &[]).await?;
-    if authorization.actor().kind() != ActorKind::Carbon
-        || !matches!(
-            authorization.organization_role(),
-            OrganizationRole::Owner | OrganizationRole::Admin
-        )
-    {
-        return Err(AppError::Forbidden);
-    }
-    let credentials = state.application.publisher_credentials(state.iam.clone());
-    let result = if request.replace_rejected {
-        credentials
-            .reprovision(
-                authorization.organization_id(),
-                request.slt.expose_secret(),
-                &key,
-            )
-            .await
-    } else {
-        credentials
-            .provision(
-                authorization.organization_id(),
-                request.slt.expose_secret(),
-                &key,
-            )
-            .await
-    }
-    .map_err(publisher_error)?;
-    Ok((super::handlers::secret_response_headers(), Json(result)))
+) -> Result<Json<serde_json::Value>, AppError> {
+    auth::authenticate(&state, &headers, Check::Local).await?;
+    Ok(Json(match state.application.delivery() {
+        Some(_) => serde_json::json!({"enabled": true, "transport": "ting"}),
+        None => serde_json::json!({"enabled": false, "reason": DELIVERY_DISABLED}),
+    }))
 }
 
+/// `POST /api/v3/delivery/recipient`: enrol the caller with Ting so it can
+/// receive Hook's notifications, with a User verification proof issued from
+/// the caller's own access token.
 pub(super) async fn register_recipient(
     Extension(state): Extension<ApiState>,
     headers: HeaderMap,
     body: Bytes,
-) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
-    if !body.is_empty() {
-        return Err(AppError::bad_request("unexpected_body"));
-    }
-    let authorization = authorize_management(&state, &headers, &[]).await?;
-    let token = extractors::bearer_token(&headers)?;
-    let app_id = state
-        .iam
-        .application_id()
-        .ok_or(AppError::ProviderUnavailable)?;
-    let prepared = serde_json::to_vec(&serde_json::json!({
-        "org_id": authorization.organization_id(), "app_id": app_id,
-        "for": authorization.actor().id(),
-    }))
-    .map_err(AppError::internal)?;
-    let _guard = state
-        .application
-        .delivery_guard()
+) -> Result<Json<serde_json::Value>, AppError> {
+    require_empty_body(&body)?;
+    let ting = delivery(&state)?;
+    let caller = auth::authenticate(&state, &headers, Check::Introspect).await?;
+    let recipient = TingRecipient {
+        uuid: caller.actor.uuid().as_str().to_owned(),
+        id: caller.actor.id().map(|id| id.as_str().to_owned()),
+    };
+    let subscription = ting
+        .enrol(&caller.token, &recipient)
         .await
-        .map_err(map_application_error)?;
-    let subscription = state
-        .ting
-        .register_recipient(&state.iam, &token, &prepared)
-        .await
-        .map_err(|error| ting_error(&error))?;
-    Ok((
-        super::handlers::secret_response_headers(),
-        Json(serde_json::json!({
-            "id": subscription.id, "app_id": subscription.app_id,
-            "for": subscription.recipient, "active": subscription.active,
-            "required_delivery": subscription.required_delivery,
-        })),
-    ))
+        .map_err(|error| delivery_error(&error))?;
+    Ok(Json(serde_json::json!({
+        "recipient": recipient,
+        "ting_subscription_id": subscription.id,
+        "required_delivery": subscription.required_delivery,
+    })))
 }
 
 #[derive(Serialize)]
 pub(super) struct PublicationStatus {
     event_id: Uuid,
-    recipient_id: String,
+    recipient: String,
     state: &'static str,
     delivery: TingDeliveryMode,
     silent: Option<bool>,
@@ -129,64 +125,84 @@ pub(super) struct PublicationStatus {
     next_attempt_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     expires_at: OffsetDateTime,
-    recipient_receipt: Option<crate::infrastructure::ting::TingReceipt>,
+    recipient_receipt: Option<TingReceipt>,
     recipient_status_error: Option<&'static str>,
 }
 
+/// `GET /api/v3/silicons/{s}/events/{e}/publication`: the Silicon's own send.
 pub(super) async fn publication_status(
     Extension(state): Extension<ApiState>,
-    Path((silicon_id, event_id)): Path<(SiliconId, EventId)>,
+    Path((silicon, event_id)): Path<(String, String)>,
     headers: HeaderMap,
-) -> Result<(HeaderMap, Json<PublicationStatus>), AppError> {
-    let authorization =
-        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
-    if !authorize(&authorization, Action::ReadEvents, &silicon_id).is_allowed() {
-        return Err(AppError::NotFound);
+) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
+    let event_id: EventId = event_id
+        .parse()
+        .map_err(|_| AppError::validation("invalid_event_id"))?;
+    let (_, context) = auth::authorize(&state, &headers, &silicon, Check::Local).await?;
+    if !authorize(&context, Action::ReadEvents).is_allowed() {
+        return Err(AppError::Forbidden);
     }
-    let guard = state
-        .application
-        .delivery_guard()
-        .await
-        .map_err(map_application_error)?;
+    let Some(ting) = state.application.delivery() else {
+        // The event exists (or not) regardless of delivery; say both.
+        state
+            .application
+            .get_event(&context, event_id)
+            .await
+            .map_err(map_application_error)?;
+        return Ok((
+            secret_response_headers(),
+            Json(serde_json::json!({
+                "event_id": event_id,
+                "state": "delivery_disabled",
+                "detail": DELIVERY_DISABLED,
+            })),
+        ));
+    };
+    let silicon_uuid = context.silicon().uuid();
     let status = state
         .application
         .store()
-        .ting_status(
-            authorization.organization_id(),
-            &silicon_id,
-            event_id,
-            silicon_id.as_str(),
-        )
+        .ting_status(silicon_uuid, event_id, silicon_uuid.as_str())
         .await
-        .map_err(|_| AppError::ProviderUnavailable)?
-        .ok_or(AppError::NotFound)?;
-    drop(guard);
-    let (recipient_receipt, recipient_status_error) = if let Some(id) = &status.ting_id {
-        match recipient_receipt(
-            &state,
-            authorization.organization_id(),
-            &silicon_id,
-            id,
-            status.delivery,
-        )
-        .await
+        .map_err(|_| AppError::ProviderUnavailable)?;
+    let Some(status) = status else {
+        state
+            .application
+            .get_event(&context, event_id)
+            .await
+            .map_err(map_application_error)?;
+        return Ok((
+            secret_response_headers(),
+            Json(serde_json::json!({
+                "event_id": event_id,
+                "state": "not_queued",
+                "detail": "This event was received while delivery was off, or before the Silicon was linked to its Silicon Accounts account, so nothing was queued for Ting.",
+            })),
+        ));
+    };
+    let (recipient_receipt, recipient_status_error) = match &status.ting_id {
+        Some(id) => match ting
+            .receipt(id, &status.recipient_id, status.delivery)
+            .await
         {
             Ok(receipt) => (Some(receipt), None),
-            Err(code) => (None, Some(code)),
-        }
+            Err(_) => (None, Some("recipient_status_unavailable")),
+        },
+        None => (None, None),
+    };
+    let state_name = if status.last_error_code.as_deref() == Some("legacy_identity") {
+        "not_delivered_legacy"
+    } else if status.accepted_at.is_none() {
+        "pending"
+    } else if status.silent == Some(true) && status.delivery == TingDeliveryMode::Ordinary {
+        "accepted_silently"
     } else {
-        (None, None)
+        "accepted_by_ting"
     };
     let response = PublicationStatus {
         event_id: status.event_id,
-        recipient_id: status.recipient_id,
-        state: if status.accepted_at.is_none() {
-            "pending"
-        } else if status.silent == Some(true) && status.delivery == TingDeliveryMode::Ordinary {
-            "accepted_silently"
-        } else {
-            "accepted_by_ting"
-        },
+        recipient: status.recipient_id,
+        state: state_name,
         delivery: status.delivery,
         silent: status.silent,
         attempts: status.attempts,
@@ -198,199 +214,8 @@ pub(super) async fn publication_status(
         recipient_receipt,
         recipient_status_error,
     };
-    Ok((super::handlers::secret_response_headers(), Json(response)))
-}
-
-async fn recipient_receipt(
-    state: &ApiState,
-    org: &OrganizationId,
-    silicon: &SiliconId,
-    id: &str,
-    delivery: TingDeliveryMode,
-) -> Result<crate::infrastructure::ting::TingReceipt, &'static str> {
-    let credentials = state.application.publisher_credentials(state.iam.clone());
-    for attempt in 0..2 {
-        let token = credentials
-            .access_token(org)
-            .await
-            .map_err(|_| "publisher_unavailable")?;
-        let result = {
-            let _guard = state
-                .application
-                .delivery_guard()
-                .await
-                .map_err(|_| "recipient_status_unavailable")?;
-            state
-                .ting
-                .receipt(
-                    &state.iam,
-                    &token,
-                    org.as_str(),
-                    id,
-                    silicon.as_str(),
-                    delivery,
-                )
-                .await
-        };
-        match result {
-            Ok(receipt) => return Ok(receipt),
-            Err(TingError::Iam(IamError::InvalidCredential)) if attempt == 0 => {
-                // Release the lifecycle guard before the credential write. A
-                // newer token installed by another request remains untouched.
-                credentials
-                    .invalidate_access_token(org, &token)
-                    .await
-                    .map_err(|_| "publisher_unavailable")?;
-            }
-            Err(_) => return Err("recipient_status_unavailable"),
-        }
-    }
-    Err("recipient_status_unavailable")
-}
-
-fn publisher_error(error: PublisherCredentialError) -> AppError {
-    match error {
-        PublisherCredentialError::InvalidInput => AppError::validation("invalid_publisher_slt"),
-        PublisherCredentialError::Conflict => AppError::conflict("publisher_already_configured"),
-        PublisherCredentialError::Busy => AppError::conflict("publisher_busy"),
-        PublisherCredentialError::NotConfigured => AppError::conflict("publisher_not_configured"),
-        PublisherCredentialError::Forbidden | PublisherCredentialError::SessionRejected => {
-            AppError::Forbidden
-        }
-        _ => AppError::ProviderUnavailable,
-    }
-}
-
-pub(super) fn ting_error(error: &TingError) -> AppError {
-    match error {
-        TingError::Iam(IamError::InvalidCredential) => AppError::Unauthenticated,
-        TingError::Iam(IamError::TingAuthorizationRequired)
-        | TingError::Rejected {
-            status: 401,
-            code: "invalid_obo_token" | "invalid_proof",
-            ..
-        } => AppError::TingAuthorizationRequired,
-        TingError::Iam(IamError::Forbidden) | TingError::Rejected { status: 403, .. } => {
-            AppError::Forbidden
-        }
-        TingError::Rejected {
-            status: 429,
-            retry_after,
-            ..
-        } => AppError::RateLimited {
-            retry_after: retry_after.unwrap_or(std::time::Duration::from_secs(30)),
-        },
-        _ => AppError::ProviderUnavailable,
-    }
-}
-
-#[derive(Default, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct EventQuery {
-    environment_id: Option<Uuid>,
-    environment_generation: Option<i64>,
-}
-
-pub(super) async fn event(
-    Extension(state): Extension<ApiState>,
-    Path((silicon_id, event_id)): Path<(SiliconId, EventId)>,
-    query: Result<Query<EventQuery>, QueryRejection>,
-    headers: HeaderMap,
-) -> Result<(HeaderMap, Json<EventResponse>), AppError> {
-    let Query(query) = query.map_err(|_| AppError::bad_request("invalid_query"))?;
-    let expected = match (query.environment_id, query.environment_generation) {
-        (None, None) => None,
-        (Some(id), Some(generation)) if generation >= 0 => Some((id, generation)),
-        _ => {
-            return Err(AppError::validation(
-                "environment_id_and_generation_required_together",
-            ));
-        }
-    };
-    let authorization =
-        authorize_management(&state, &headers, std::slice::from_ref(&silicon_id)).await?;
-    let event = state
-        .application
-        .get_event(&authorization, &silicon_id, event_id, expected)
-        .await
-        .map_err(map_application_error)?;
     Ok((
-        super::handlers::secret_response_headers(),
-        Json(EventResponse::from(&event)),
+        secret_response_headers(),
+        Json(serde_json::to_value(response).map_err(AppError::internal)?),
     ))
-}
-
-#[derive(Deserialize)]
-#[serde(deny_unknown_fields)]
-pub(super) struct CompleteTingAuthorization {
-    authorization_id: Uuid,
-    authorization_code: SecretString,
-}
-
-pub(super) async fn start_ting_authorization(
-    Extension(state): Extension<ApiState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
-    if !body.is_empty() {
-        return Err(AppError::bad_request("unexpected_body"));
-    }
-    let key = extractors::idempotency_key(&headers)?;
-    let auth = authorize_management(&state, &headers, &[]).await?;
-    let token = extractors::bearer_token(&headers)?;
-    let result = state
-        .iam
-        .authorize_ting(&token, auth.organization_id().as_str(), &key)
-        .await?;
-    Ok((super::handlers::secret_response_headers(), Json(result)))
-}
-pub(super) async fn complete_ting_authorization(
-    Extension(state): Extension<ApiState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
-    extractors::require_json(&headers)?;
-    let _key = extractors::idempotency_key(&headers)?;
-    let request: CompleteTingAuthorization = parse_json(&body)?;
-    let auth = authorize_management(&state, &headers, &[]).await?;
-    let token = extractors::bearer_token(&headers)?;
-    let result = state
-        .iam
-        .complete_ting(
-            &token,
-            auth.organization_id().as_str(),
-            request.authorization_id,
-            request.authorization_code.expose_secret(),
-        )
-        .await?;
-    Ok((super::handlers::secret_response_headers(), Json(result)))
-}
-pub(super) async fn ting_authorization_status(
-    Extension(state): Extension<ApiState>,
-    headers: HeaderMap,
-) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
-    let auth = authorize_management(&state, &headers, &[]).await?;
-    let token = extractors::bearer_token(&headers)?;
-    let result = state
-        .iam
-        .ting_authorization_status(&token, auth.organization_id().as_str(), false)
-        .await?;
-    Ok((super::handlers::secret_response_headers(), Json(result)))
-}
-pub(super) async fn disconnect_ting_authorization(
-    Extension(state): Extension<ApiState>,
-    headers: HeaderMap,
-    body: Bytes,
-) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
-    if !body.is_empty() {
-        return Err(AppError::bad_request("unexpected_body"));
-    }
-    let _key = extractors::idempotency_key(&headers)?;
-    let auth = authorize_management(&state, &headers, &[]).await?;
-    let token = extractors::bearer_token(&headers)?;
-    let result = state
-        .iam
-        .ting_authorization_status(&token, auth.organization_id().as_str(), true)
-        .await?;
-    Ok((super::handlers::secret_response_headers(), Json(result)))
 }

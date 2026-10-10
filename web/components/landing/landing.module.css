@@ -1,0 +1,80 @@
+/*
+ * The landing page, after the developer site's home page (Arc's hero, feature, steps and CTA blocks): generous space,
+ * BDO Grotesk headlines, quiet squircle panels on the page colour, brand blue only where you act. The app's own colour
+ * (--app-accent) tints the hero's wash and its mark, nothing else.
+ */
+.inner { width: 100%; max-width: var(--page-max); margin-inline: auto; padding-inline: var(--gutter); }
+
+/* Hero ------------------------------------------------------------------------------------------------------------ */
+.hero { position: relative; overflow: hidden; isolation: isolate; border-bottom: 1px solid var(--border-subtle); }
+.hero::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  background-image: radial-gradient(var(--dot-color) 1px, transparent 1.3px), radial-gradient(70% 60% at 50% 0%, color-mix(in oklab, var(--app-accent) 12%, transparent), transparent 70%);
+  background-size: 22px 22px, 100% 100%;
+  background-position: 11px 11px, 0 0;
+  -webkit-mask-image: radial-gradient(ellipse 90% 80% at 50% 10%, #000 30%, transparent 85%);
+  mask-image: radial-gradient(ellipse 90% 80% at 50% 10%, #000 30%, transparent 85%);
+}
+.heroInner { display: grid; max-width: var(--page-max); grid-template-columns: minmax(0, 1.05fr) minmax(0, .95fr); align-items: center; gap: clamp(32px, 5vw, 72px); margin-inline: auto; padding: clamp(56px, 9vw, 112px) var(--gutter) clamp(56px, 8vw, 104px); }
+.heroCopy { display: grid; min-width: 0; justify-items: start; gap: var(--space-5); }
+.heroBadge { --sq-r: var(--radius-pill); --sq-fill: var(--surface); --sq-stroke: var(--border); display: inline-flex; align-items: center; gap: 8px; margin: 0; border: 1px solid var(--sq-stroke); padding: 5px 12px 5px 10px; background: var(--sq-fill); color: var(--text-secondary); font-size: var(--text-sm); font-weight: 500; }
+.dot { --sq-r: 3px; width: 7px; height: 7px; flex: none; background: var(--app-accent); box-shadow: 0 0 0 3px color-mix(in oklab, var(--app-accent) 20%, transparent); }
+.heroTitle { max-width: 15ch; margin: 0; color: var(--foreground); font-family: var(--font-display); font-size: clamp(2.5rem, 1.6rem + 4vw, 4.25rem); font-weight: 600; letter-spacing: -.035em; line-height: 1.02; text-wrap: balance; }
+.heroLede { max-width: 56ch; margin: 0; color: var(--text-secondary); font-size: clamp(1.0625rem, 1rem + .3vw, 1.1875rem); line-height: 1.6; text-wrap: pretty; }
+.heroActions { display: flex; flex-wrap: wrap; gap: var(--space-2) var(--space-3); margin-top: var(--space-2); }
+.heroNote { margin: 0; color: var(--text-muted); font-size: var(--text-sm); }
+.heroArt { min-width: 0; }
+.heroArt figure { box-shadow: var(--shadow-raised); }
+
+/* Sections -------------------------------------------------------------------------------------------------------- */
+.section { padding-block: clamp(64px, 9vw, 112px); scroll-margin-top: 64px; }
+.band { border-block: 1px solid var(--border-subtle); background: color-mix(in oklab, var(--surface) 70%, var(--background)); }
+:global(:root[data-theme="dark"]) .band { background: color-mix(in oklab, var(--surface) 55%, var(--background)); }
+.sectionHead { display: grid; max-width: 760px; gap: var(--space-3); margin-bottom: clamp(32px, 4vw, 48px); }
+.eyebrow { margin: 0; color: var(--accent-ink); font-size: var(--text-sm); font-weight: 600; }
+.sectionTitle { margin: 0; color: var(--foreground); font-family: var(--font-display); font-size: clamp(1.875rem, 1.35rem + 2vw, 2.75rem); font-weight: 600; letter-spacing: -.03em; line-height: 1.08; text-wrap: balance; }
+.sectionLede { margin: var(--space-1) 0 0; color: var(--text-secondary); font-size: 1.0625rem; line-height: 1.65; text-wrap: pretty; }
+.section :not(pre) > code { --sq-r: 6px; padding: .08em .34em; background: var(--surface-muted); color: var(--foreground); font-size: .86em; overflow-wrap: anywhere; }
+
+/* For Carbons and for Silicons. */
+.split { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: var(--space-4); }
+.panel { --sq-r: var(--radius-panel); --sq-fill: var(--surface); --sq-stroke: var(--border); display: grid; align-content: start; gap: var(--space-2); border: 1px solid var(--sq-stroke); padding: var(--space-6) var(--space-6) var(--space-8); background: var(--sq-fill); scroll-margin-top: 80px; }
+.panelTitle { margin: 0; color: var(--foreground); font-family: var(--font-display); font-size: 1.375rem; font-weight: 600; letter-spacing: -.02em; }
+.panelLede { margin: 0 0 var(--space-4); color: var(--text-muted); font-size: var(--text-sm); }
+.features { display: grid; gap: var(--space-5); margin: 0; padding: 0; list-style: none; }
+.feature { display: grid; grid-template-columns: 38px minmax(0, 1fr); align-items: start; gap: var(--space-4); }
+.featureIcon { --sq-r: 11px; --sq-fill: var(--accent-subtle); display: grid; width: 38px; height: 38px; place-items: center; background: var(--sq-fill); color: var(--accent-ink); }
+.featureText { display: grid; gap: 2px; color: var(--text-secondary); line-height: 1.6; }
+.featureText strong { color: var(--foreground); font-weight: 600; }
+
+/* Steps. */
+.steps { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: var(--space-8) var(--space-6); margin: 0; padding: 0; list-style: none; }
+.step { display: grid; align-content: start; gap: var(--space-2); }
+.step h3 { margin: var(--space-2) 0 0; color: var(--foreground); font-size: 1.0625rem; font-weight: 600; letter-spacing: -.01em; }
+.step p { margin: 0; color: var(--text-secondary); line-height: 1.65; }
+.stepNumber { --sq-r: 10px; --sq-fill: var(--surface); --sq-stroke: var(--border); display: grid; width: 32px; height: 32px; place-items: center; border: 1px solid var(--sq-stroke); background: var(--sq-fill); color: var(--foreground); font-size: var(--text-sm); font-weight: 600; font-variant-numeric: tabular-nums; }
+
+/* Closing call to action: Arc's centered CTA. */
+.closing { padding: clamp(64px, 9vw, 112px) var(--gutter); }
+.closingCard { --sq-r: var(--radius-surface); --sq-fill: var(--surface); --sq-stroke: var(--border); position: relative; display: grid; max-width: calc(var(--page-max) - 2 * var(--gutter)); justify-items: center; gap: var(--space-4); overflow: hidden; isolation: isolate; margin-inline: auto; border: 1px solid var(--sq-stroke); padding: clamp(48px, 6vw, 72px) var(--space-6); background: var(--sq-fill); text-align: center; }
+.closingCard::before { content: ""; position: absolute; inset: 0; z-index: -1; background: radial-gradient(70% 60% at 50% 0%, color-mix(in oklab, var(--app-accent) 10%, transparent), transparent 70%); }
+.closingTitle { margin: var(--space-2) 0 0; font-family: var(--font-display); font-size: clamp(2rem, 1.4rem + 2.4vw, 3.25rem); font-weight: 600; letter-spacing: -.035em; line-height: 1.04; }
+.closingText { max-width: 44ch; margin: 0; color: var(--text-secondary); font-size: 1.0625rem; line-height: 1.6; }
+.closingActions { display: flex; flex-wrap: wrap; justify-content: center; gap: var(--space-2) var(--space-3); margin-top: var(--space-2); }
+
+/* Responsive ------------------------------------------------------------------------------------------------------ */
+@media (max-width: 1023px) {
+  .heroInner { grid-template-columns: minmax(0, 1fr); }
+  .heroTitle { max-width: 18ch; }
+  .steps { grid-template-columns: minmax(0, 1fr); gap: var(--space-6); }
+}
+@media (max-width: 719px) {
+  .split { grid-template-columns: minmax(0, 1fr); }
+  .panel { padding: var(--space-5) var(--space-5) var(--space-6); }
+}
+@media (max-width: 479px) {
+  .heroActions > a, .closingActions > a { flex: 1 1 100%; }
+}

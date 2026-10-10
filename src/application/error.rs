@@ -23,7 +23,7 @@ pub enum ApplicationError {
     /// The authenticated principal may not perform the operation.
     #[error("operation is forbidden")]
     Forbidden,
-    /// A resource does not exist within the authorized tenant scope.
+    /// A resource does not exist within the scope the caller may see.
     #[error("resource was not found")]
     NotFound,
     /// A deleted resource is outside its recovery window.
@@ -59,6 +59,16 @@ pub enum ApplicationError {
     /// A dependency or internal invariant failed unexpectedly.
     #[error("internal application failure")]
     Internal(#[source] anyhow::Error),
+    /// A request refused for a reason the caller can act on, explained exactly.
+    #[error("{code}: {message}")]
+    Refused {
+        /// HTTP status to answer with.
+        status: u16,
+        /// Stable machine-readable code.
+        code: &'static str,
+        /// What was refused and why, and what to do instead.
+        message: String,
+    },
 }
 
 impl ApplicationError {
@@ -68,5 +78,13 @@ impl ApplicationError {
 
     pub(super) fn unavailable(error: impl Into<anyhow::Error>) -> Self {
         Self::Unavailable(error.into())
+    }
+
+    pub(super) fn refused(status: u16, code: &'static str, message: impl Into<String>) -> Self {
+        Self::Refused {
+            status,
+            code,
+            message: message.into(),
+        }
     }
 }

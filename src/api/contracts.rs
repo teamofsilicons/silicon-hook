@@ -15,10 +15,6 @@ pub(super) struct Contract {
     sunset_at: Option<time::OffsetDateTime>,
 }
 
-pub(super) async fn status(state: &ApiState, record: bool) -> Result<Contract, AppError> {
-    status_major(state, "v1", record).await
-}
-
 pub(super) async fn status_major(
     state: &ApiState,
     major: &str,
@@ -31,11 +27,6 @@ pub(super) async fn status_major(
         .await
         .map_err(AppError::internal)?
         .ok_or(AppError::ProviderUnavailable)
-}
-
-pub(super) async fn admit(state: &ApiState) -> Result<HeaderMap, AppError> {
-    let contract = status(state, true).await?;
-    admission_headers(&contract)
 }
 
 pub(super) async fn admit_major(state: &ApiState, major: &str) -> Result<HeaderMap, AppError> {
@@ -90,17 +81,15 @@ pub(super) async fn catalog(
     Extension(state): Extension<ApiState>,
 ) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
     let mut contracts = Vec::new();
-    for &major in super::version::SUPPORTED_API_VERSIONS {
+    // v1 and v2 are listed so clients can see that they ended.
+    for major in ["v3", "v2", "v1"] {
         let contract = status_major(&state, major, false).await?;
-        let legacy = major == "v1";
         contracts.push(serde_json::json!({
             "api_version": major,
             "status": contract.status,
             "deprecated_at": contract.deprecated_at.map(time::OffsetDateTime::unix_timestamp),
             "sunset_at": contract.sunset_at.map(time::OffsetDateTime::unix_timestamp),
-            "websocket_protocols": if legacy { vec![1] } else { Vec::<u8>::new() },
-            "relay_protocols": if legacy { vec![1] } else { Vec::<u8>::new() },
-            "delivery_transport": if legacy { "hook" } else { "ting" },
+            "delivery_transport": "ting",
         }));
     }
     // Public discovery exposes lifecycle policy, never request counters or actor activity.

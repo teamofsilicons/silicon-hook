@@ -15,15 +15,16 @@ use thiserror::Error;
 use url::Url;
 use zeroize::Zeroizing;
 
+/// Production Silicon Accounts.
+pub const DEFAULT_ACCOUNTS_URL: &str = "https://accounts.teamofsilicons.com";
+/// Ting's Silicon Accounts app id, the receiving app of Hook's Ting proofs.
+pub const DEFAULT_TING_APP_ID: &str = "ting";
 const MAX_INGRESS_BODY_BYTES: usize = 1024 * 1024;
 const MAX_MANAGEMENT_BODY_BYTES: usize = 64 * 1024;
-/// Scopes a Carbon grants Hook at sign-in unless configured otherwise.
-const MAX_PROVIDER_RESPONSE_BYTES: usize = 1024 * 1024;
 const MAX_KEYRING_ENTRIES: usize = 16;
 const MAX_MAINTENANCE_BATCH_SIZE: usize = 10_000;
 const MAX_MAINTENANCE_BATCHES_PER_CYCLE: u16 = 1_000;
 const MAX_TRUSTED_PROXY_HOPS: u8 = 8;
-const MAX_SILICONS_PER_CONNECTION: usize = 256;
 
 /// Fully validated settings required by the HTTP API process.
 #[derive(Clone, Debug)]
@@ -36,18 +37,16 @@ pub struct ApiSettings {
     pub shutdown: ShutdownSettings,
     /// Runtime PostgreSQL pool settings.
     pub database: DatabaseSettings,
-    /// Separate shared database for isolated Hook testing environments.
-    pub test_database: Option<DatabaseSettings>,
     /// Encryption and cursor-integrity keys.
     pub crypto: CryptoSettings,
-    /// Silicon IAM integration settings.
-    pub iam: IamSettings,
+    /// Silicon Accounts integration settings.
+    pub accounts: AccountsSettings,
     /// Internal Ting publication endpoint and scheduling bounds.
     pub ting: TingSettings,
     /// Retention, replay, and idempotency policy.
     pub policy: PolicySettings,
-    /// WebSocket delivery policy.
-    pub realtime: RealtimeSettings,
+    /// Variables that are set but no longer read, with what replaced them.
+    pub obsolete_variables: Vec<String>,
 }
 
 /// Fully validated settings required by the maintenance worker process.
@@ -59,8 +58,6 @@ pub struct WorkerProcessSettings {
     pub shutdown: ShutdownSettings,
     /// Runtime PostgreSQL pool settings.
     pub database: DatabaseSettings,
-    /// Separate shared database for isolated Hook testing environments.
-    pub test_database: Option<DatabaseSettings>,
     /// Retention maintenance policy.
     pub maintenance: MaintenanceSettings,
 }
@@ -68,9 +65,14 @@ pub struct WorkerProcessSettings {
 /// Non-secret configuration for internal Ting delivery.
 #[derive(Clone, Debug)]
 pub struct TingSettings {
-    /// Trusted Ting API origin; credentials may only be sent to this origin.
-    pub base_url: Url,
-    /// Deadline for one Ting or IAM publication operation.
+    /// Trusted Ting API origin; proofs are only ever sent to this origin.
+    /// `None` (`HOOK_TING_URL` unset) disables delivery: Hook keeps receiving
+    /// and storing events, and queues nothing for Ting.
+    pub base_url: Option<Url>,
+    /// Ting's Silicon Accounts app id (`HOOK_TING_APP_ID`, default `ting`):
+    /// the receiving app every proof Hook presents to Ting is issued for.
+    pub app_id: String,
+    /// Deadline for one Ting publication operation.
     pub request_timeout: Duration,
     /// Idle interval between bounded publication cycles.
     pub poll_interval: Duration,
@@ -81,17 +83,16 @@ impl TingSettings {
         source: &impl ConfigurationSource,
         environment: RuntimeEnvironment,
     ) -> Result<Self, SettingsError> {
-        let base_url = source.url_or(
-            "HOOK_TING_BASE_URL",
-            "https://backend.ting.teamofsilicons.com/",
-        )?;
-        validate_http_url(environment, &base_url, "HOOK_TING_BASE_URL")?;
-        if base_url.path() != "/" {
-            return Err(invalid(
-                "HOOK_TING_BASE_URL",
-                "must be an origin without a path",
-            ));
-        }
+        let base_url = source
+            .optional("HOOK_TING_URL")
+            .map(|raw| {
+                let url = parse_url("HOOK_TING_URL", &raw)?;
+                validate_service_origin(environment, &url, "HOOK_TING_URL")?;
+                Ok::<_, SettingsError>(url)
+            })
+            .transpose()?;
+        let app_id = source.value_or("HOOK_TING_APP_ID", DEFAULT_TING_APP_ID);
+        validate_app_id("HOOK_TING_APP_ID", &app_id)?;
         let request_seconds: u64 = source.parse_or("HOOK_TING_TIMEOUT_SECONDS", "10")?;
         let poll_millis: u64 = source.parse_or("HOOK_TING_POLL_MILLISECONDS", "1000")?;
         if !(1..=15).contains(&request_seconds) {
@@ -108,6 +109,7 @@ impl TingSettings {
         }
         Ok(Self {
             base_url,
+            app_id,
             request_timeout: Duration::from_secs(request_seconds),
             poll_interval: Duration::from_millis(poll_millis),
         })
@@ -121,8 +123,6 @@ pub struct MigrationSettings {
     pub process: ProcessSettings,
     /// Privileged migration pool settings.
     pub database: DatabaseSettings,
-    /// Separate shared database for isolated Hook testing environments.
-    pub test_database: Option<DatabaseSettings>,
 }
 
 /// Settings shared by all executable process boundaries.
@@ -208,64 +208,59 @@ pub struct CryptoSettings {
     pub cursor_signing_key: SecretString,
 }
 
-/// Silicon IAM adapter settings.
+/// Silicon Accounts settings.
 ///
-/// The `silicon-iam` crate negotiates the API version at startup and owns
-/// sign-in, introspection, and webhook verification; the directory reads Hook
-/// performs with the caller's own bearer use the same origin and deadlines.
-#[derive(Clone, Debug)]
-pub struct IamSettings {
-    /// IAM origin without a path.
-    pub base_url: Url,
-    /// Hook's registered IAM Application ID.
-    pub app_id: Option<String>,
-    /// Hook's current `ask_` Application secret.
-    pub app_secret: Option<SecretString>,
-    /// Outbound connection establishment deadline.
-    pub connect_timeout: Duration,
-    /// Complete IAM request deadline.
+/// Access tokens are verified locally against the JWKS (`iss` = the public URL,
+/// `aud` = the app id); lookups, introspection and proofs use the app's
+/// credentials against the API URL.
+#[derive(Clone)]
+pub struct AccountsSettings {
+    /// Public origin: the issuer of access tokens and the host of sign-in pages.
+    pub public_url: Url,
+    /// Origin Hook calls server to server; the public origin unless set.
+    pub api_url: Url,
+    /// Hook's app id at Silicon Accounts (the `aud` of its access tokens).
+    pub app_id: String,
+    /// Hook's app secret, used only server side.
+    pub app_secret: SecretString,
+    /// Webhook signing secrets: the current one first, then the previous one
+    /// while a rotation overlaps. Empty when the webhook is not configured.
+    pub webhook_secrets: Vec<SecretString>,
+    /// Deadline for one call to Silicon Accounts.
     pub request_timeout: Duration,
-    /// Maximum IAM response body accepted into memory.
-    pub max_response_bytes: usize,
-    /// Whether plain HTTP to a loopback IAM is allowed (never in production).
-    pub allow_insecure_local_http: bool,
-    /// Whether deterministic `local:` credentials are accepted (never in production).
-    pub local_auth: bool,
-    /// Application webhook secrets, when Hook receives IAM events.
-    pub webhook: Option<IamWebhookSettings>,
 }
 
-impl IamSettings {
-    /// Returns true when deterministic local credentials may be used.
+impl AccountsSettings {
+    /// The exact `iss` value of Hook's access tokens: the public origin
+    /// without a trailing slash.
     #[must_use]
-    pub const fn local_auth_enabled(&self) -> bool {
-        self.local_auth
+    pub fn issuer(&self) -> String {
+        origin_string(&self.public_url)
+    }
+
+    /// The server-to-server origin without a trailing slash.
+    #[must_use]
+    pub fn api_origin(&self) -> String {
+        origin_string(&self.api_url)
     }
 }
 
-/// Versioned `whs_` secrets IAM signs Application webhook deliveries with.
-#[derive(Clone)]
-pub struct IamWebhookSettings {
-    /// Current signing secret.
-    pub secret: SecretString,
-    /// Version IAM presents for the current secret.
-    pub version: u64,
-    /// Previous secret and version retained across a rotation.
-    pub previous: Option<(SecretString, u64)>,
-}
-
-impl fmt::Debug for IamWebhookSettings {
+impl fmt::Debug for AccountsSettings {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter
-            .debug_struct("IamWebhookSettings")
-            .field("secret", &"[REDACTED]")
-            .field("version", &self.version)
-            .field(
-                "previous",
-                &self.previous.as_ref().map(|(_, version)| version),
-            )
+            .debug_struct("AccountsSettings")
+            .field("public_url", &self.public_url.as_str())
+            .field("api_url", &self.api_url.as_str())
+            .field("app_id", &self.app_id)
+            .field("app_secret", &"[REDACTED]")
+            .field("webhook_secrets", &self.webhook_secrets.len())
+            .field("request_timeout", &self.request_timeout)
             .finish()
     }
+}
+
+fn origin_string(url: &Url) -> String {
+    url.as_str().trim_end_matches('/').to_owned()
 }
 
 /// Security and lifecycle durations enforced by the API process.
@@ -282,28 +277,6 @@ pub struct PolicySettings {
     pub deletion_retention: Duration,
     /// Retention of verified and blocked request logs.
     pub log_retention: Duration,
-}
-
-/// WebSocket delivery policy.
-#[derive(Clone, Copy, Debug)]
-pub struct RealtimeSettings {
-    /// Interval between application-level `ping` frames.
-    pub heartbeat_interval: Duration,
-    /// Longest gap without a valid `pong` before the server closes.
-    pub heartbeat_timeout: Duration,
-    /// Events fetched per replay batch for one Silicon stream.
-    pub replay_batch_size: NonZeroU32,
-    /// Fallback poll interval when no notification arrives.
-    pub poll_interval: Duration,
-    /// Maximum Silicon streams one connection may subscribe to.
-    pub max_silicons_per_connection: NonZeroUsize,
-}
-
-impl RealtimeSettings {
-    /// Contract heartbeat: a ping every 30 seconds, closed after two minutes.
-    pub const HEARTBEAT_INTERVAL: Duration = Duration::from_secs(30);
-    /// Contract heartbeat timeout.
-    pub const HEARTBEAT_TIMEOUT: Duration = Duration::from_secs(120);
 }
 
 /// Retention maintenance policy.
@@ -351,25 +324,28 @@ impl ApiSettings {
         let server = ServerSettings::load(source, environment)?;
         let shutdown = ShutdownSettings::load(source)?;
         let database = DatabaseSettings::runtime(source, environment)?;
-        let test_database =
-            test_database(source, environment, &database, "HOOK_TEST_DATABASE_URL")?;
         let crypto = CryptoSettings::load(source)?;
-        let iam = IamSettings::load(source, environment)?;
+        let accounts = AccountsSettings::load(source, environment)?;
         let ting = TingSettings::load(source, environment)?;
+        if ting.app_id == accounts.app_id {
+            return Err(invalid(
+                "HOOK_TING_APP_ID",
+                "must name Ting's app, not Hook's own: a proof is always issued for another app",
+            ));
+        }
         let policy = PolicySettings::load(source)?;
-        let realtime = RealtimeSettings::load(source)?;
+        let obsolete_variables = obsolete_variables(source);
 
         Ok(Self {
             process,
             server,
             shutdown,
             database,
-            test_database,
             crypto,
-            iam,
+            accounts,
             ting,
             policy,
-            realtime,
+            obsolete_variables,
         })
     }
 }
@@ -391,15 +367,12 @@ impl WorkerProcessSettings {
         let environment = process.environment;
         let shutdown = ShutdownSettings::load(source)?;
         let database = DatabaseSettings::runtime(source, environment)?;
-        let test_database =
-            test_database(source, environment, &database, "HOOK_TEST_DATABASE_URL")?;
         let maintenance = MaintenanceSettings::load(source)?;
 
         Ok(Self {
             process,
             shutdown,
             database,
-            test_database,
             maintenance,
         })
     }
@@ -430,45 +403,8 @@ impl MigrationSettings {
             statement_timeout: source
                 .positive_duration_seconds("HOOK_MIGRATION_STATEMENT_TIMEOUT_SECONDS", 300)?,
         };
-        let test_database = test_database(
-            source,
-            environment,
-            &database,
-            "HOOK_TEST_MIGRATOR_DATABASE_URL",
-        )?;
-        Ok(Self {
-            process,
-            database,
-            test_database,
-        })
+        Ok(Self { process, database })
     }
-}
-
-fn test_database(
-    source: &impl ConfigurationSource,
-    environment: RuntimeEnvironment,
-    production: &DatabaseSettings,
-    name: &'static str,
-) -> Result<Option<DatabaseSettings>, SettingsError> {
-    let Some(raw) = source.optional(name) else {
-        return Ok(None);
-    };
-    validate_database_url(environment, &raw, name)?;
-    let parsed = Url::parse(&raw).map_err(|_| invalid(name, "invalid database URL"))?;
-    let prod = Url::parse(production.url.expose_secret())
-        .map_err(|_| invalid(name, "invalid database URL"))?;
-    if parsed.host_str() == prod.host_str()
-        && parsed.port_or_known_default() == prod.port_or_known_default()
-        && parsed.path() == prod.path()
-    {
-        return Err(invalid(
-            name,
-            "the shared test database must be distinct from production",
-        ));
-    }
-    let mut settings = production.clone();
-    settings.url = SecretString::from(raw);
-    Ok(Some(settings))
 }
 
 impl ProcessSettings {
@@ -615,138 +551,146 @@ impl CryptoSettings {
     }
 }
 
-impl IamSettings {
+impl AccountsSettings {
     fn load(
         source: &impl ConfigurationSource,
         environment: RuntimeEnvironment,
     ) -> Result<Self, SettingsError> {
-        let base_url = if environment.is_production() {
-            source.required_url("HOOK_IAM_BASE_URL")?
-        } else {
-            source.url_or("HOOK_IAM_BASE_URL", "http://127.0.0.1:8081")?
+        let public_url = source.url_or("ACCOUNTS_URL", DEFAULT_ACCOUNTS_URL)?;
+        validate_service_origin(environment, &public_url, "ACCOUNTS_URL")?;
+        let api_url = match source.optional("ACCOUNTS_API_URL") {
+            Some(raw) => {
+                let url = parse_url("ACCOUNTS_API_URL", &raw)?;
+                validate_service_origin(environment, &url, "ACCOUNTS_API_URL")?;
+                url
+            }
+            None => public_url.clone(),
         };
-        validate_http_url(environment, &base_url, "HOOK_IAM_BASE_URL")?;
-        if !matches!(base_url.path(), "" | "/") {
+        let app_id = source.value_or("HOOK_APP_ID", "hook");
+        validate_app_id("HOOK_APP_ID", &app_id)?;
+        let app_secret = source.required_secret("HOOK_APP_SECRET")?;
+        validate_secret_text("HOOK_APP_SECRET", &app_secret, 16)?;
+        let mut webhook_secrets = Vec::new();
+        if let Some(current) = source.optional_secret("HOOK_ACCOUNTS_WEBHOOK_SECRET") {
+            validate_secret_text("HOOK_ACCOUNTS_WEBHOOK_SECRET", &current, 16)?;
+            webhook_secrets.push(current);
+            if let Some(previous) = source.optional_secret("HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET")
+            {
+                validate_secret_text("HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET", &previous, 16)?;
+                webhook_secrets.push(previous);
+            }
+        } else if source
+            .optional_secret("HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET")
+            .is_some()
+        {
             return Err(invalid(
-                "HOOK_IAM_BASE_URL",
-                "must be an origin without a path",
+                "HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET",
+                "is only used together with HOOK_ACCOUNTS_WEBHOOK_SECRET (the current secret)",
             ));
+        } else if environment.is_production() {
+            return Err(SettingsError::Missing("HOOK_ACCOUNTS_WEBHOOK_SECRET"));
         }
-        let allow_insecure_local_http =
-            source.parse_or("HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP", "false")?;
-        if environment.is_production() && allow_insecure_local_http {
-            return Err(invalid(
-                "HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP",
-                "plain HTTP to IAM is forbidden in production",
-            ));
-        }
-        if base_url.scheme() == "http" && !allow_insecure_local_http {
-            return Err(invalid(
-                "HOOK_IAM_BASE_URL",
-                "plain HTTP requires HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP=true and a loopback host",
-            ));
-        }
-
-        let local_auth = source.parse_or("HOOK_ALLOW_LOCAL_AUTH", "false")?;
-        if environment.is_production() && local_auth {
-            return Err(invalid(
-                "HOOK_ALLOW_LOCAL_AUTH",
-                "local authentication is forbidden in production",
-            ));
-        }
-
-        let app_id = source.optional("HOOK_IAM_APP_ID");
-        let app_secret = source.optional_secret("HOOK_IAM_APP_SECRET");
-        if !local_auth && (app_id.is_none() || app_secret.is_none()) {
-            return Err(SettingsError::Missing(if app_id.is_none() {
-                "HOOK_IAM_APP_ID"
-            } else {
-                "HOOK_IAM_APP_SECRET"
-            }));
-        }
-        if let Some(app_id) = &app_id {
-            validate_iam_app_id(app_id)?;
-        }
-        if let Some(app_secret) = &app_secret {
-            validate_iam_secret("HOOK_IAM_APP_SECRET", app_secret, "ask_")?;
-        }
-
         Ok(Self {
-            base_url,
+            public_url,
+            api_url,
             app_id,
             app_secret,
-            connect_timeout: source.bounded_duration_millis(
-                "HOOK_PROVIDER_CONNECT_TIMEOUT_MS",
-                1_000,
-                50,
-                30_000,
-            )?,
+            webhook_secrets,
             request_timeout: source.bounded_duration_seconds(
-                "HOOK_IAM_REQUEST_TIMEOUT_SECONDS",
+                "HOOK_ACCOUNTS_TIMEOUT_SECONDS",
                 5,
                 1,
                 30,
             )?,
-            max_response_bytes: source.bounded_usize(
-                "HOOK_IAM_MAX_RESPONSE_BYTES",
-                65_536,
-                1,
-                MAX_PROVIDER_RESPONSE_BYTES,
-            )?,
-            allow_insecure_local_http,
-            local_auth,
-            webhook: IamWebhookSettings::load(source)?,
         })
     }
 }
 
-impl IamWebhookSettings {
-    fn load(source: &impl ConfigurationSource) -> Result<Option<Self>, SettingsError> {
-        let Some(secret) = source.optional_secret("HOOK_IAM_WEBHOOK_SECRET") else {
-            return Ok(None);
-        };
-        validate_webhook_secret("HOOK_IAM_WEBHOOK_SECRET", &secret)?;
-        let version: u64 = source.parse_or("HOOK_IAM_WEBHOOK_SECRET_VERSION", "1")?;
-        if version == 0 {
-            return Err(invalid(
-                "HOOK_IAM_WEBHOOK_SECRET_VERSION",
-                "must be a positive integer",
-            ));
-        }
-        let previous = match (
-            source.optional_secret("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET"),
-            source.optional("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION"),
-        ) {
-            (None, None) => None,
-            (Some(previous), Some(previous_version)) => {
-                validate_webhook_secret("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET", &previous)?;
-                let previous_version = previous_version.parse::<u64>().map_err(|_| {
-                    invalid(
-                        "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION",
-                        "must be a positive integer",
-                    )
-                })?;
-                if previous_version == 0 || previous_version == version {
-                    return Err(invalid(
-                        "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION",
-                        "must be a positive integer distinct from the current version",
-                    ));
-                }
-                Some((previous, previous_version))
-            }
-            _ => {
-                return Err(invalid(
-                    "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET",
-                    "must be set together with HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION",
-                ));
-            }
-        };
-        Ok(Some(Self {
-            secret,
-            version,
-            previous,
-        }))
-    }
+/// Variables from the Silicon IAM, Honeycomb and test-environment era that are
+/// no longer read, with what replaced them.
+const OBSOLETE_VARIABLES: &[(&str, &str)] = &[
+    ("HOOK_IAM_BASE_URL", "ACCOUNTS_URL"),
+    (
+        "HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP",
+        "plain HTTP is allowed for loopback hosts only",
+    ),
+    ("HOOK_IAM_APP_ID", "HOOK_APP_ID"),
+    ("HOOK_IAM_APP_SECRET", "HOOK_APP_SECRET"),
+    ("HOOK_IAM_WEBHOOK_SECRET", "HOOK_ACCOUNTS_WEBHOOK_SECRET"),
+    (
+        "HOOK_IAM_WEBHOOK_SECRET_VERSION",
+        "nothing (Accounts secrets are not versioned)",
+    ),
+    (
+        "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET",
+        "HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET",
+    ),
+    (
+        "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION",
+        "nothing (Accounts secrets are not versioned)",
+    ),
+    (
+        "HOOK_IAM_REQUEST_TIMEOUT_SECONDS",
+        "HOOK_ACCOUNTS_TIMEOUT_SECONDS",
+    ),
+    ("HOOK_IAM_MAX_RESPONSE_BYTES", "nothing"),
+    ("HOOK_PROVIDER_CONNECT_TIMEOUT_MS", "nothing"),
+    (
+        "HOOK_ALLOW_LOCAL_AUTH",
+        "access tokens from Silicon Accounts (local stack: ACCOUNTS_URL=http://localhost:9590)",
+    ),
+    (
+        "HOOK_TING_BASE_URL",
+        "HOOK_TING_URL (delivery through Ting is off unless it is set)",
+    ),
+    (
+        "HOOK_TEST_DATABASE_URL",
+        "nothing (test environments were removed)",
+    ),
+    (
+        "HOOK_TEST_MIGRATOR_DATABASE_URL",
+        "nothing (test environments were removed)",
+    ),
+    (
+        "HOOK_TEST_TELEMETRY_KEYS",
+        "nothing (test environments were removed)",
+    ),
+    (
+        "HOOK_HONEYCOMB_SERVICE_TOKEN",
+        "nothing (Silicon Apps has no lifecycle callbacks)",
+    ),
+    (
+        "HOOK_HONEYCOMB_URL",
+        "nothing (Silicon Apps has no lifecycle callbacks)",
+    ),
+    (
+        "HOOK_REALTIME_HEARTBEAT_INTERVAL_SECONDS",
+        "nothing (the v1 WebSocket was removed)",
+    ),
+    (
+        "HOOK_REALTIME_HEARTBEAT_TIMEOUT_SECONDS",
+        "nothing (the v1 WebSocket was removed)",
+    ),
+    (
+        "HOOK_REALTIME_REPLAY_BATCH_SIZE",
+        "nothing (the v1 WebSocket was removed)",
+    ),
+    (
+        "HOOK_REALTIME_POLL_INTERVAL_MS",
+        "nothing (the v1 WebSocket was removed)",
+    ),
+    (
+        "HOOK_REALTIME_MAX_SILICONS_PER_CONNECTION",
+        "nothing (the v1 WebSocket was removed)",
+    ),
+];
+
+fn obsolete_variables(source: &impl ConfigurationSource) -> Vec<String> {
+    OBSOLETE_VARIABLES
+        .iter()
+        .filter(|(name, _)| source.raw(name).is_some())
+        .map(|(name, replacement)| format!("{name} is no longer read; use {replacement}"))
+        .collect()
 }
 
 impl PolicySettings {
@@ -777,51 +721,6 @@ impl PolicySettings {
             secret_replay_ttl,
             deletion_retention,
             log_retention,
-        })
-    }
-}
-
-impl RealtimeSettings {
-    fn load(source: &impl ConfigurationSource) -> Result<Self, SettingsError> {
-        let heartbeat_interval = source.bounded_duration_seconds(
-            "HOOK_REALTIME_HEARTBEAT_INTERVAL_SECONDS",
-            30,
-            30,
-            30,
-        )?;
-        let heartbeat_timeout = source.bounded_duration_seconds(
-            "HOOK_REALTIME_HEARTBEAT_TIMEOUT_SECONDS",
-            120,
-            120,
-            120,
-        )?;
-        let replay_batch_size: NonZeroU32 =
-            source.parse_or("HOOK_REALTIME_REPLAY_BATCH_SIZE", "100")?;
-        if replay_batch_size.get() > 1_000 {
-            return Err(invalid(
-                "HOOK_REALTIME_REPLAY_BATCH_SIZE",
-                "must be between 1 and 1000",
-            ));
-        }
-        let max_silicons_per_connection: NonZeroUsize =
-            source.parse_or("HOOK_REALTIME_MAX_SILICONS_PER_CONNECTION", "64")?;
-        if max_silicons_per_connection.get() > MAX_SILICONS_PER_CONNECTION {
-            return Err(invalid(
-                "HOOK_REALTIME_MAX_SILICONS_PER_CONNECTION",
-                format!("must be between 1 and {MAX_SILICONS_PER_CONNECTION}"),
-            ));
-        }
-        Ok(Self {
-            heartbeat_interval,
-            heartbeat_timeout,
-            replay_batch_size,
-            poll_interval: source.bounded_duration_millis(
-                "HOOK_REALTIME_POLL_INTERVAL_MS",
-                1_000,
-                100,
-                60_000,
-            )?,
-            max_silicons_per_connection,
         })
     }
 }
@@ -935,23 +834,6 @@ trait ConfigurationSource {
             ));
         }
         Ok(Duration::from_secs(seconds))
-    }
-
-    fn bounded_duration_millis(
-        &self,
-        name: &'static str,
-        default: u64,
-        minimum: u64,
-        maximum: u64,
-    ) -> Result<Duration, SettingsError> {
-        let milliseconds = self.parse_or(name, &default.to_string())?;
-        if !(minimum..=maximum).contains(&milliseconds) {
-            return Err(invalid(
-                name,
-                format!("must be between {minimum} and {maximum} milliseconds"),
-            ));
-        }
-        Ok(Duration::from_millis(milliseconds))
     }
 
     fn bounded_usize(
@@ -1110,58 +992,85 @@ fn validate_base64url_key(
     Ok(key)
 }
 
-/// Globally unique, bare IAM application handle.
-fn validate_iam_app_id(app_id: &str) -> Result<(), SettingsError> {
-    let valid_handle = |value: &str| {
-        (1..=80).contains(&value.len())
-            && value
-                .bytes()
-                .next()
-                .is_some_and(|byte| byte.is_ascii_lowercase())
-            && value.bytes().all(|byte| {
-                byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
-            })
-    };
-    if valid_handle(app_id) {
-        Ok(())
-    } else {
-        Err(invalid(
-            "HOOK_IAM_APP_ID",
-            "must be a bare IAM application handle, such as hook",
-        ))
-    }
-}
-
-fn validate_webhook_secret(name: &'static str, secret: &SecretString) -> Result<(), SettingsError> {
-    silicon_iam_client::WebhookSecret::new(secret.expose_secret())
-        .map(|_| ())
-        .map_err(|_| {
-            invalid(
-                name,
-                "must contain 32 to 512 non-whitespace ASCII characters",
-            )
-        })
-}
-
-/// IAM secrets are a fixed 4-character prefix plus 43 URL-safe base64 characters.
-fn validate_iam_secret(
-    name: &'static str,
-    secret: &SecretString,
-    prefix: &str,
-) -> Result<(), SettingsError> {
-    let value = secret.expose_secret();
-    let valid = value.len() == 47
-        && value.starts_with(prefix)
-        && value[prefix.len()..]
+/// Bare Silicon Accounts app id, such as `hook` or `ting`.
+fn validate_app_id(name: &'static str, app_id: &str) -> Result<(), SettingsError> {
+    let valid = (1..=80).contains(&app_id.len())
+        && app_id
             .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-'));
+            .next()
+            .is_some_and(|byte| byte.is_ascii_lowercase())
+        && app_id.bytes().all(|byte| {
+            byte.is_ascii_lowercase() || byte.is_ascii_digit() || matches!(byte, b'_' | b'-')
+        });
     if valid {
         Ok(())
     } else {
         Err(invalid(
             name,
-            "must be the IAM-issued secret: a 4-character prefix plus 43 URL-safe characters",
+            "must be a bare Silicon Accounts app id of lowercase letters, digits, _ or -, such as hook",
         ))
+    }
+}
+
+fn validate_secret_text(
+    name: &'static str,
+    secret: &SecretString,
+    minimum: usize,
+) -> Result<(), SettingsError> {
+    let value = secret.expose_secret();
+    if (minimum..=512).contains(&value.len()) && value.bytes().all(|byte| byte.is_ascii_graphic()) {
+        Ok(())
+    } else {
+        Err(invalid(
+            name,
+            format!("must be {minimum} to 512 visible ASCII characters with no spaces"),
+        ))
+    }
+}
+
+/// An HTTP(S) origin Hook sends credentials to: HTTPS, or plain HTTP to a
+/// loopback host outside production (the local Silicon Accounts stack).
+fn validate_service_origin(
+    environment: RuntimeEnvironment,
+    url: &Url,
+    name: &'static str,
+) -> Result<(), SettingsError> {
+    if url.cannot_be_a_base()
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
+    {
+        return Err(invalid(
+            name,
+            "must be an absolute URL without embedded credentials",
+        ));
+    }
+    if url.query().is_some() || url.fragment().is_some() || url.path() != "/" {
+        return Err(invalid(
+            name,
+            "must be an origin such as https://accounts.teamofsilicons.com, without a path, query or fragment",
+        ));
+    }
+    match url.scheme() {
+        "https" => Ok(()),
+        "http" if environment.is_production() => {
+            Err(invalid(name, "production URLs must use HTTPS"))
+        }
+        "http" if is_loopback(url) => Ok(()),
+        "http" => Err(invalid(
+            name,
+            "plain HTTP is only allowed for a loopback host (localhost, 127.0.0.1 or ::1); use https://",
+        )),
+        _ => Err(invalid(name, "must use HTTPS")),
+    }
+}
+
+fn is_loopback(url: &Url) -> bool {
+    match url.host() {
+        Some(url::Host::Domain(domain)) => domain.eq_ignore_ascii_case("localhost"),
+        Some(url::Host::Ipv4(address)) => address.is_loopback(),
+        Some(url::Host::Ipv6(address)) => address.is_loopback(),
+        None => false,
     }
 }
 
@@ -1212,6 +1121,7 @@ mod tests {
 
     use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
     use pretty_assertions::assert_eq;
+    use secrecy::ExposeSecret as _;
 
     use super::{
         ApiSettings, ConfigurationSource, MAX_MAINTENANCE_BATCH_SIZE,
@@ -1244,17 +1154,19 @@ mod tests {
         values.extend([
             (
                 "HOOK_PUBLIC_BASE_URL",
-                "https://hook.teamofsilicons.com".to_owned(),
+                "https://api.hook.teamofsilicons.com".to_owned(),
             ),
             ("HOOK_ENCRYPTION_KEYS", format!("1:{encryption_key}")),
             ("HOOK_ENCRYPTION_CURRENT_VERSION", "1".to_owned()),
             ("HOOK_CURSOR_SIGNING_KEY", cursor_key),
             (
-                "HOOK_IAM_BASE_URL",
-                "https://backend.iam.teamofsilicons.com".to_owned(),
+                "HOOK_APP_SECRET",
+                "sa_app_hook_production-secret-value".to_owned(),
             ),
-            ("HOOK_IAM_APP_ID", "hook".to_owned()),
-            ("HOOK_IAM_APP_SECRET", format!("ask_{}", "A".repeat(43))),
+            (
+                "HOOK_ACCOUNTS_WEBHOOK_SECRET",
+                "whsec_production-webhook-secret".to_owned(),
+            ),
         ]);
         TestEnvironment(values)
     }
@@ -1273,33 +1185,224 @@ mod tests {
         ]))
     }
 
+    fn rejected(environment: &TestEnvironment) -> Option<(&'static str, String)> {
+        match ApiSettings::load(environment) {
+            Err(SettingsError::Invalid { name, reason }) => Some((name, reason)),
+            Err(SettingsError::Missing(name)) => Some((name, "missing".to_owned())),
+            Ok(_) => None,
+        }
+    }
+
     #[test]
     fn production_api_configuration_is_typed_and_redacted() -> Result<(), SettingsError> {
         let settings = ApiSettings::load(&valid_api_environment("production"))?;
 
         assert_eq!(settings.process.environment, RuntimeEnvironment::Production);
         assert_eq!(settings.crypto.encryption_keys.len(), 1);
-        assert!(!settings.iam.local_auth_enabled());
+        assert_eq!(settings.accounts.app_id, "hook");
+        assert_eq!(
+            settings.accounts.issuer(),
+            "https://accounts.teamofsilicons.com"
+        );
+        assert_eq!(settings.accounts.api_origin(), settings.accounts.issuer());
+        assert_eq!(settings.accounts.webhook_secrets.len(), 1);
+        assert!(
+            settings.ting.base_url.is_none(),
+            "Ting is off unless HOOK_TING_URL is set"
+        );
+        assert!(settings.obsolete_variables.is_empty());
         assert_eq!(settings.server.trusted_proxy_hops, 0);
-        assert_eq!(settings.realtime.heartbeat_interval.as_secs(), 30);
-        assert_eq!(settings.realtime.heartbeat_timeout.as_secs(), 120);
         assert_eq!(settings.policy.log_retention.as_secs(), 14 * 86_400);
         let debug = format!("{settings:?}");
-        assert!(!debug.contains("a-production-length-iam-secret"));
+        assert!(!debug.contains("production-secret-value"));
+        assert!(!debug.contains("production-webhook-secret"));
         assert!(!debug.contains("hook:secret"));
         Ok(())
     }
 
     #[test]
-    fn production_worker_configuration_is_typed_and_redacted() -> Result<(), SettingsError> {
-        let settings = WorkerProcessSettings::load(&valid_worker_environment("production"))?;
+    fn local_stack_uses_loopback_http_with_a_separate_api_origin() -> Result<(), SettingsError> {
+        let mut environment = valid_api_environment("development");
+        environment
+            .0
+            .insert("ACCOUNTS_URL", "http://localhost:9590".to_owned());
+        environment
+            .0
+            .insert("ACCOUNTS_API_URL", "http://127.0.0.1:9589".to_owned());
+        environment.0.remove("HOOK_ACCOUNTS_WEBHOOK_SECRET");
+        environment
+            .0
+            .insert("HOOK_TING_URL", "http://127.0.0.1:4202".to_owned());
+        let settings = ApiSettings::load(&environment)?;
+        assert_eq!(settings.accounts.issuer(), "http://localhost:9590");
+        assert_eq!(settings.accounts.api_origin(), "http://127.0.0.1:9589");
+        assert!(settings.accounts.webhook_secrets.is_empty());
+        assert_eq!(
+            settings.ting.base_url.as_ref().map(url::Url::as_str),
+            Some("http://127.0.0.1:4202/")
+        );
+        assert_eq!(settings.ting.app_id, super::DEFAULT_TING_APP_ID);
+        Ok(())
+    }
 
-        assert_eq!(settings.process.environment, RuntimeEnvironment::Production);
-        assert_eq!(settings.maintenance.batch_size.get(), 1_000);
-        assert_eq!(settings.maintenance.batches_per_cycle.get(), 32);
-        assert_eq!(settings.maintenance.interval.as_secs(), 5);
-        let debug = format!("{settings:?}");
-        assert!(!debug.contains("hook:secret"));
+    #[test]
+    fn ting_app_id_names_another_valid_app() -> Result<(), SettingsError> {
+        let mut environment = valid_api_environment("development");
+        environment
+            .0
+            .insert("HOOK_TING_APP_ID", "ting-staging".to_owned());
+        assert_eq!(ApiSettings::load(&environment)?.ting.app_id, "ting-staging");
+
+        for value in ["Ting", "ting app", "-ting", "hook"] {
+            let mut environment = valid_api_environment("development");
+            environment.0.insert("HOOK_TING_APP_ID", value.to_owned());
+            assert_eq!(
+                rejected(&environment).map(|(name, _)| name),
+                Some("HOOK_TING_APP_ID"),
+                "HOOK_TING_APP_ID={value}"
+            );
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn accounts_origins_must_be_https_unless_loopback_outside_production() {
+        for (environment, name, value, reason) in [
+            (
+                "development",
+                "ACCOUNTS_URL",
+                "http://accounts.example.com",
+                "loopback",
+            ),
+            (
+                "production",
+                "ACCOUNTS_URL",
+                "http://localhost:9590",
+                "HTTPS",
+            ),
+            (
+                "development",
+                "ACCOUNTS_URL",
+                "https://accounts.example.com/v1",
+                "origin",
+            ),
+            (
+                "development",
+                "ACCOUNTS_API_URL",
+                "https://user:pass@accounts.example.com",
+                "credentials",
+            ),
+            (
+                "development",
+                "HOOK_TING_URL",
+                "http://ting.example.com",
+                "loopback",
+            ),
+        ] {
+            let mut settings = valid_api_environment(environment);
+            settings.0.insert(name, value.to_owned());
+            let refusal = rejected(&settings);
+            assert!(
+                refusal
+                    .as_ref()
+                    .is_some_and(|(rejected, why)| *rejected == name && why.contains(reason)),
+                "{name}={value} in {environment}: {refusal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn app_credentials_and_webhook_secrets_are_validated() {
+        let mut missing = valid_api_environment("development");
+        missing.0.remove("HOOK_APP_SECRET");
+        assert_eq!(
+            rejected(&missing).map(|(name, _)| name),
+            Some("HOOK_APP_SECRET")
+        );
+
+        let mut production_without_webhook = valid_api_environment("production");
+        production_without_webhook
+            .0
+            .remove("HOOK_ACCOUNTS_WEBHOOK_SECRET");
+        assert_eq!(
+            rejected(&production_without_webhook).map(|(name, _)| name),
+            Some("HOOK_ACCOUNTS_WEBHOOK_SECRET")
+        );
+
+        let mut orphan_previous = valid_api_environment("development");
+        orphan_previous.0.remove("HOOK_ACCOUNTS_WEBHOOK_SECRET");
+        orphan_previous.0.insert(
+            "HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET",
+            "whsec_previous-webhook-secret".to_owned(),
+        );
+        assert_eq!(
+            rejected(&orphan_previous).map(|(name, _)| name),
+            Some("HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET")
+        );
+
+        for (name, value) in [
+            ("HOOK_APP_ID", "Hook"),
+            ("HOOK_APP_ID", "tos>hook"),
+            ("HOOK_APP_SECRET", "short"),
+            ("HOOK_APP_SECRET", "has a space in the middle!"),
+        ] {
+            let mut environment = valid_api_environment("development");
+            environment.0.insert(name, value.to_owned());
+            assert_eq!(
+                rejected(&environment).map(|(rejected, _)| rejected),
+                Some(name)
+            );
+        }
+    }
+
+    #[test]
+    fn rotation_keeps_the_current_secret_first() -> Result<(), SettingsError> {
+        let mut environment = valid_api_environment("production");
+        environment.0.insert(
+            "HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET",
+            "whsec_previous-webhook-secret".to_owned(),
+        );
+        let settings = ApiSettings::load(&environment)?;
+        let secrets = settings
+            .accounts
+            .webhook_secrets
+            .iter()
+            .map(|secret| secret.expose_secret().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            secrets,
+            vec![
+                "whsec_production-webhook-secret".to_owned(),
+                "whsec_previous-webhook-secret".to_owned()
+            ]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn iam_era_variables_are_reported_not_used() -> Result<(), SettingsError> {
+        let mut environment = valid_api_environment("production");
+        environment.0.insert(
+            "HOOK_IAM_BASE_URL",
+            "https://backend.iam.teamofsilicons.com".to_owned(),
+        );
+        environment
+            .0
+            .insert("HOOK_ALLOW_LOCAL_AUTH", "true".to_owned());
+        environment.0.insert(
+            "HOOK_TING_BASE_URL",
+            "https://backend.ting.teamofsilicons.com/".to_owned(),
+        );
+        let settings = ApiSettings::load(&environment)?;
+        assert_eq!(settings.obsolete_variables.len(), 3);
+        assert!(
+            settings
+                .obsolete_variables
+                .iter()
+                .any(|line| line
+                    .starts_with("HOOK_IAM_BASE_URL is no longer read; use ACCOUNTS_URL"))
+        );
+        assert!(settings.ting.base_url.is_none());
         Ok(())
     }
 
@@ -1315,7 +1418,7 @@ mod tests {
         environment
             .0
             .insert("HOOK_CURSOR_SIGNING_KEY", "not-a-key".to_owned());
-        environment.0.insert("HOOK_IAM_APP_SECRET", String::new());
+        environment.0.insert("HOOK_APP_SECRET", String::new());
 
         let settings = WorkerProcessSettings::load(&environment)?;
         assert_eq!(settings.process.environment, RuntimeEnvironment::Production);
@@ -1342,7 +1445,7 @@ mod tests {
         for name in [
             "HOOK_ENCRYPTION_KEYS",
             "HOOK_CURSOR_SIGNING_KEY",
-            "HOOK_IAM_APP_SECRET",
+            "HOOK_APP_SECRET",
         ] {
             let mut api = valid_api_environment("production");
             api.0.remove(name);
@@ -1357,22 +1460,6 @@ mod tests {
         assert!(matches!(
             MigrationSettings::load(&migration),
             Err(SettingsError::Missing("HOOK_MIGRATOR_DATABASE_URL"))
-        ));
-    }
-
-    #[test]
-    fn production_api_rejects_local_auth() {
-        let mut environment = valid_api_environment("production");
-        environment
-            .0
-            .insert("HOOK_ALLOW_LOCAL_AUTH", "true".to_owned());
-
-        assert!(matches!(
-            ApiSettings::load(&environment),
-            Err(SettingsError::Invalid {
-                name: "HOOK_ALLOW_LOCAL_AUTH",
-                ..
-            })
         ));
     }
 
@@ -1430,88 +1517,6 @@ mod tests {
     }
 
     #[test]
-    fn local_auth_is_explicit_and_non_production_only() -> Result<(), SettingsError> {
-        let mut environment = valid_api_environment("development");
-        environment
-            .0
-            .insert("HOOK_ALLOW_LOCAL_AUTH", "true".to_owned());
-        environment
-            .0
-            .insert("HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP", "true".to_owned());
-        environment.0.remove("HOOK_IAM_APP_ID");
-        environment.0.remove("HOOK_IAM_APP_SECRET");
-
-        let settings = ApiSettings::load(&environment)?;
-        assert!(settings.iam.local_auth_enabled());
-        Ok(())
-    }
-
-    #[test]
-    fn iam_secrets_and_optional_features_are_validated() -> Result<(), SettingsError> {
-        let mut malformed = valid_api_environment("production");
-        malformed
-            .0
-            .insert("HOOK_IAM_APP_SECRET", "not-an-iam-secret".to_owned());
-        assert!(matches!(
-            ApiSettings::load(&malformed),
-            Err(SettingsError::Invalid {
-                name: "HOOK_IAM_APP_SECRET",
-                ..
-            })
-        ));
-
-        let mut configured = valid_api_environment("production");
-        configured
-            .0
-            .insert("HOOK_IAM_WEBHOOK_SECRET", format!("whs_{}", "B".repeat(43)));
-        configured
-            .0
-            .insert("HOOK_IAM_WEBHOOK_SECRET_VERSION", "2".to_owned());
-        configured.0.insert(
-            "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET",
-            format!("whs_{}", "C".repeat(43)),
-        );
-        configured
-            .0
-            .insert("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION", "1".to_owned());
-        let settings = ApiSettings::load(&configured)?;
-        let webhook = settings
-            .iam
-            .webhook
-            .as_ref()
-            .ok_or(SettingsError::Missing("HOOK_IAM_WEBHOOK_SECRET"))?;
-        assert_eq!(webhook.version, 2);
-        assert_eq!(
-            webhook.previous.as_ref().map(|(_, version)| *version),
-            Some(1)
-        );
-
-        configured
-            .0
-            .remove("HOOK_IAM_WEBHOOK_PREVIOUS_SECRET_VERSION");
-        assert!(matches!(
-            ApiSettings::load(&configured),
-            Err(SettingsError::Invalid {
-                name: "HOOK_IAM_WEBHOOK_PREVIOUS_SECRET",
-                ..
-            })
-        ));
-
-        let mut insecure = valid_api_environment("production");
-        insecure
-            .0
-            .insert("HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP", "true".to_owned());
-        assert!(matches!(
-            ApiSettings::load(&insecure),
-            Err(SettingsError::Invalid {
-                name: "HOOK_IAM_ALLOW_INSECURE_LOCAL_HTTP",
-                ..
-            })
-        ));
-        Ok(())
-    }
-
-    #[test]
     fn fixed_public_contract_values_reject_configuration_drift() {
         for (name, value) in [
             ("HOOK_MAX_INGRESS_BODY_BYTES", "1048575"),
@@ -1520,9 +1525,8 @@ mod tests {
             ("HOOK_SECRET_REPLAY_TTL_SECONDS", "599"),
             ("HOOK_DELETION_RETENTION_SECONDS", "3888001"),
             ("HOOK_LOG_RETENTION_SECONDS", "1209599"),
-            ("HOOK_REALTIME_HEARTBEAT_INTERVAL_SECONDS", "31"),
-            ("HOOK_REALTIME_HEARTBEAT_TIMEOUT_SECONDS", "119"),
             ("HOOK_TRUSTED_PROXY_HOPS", "9"),
+            ("HOOK_ACCOUNTS_TIMEOUT_SECONDS", "31"),
         ] {
             let mut environment = valid_api_environment("production");
             environment.0.insert(name, value.to_owned());
@@ -1552,22 +1556,6 @@ mod tests {
             environment.0.insert(name, value);
             assert!(matches!(
                 WorkerProcessSettings::load(&environment),
-                Err(SettingsError::Invalid { name: rejected, .. }) if rejected == name
-            ));
-        }
-    }
-
-    #[test]
-    fn realtime_batch_and_subscription_bounds_are_enforced() {
-        for (name, value) in [
-            ("HOOK_REALTIME_REPLAY_BATCH_SIZE", "1001"),
-            ("HOOK_REALTIME_MAX_SILICONS_PER_CONNECTION", "257"),
-            ("HOOK_REALTIME_POLL_INTERVAL_MS", "50"),
-        ] {
-            let mut environment = valid_api_environment("production");
-            environment.0.insert(name, value.to_owned());
-            assert!(matches!(
-                ApiSettings::load(&environment),
                 Err(SettingsError::Invalid { name: rejected, .. }) if rejected == name
             ));
         }

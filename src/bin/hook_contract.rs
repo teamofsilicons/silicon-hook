@@ -7,28 +7,17 @@ async fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
     if args.is_empty() || args.iter().any(|a| a == "--help") {
         println!(
-            "hook-contract <status|deprecate|activate> <v2|v1> [test-environment-uuid]\nUses HOOK_DATABASE_URL for production; a sandbox UUID selects HOOK_TEST_DATABASE_URL.\nDeprecation starts a seven-day idle window. Activity restarts that window. Only deprecated contracts sunset.\nOperator database credentials are required. No actor sessions are accepted."
+            "hook-contract <status|deprecate|activate> <v3|v2|v1>\nUses HOOK_MIGRATOR_DATABASE_URL.\nDeprecation starts a seven-day idle window. Activity restarts that window. Only deprecated contracts sunset.\nv1 and v2 are retired and stay sunset; activating them changes nothing the API serves.\nOperator database credentials are required. No account sessions are accepted."
         );
         return Ok(());
     }
     anyhow::ensure!(
-        (2..=3).contains(&args.len()) && matches!(args[1].as_str(), "v1" | "v2"),
+        args.len() == 2 && matches!(args[1].as_str(), "v3" | "v2" | "v1"),
         "use hook-contract --help"
     );
     let settings = MigrationSettings::from_env()?;
-    let environment = args
-        .get(2)
-        .map(|id| id.parse::<uuid::Uuid>())
-        .transpose()?
-        .unwrap_or(uuid::Uuid::nil());
-    let db = if environment.is_nil() {
-        &settings.database
-    } else {
-        settings
-            .test_database
-            .as_ref()
-            .ok_or_else(|| anyhow::anyhow!("HOOK_TEST_DATABASE_URL is required"))?
-    };
+    let environment = uuid::Uuid::nil();
+    let db = &settings.database;
     let pool = postgres::connect(db, "hook-contract").await?;
     let mut tx = pool.begin().await?;
     match args[0].as_str() {

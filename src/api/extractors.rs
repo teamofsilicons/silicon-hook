@@ -8,9 +8,8 @@ use axum::{
 };
 use secrecy::SecretString;
 
-use crate::{domain::OrganizationId, error::AppError};
+use crate::error::AppError;
 
-const ORG_ID_HEADER: &str = "x-org-id";
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
 const FORWARDED_FOR_HEADER: &str = "x-forwarded-for";
 const MAX_BEARER_TOKEN_BYTES: usize = 4_096;
@@ -93,18 +92,11 @@ fn parse_forwarded_ip(entry: &str) -> Result<IpAddr, std::net::AddrParseError> {
         .parse::<IpAddr>()
 }
 
-/// Extracts the opaque IAM bearer token every authenticated route requires.
-///
-/// Hook exposes no OBO endpoints: the bearer token is the only credential a
-/// Carbon, Silicon, or service can present, and IAM decides online what it
-/// authorizes.
+/// Extracts the bearer token every authenticated route requires: a Silicon
+/// Accounts access token issued to Hook. Hook accepts no proofs: the bearer
+/// token is the only credential a Carbon or Silicon presents.
 pub(super) fn bearer_token(headers: &HeaderMap) -> Result<SecretString, AppError> {
     optional_bearer(headers)?.ok_or(AppError::Unauthenticated)
-}
-
-pub(super) fn organization_id(headers: &HeaderMap) -> Result<OrganizationId, AppError> {
-    let value = required_header_bounded(headers, ORG_ID_HEADER, 100)?;
-    OrganizationId::new(value).map_err(|_| AppError::validation("invalid_org_id"))
 }
 
 pub(super) fn idempotency_key(headers: &HeaderMap) -> Result<String, AppError> {

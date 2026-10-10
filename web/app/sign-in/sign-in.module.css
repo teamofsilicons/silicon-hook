@@ -1,0 +1,20 @@
+/* The sign-in card: one calm column in the middle of the page (the developer site's sign-in page). */
+.page { display: grid; min-height: 100vh; min-height: 100dvh; place-items: center; padding: var(--space-12) var(--gutter); background: radial-gradient(circle at 50% 0%, color-mix(in oklab, var(--app-accent) 12%, transparent), transparent 60%), var(--background); }
+.column { display: grid; width: min(100%, 480px); gap: var(--space-6); }
+.brand { --sq-r: 12px; --sq-fill: transparent; display: inline-flex; width: fit-content; margin: -6px -8px; padding: 6px 8px; background: var(--sq-fill); color: var(--foreground); text-decoration: none; }
+.brand:hover { color: var(--foreground); }
+.brand:focus-visible { outline: none; --sq-fill: var(--surface-muted); }
+.card { --sq-r: var(--radius-surface); --sq-fill: var(--surface); --sq-stroke: var(--border); position: relative; display: grid; gap: var(--space-5); border: 1px solid var(--sq-stroke); padding: var(--space-8); background: var(--sq-fill); }
+@media (max-width: 480px) { .card { padding: var(--space-6); } }
+.icon { --sq-r: 16px; --sq-fill: var(--surface-muted); display: grid; width: 52px; height: 52px; place-items: center; background: var(--sq-fill); color: var(--text-secondary); }
+.title { margin: 0; color: var(--foreground); font-family: var(--font-display); font-size: clamp(var(--text-3xl), 7vw, 2.75rem); font-weight: 600; letter-spacing: var(--tracking-display); line-height: 1.04; text-wrap: balance; }
+.lede { margin: 0; color: var(--text-secondary); font-size: var(--text-base); line-height: var(--leading-body); text-wrap: pretty; }
+.notice { --sq-r: var(--radius-control); --sq-fill: var(--surface-muted); display: flex; align-items: flex-start; gap: var(--space-2); margin: 0; padding: var(--space-3) var(--space-4); background: var(--sq-fill); color: var(--text-secondary); font-size: var(--text-sm); line-height: var(--leading-body); }
+.notice svg { flex: none; margin-top: 2px; }
+.notice[data-tone="danger"] { --sq-fill: color-mix(in oklab, var(--danger) 9%, var(--surface)); color: var(--danger); }
+.signedIn { margin: 0; color: var(--text-secondary); font-size: var(--text-sm); }
+.signedIn strong { color: var(--foreground); font-weight: 600; }
+.actions { display: grid; gap: var(--space-2); }
+.cta { width: 100%; }
+.fine { margin: 0; color: var(--text-muted); font-size: var(--text-xs); line-height: var(--leading-body); }
+.footer { margin: 0; color: var(--text-secondary); font-size: var(--text-sm); line-height: var(--leading-body); text-align: center; }

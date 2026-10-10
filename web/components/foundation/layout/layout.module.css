@@ -1,0 +1,71 @@
+/* Layout primitives for account pages. One page container per page; everything inside fills its column. */
+
+.page {
+  width: 100%;
+  max-width: var(--page-max);
+  min-width: 0;
+  margin-inline: auto;
+  padding: clamp(8px, 2vw, 24px) var(--gutter) var(--dock-clearance);
+  display: grid;
+  align-content: start;
+  gap: clamp(32px, 4vw, 48px);
+}
+.page > * { min-width: 0; }
+/* Narrow pages keep the container's left edge (heading, cards and the brand line up) and narrow their column only. */
+.page[data-width="narrow"] > * { max-width: var(--page-narrow); }
+.page[data-width="reading"] > * { max-width: 880px; }
+
+/* Page header: the one h1, in the display serif, with an optional line of context and actions. */
+.header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: end; gap: var(--space-4) var(--space-6); }
+.headerText { display: grid; min-width: 0; gap: var(--space-3); }
+.title { margin: 0; color: var(--foreground); font-family: var(--font-display); font-size: clamp(var(--text-3xl), 4.8vw, var(--text-4xl)); font-weight: 600; letter-spacing: var(--tracking-display); line-height: 1.02; text-wrap: balance; overflow-wrap: anywhere; }
+.header[data-size="entity"] .title { font-size: clamp(var(--text-2xl), 3.2vw, 2.5rem); line-height: 1.08; }
+.description { max-width: 62ch; margin: 0; color: var(--text-secondary); font-size: var(--text-base); line-height: var(--leading-body); text-wrap: pretty; }
+.actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-3); }
+.back { display: inline-flex; width: fit-content; align-items: center; gap: var(--space-1); margin-bottom: var(--space-1); color: var(--text-secondary); font-size: var(--text-sm); text-decoration: none; transition: color var(--duration-fast) var(--ease-standard); }
+.back:hover, .back:focus-visible { color: var(--foreground); }
+@media (max-width: 640px) {
+  .header { grid-template-columns: minmax(0, 1fr); align-items: start; }
+  .actions { justify-content: flex-start; }
+}
+
+/* Sections inside a page. */
+.section { display: grid; min-width: 0; gap: var(--space-4); }
+.sectionHeader { display: flex; flex-wrap: wrap; align-items: flex-end; justify-content: space-between; gap: var(--space-2) var(--space-4); }
+.sectionText { display: grid; min-width: 0; gap: var(--space-1); }
+.sectionTitle { margin: 0; color: var(--foreground); font-size: var(--text-lg); font-weight: 500; letter-spacing: var(--tracking-body); line-height: 1.3; }
+.sectionDescription { max-width: 62ch; margin: 0; color: var(--text-secondary); font-size: var(--text-sm); line-height: var(--leading-body); }
+
+.stack { display: flex; min-width: 0; flex-direction: column; }
+.cluster { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; }
+.grid { display: grid; min-width: 0; grid-template-columns: repeat(auto-fill, minmax(min(100%, var(--grid-min, 260px)), 1fr)); }
+.stack > *, .cluster > *, .grid > * { min-width: 0; }
+
+/* A bordered squircle surface for one region of content. Never nest surfaces. */
+.surface { --sq-r: var(--radius-surface); --sq-fill: var(--surface); --sq-stroke: var(--border); position: relative; min-width: 0; border: 1px solid var(--sq-stroke); background: var(--sq-fill); padding: var(--space-6); }
+.surface[data-padding="none"] { padding: 0; }
+.surface[data-padding="sm"] { padding: var(--space-4); }
+@media (max-width: 480px) { .surface { padding: var(--space-5); } }
+
+/* Settings: one bordered group per section, rows divided by hairlines (Arc composition). */
+.group { --sq-r: var(--radius-panel); --sq-fill: var(--surface); --sq-stroke: var(--border); position: relative; min-width: 0; border: 1px solid var(--sq-stroke); background: var(--sq-fill); }
+.row { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: center; gap: var(--space-3) var(--space-6); min-height: 64px; padding: var(--space-4) var(--space-5); }
+.row + .row { border-top: 1px solid var(--border-subtle); }
+.rowText { display: grid; min-width: 0; gap: 2px; }
+.rowLabel { color: var(--foreground); font-size: var(--text-sm); font-weight: 500; line-height: var(--leading-body); overflow-wrap: anywhere; }
+.rowDescription { color: var(--text-secondary); font-size: var(--text-sm); line-height: var(--leading-body); overflow-wrap: anywhere; }
+.rowControl { display: flex; min-width: 0; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: var(--space-2); }
+@media (max-width: 560px) {
+  .row:not([data-inline]) { grid-template-columns: minmax(0, 1fr); }
+  .row:not([data-inline]) .rowControl { justify-content: flex-start; }
+}
+
+/* Label and value pairs with hairlines between them. */
+.list { display: grid; min-width: 0; margin: 0; }
+.item { display: grid; grid-template-columns: minmax(8rem, 1fr) minmax(0, 2fr); gap: var(--space-4); padding: var(--space-3) 0; border-top: 1px solid var(--border-subtle); font-size: var(--text-sm); line-height: var(--leading-body); }
+.item:first-child { border-top: 0; }
+.item dt { color: var(--text-secondary); }
+.item dd { min-width: 0; margin: 0; color: var(--foreground); overflow-wrap: anywhere; }
+@media (max-width: 480px) { .item { grid-template-columns: minmax(0, 1fr); gap: var(--space-1); } }
+
+@media (prefers-reduced-motion: reduce) { .back { transition: none; } }

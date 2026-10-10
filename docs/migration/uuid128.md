@@ -1,0 +1,43 @@
+# Accounts UUID128 cutover consumer
+
+The service accepts canonical lowercase UUIDs alongside existing legacy Accounts keys. Accounts owns issuance and exports one immutable CSV with exactly `old_uuid,new_uuid,kind`; `kind` is `carbon` or `silicon`. Use the same export for every app. Public c:/si: IDs and app resource IDs do not change.
+
+## Operator sequence
+
+1. Deploy the compatibility schema and code before moving data. Stop every API, worker, CLI maintenance process and incoming webhook writer for the coordinated apply. Back up the database and keep the original application encryption keys.
+2. Install `scripts/accounts_uuid128.requirements.txt` in an isolated Python environment. Supply `DATABASE_URL` through the environment. DM also requires its original `DM_DATA_KEY` for held Ting proofs; Extend requires its original `EXTEND_DELEGATION_ENCRYPTION_KEY` for held delegation proofs.
+3. Run `python scripts/accounts_uuid128.py --file /absolute/path/accounts-uuid128.csv --dry-run`. This executes and validates the entire transaction, including real foreign keys, then rolls back.
+4. Run the identical file with `--apply --writers-stopped`. Check the reported mapping hash against the Accounts export. Rerunning the same file is idempotent; conflicting sources, targets, kinds, chains and account merges are refused.
+5. Start the migrated services only after all linked apps and Accounts are ready. Old JWT/proof subjects listed in the ledger are refused before any account can be recreated. Sign in again with the new identity and check existing resources. Native device IDs, credentials and provider URLs remain stable.
+
+The exact scalar and JSON manifest is `scripts/accounts_uuid128_manifest.json`; no blanket string replacement is performed. Approved JSON rewrites identity fields and typed account references only, never prose. The persisted `hook_private.accounts_uuid128_map` is both the replay ledger and retired-subject fence. Mapping is one transaction with exclusive table locks, temporary deferred foreign keys, restoration of trigger/constraint flags and a final check that no old identities remain in live scalar columns.
+
+DM authenticates and reseals held Ting proof grants with the new account AAD, then rebuilds direct-conversation participant seals. Extend authenticates and reseals both delegation proof tokens and refresh grants. The original secrets and plaintext survive. Signed outgoing request bodies, archive payloads, foreign provider identifiers, resource keys and object paths remain untouched. Their recipient metadata may change; a previously signed body never changes under the same event ID.
+
+Rollback requires the coordinated pre-cutover database backup and matching Accounts/app state. Do not invert the mapping into a live system or restart an old binary against partially migrated data. Production has not been changed by this work.
+
+## Local evidence, 10 October 2026
+
+A populated PostgreSQL clone with 374 cached accounts passed rollback-only dry-run, apply, and idempotent reapply. Seven actual hook signing secrets decrypted to their original values; their ciphertext and hook-ID-based AAD stayed unchanged. Private resource IDs, provider/artifact paths, native credential digests, and signed outgoing/archive bodies were compared before and after and preserved. A conflicting mapping was refused in the shared contract tests. Sanitized reports are kept locally in Commit's `.mig/uuid-proof/results.json` and `.mig/uuid-preservation.log`; maps, database snapshots, keys and tokens are intentionally untracked.
+
+The pure contract suite covers exact CSV shape, canonical UUIDv4, duplicate/collision rejection, typed JSON boundaries and manifest-controlled unknown-kind tombstones. Service regressions exercise canonical UUID accounts and rejection of retired subjects without inserting an old account.
+
+## Checked coverage and notification retirement
+
+The preflight reads every account row while holding table locks. Every noncanonical Accounts UUID must be present in the export, including deleted and webhook-first tombstones. A missing mapping rejects the transaction with only the missing count; existing canonical UUIDs may remain. Known account kinds must agree with the map; Hook explicitly permits an unknown kind for pre-first-use tombstones. The six pure contract regressions and full-schema clone checks cover an omitted mapping, rollback, reapply and conflicting mapping refusal.
+
+Prepared outgoing notifications retain their historical bodies, delivery IDs and idempotency keys. DM marks unaccepted prepared handoffs discarded. Hook parks unaccepted mapped recipients with `legacy_identity`, which the worker excludes even if their next-attempt time is changed. Commit marks pending/in-flight mapped notifications as terminal dead letters with the existing 90-day retention. Extend parks pending request/wake notifications and records hashes of every affected prepared body; its sending boundary refuses those hashes on later operation retries. Existing requests, native sessions and wake state remain available. Fresh actions create fresh delivery identities. The cutover must stop all writers before applying the map.
+
+Populated queue fixtures proved exact body/key preservation and replay exclusion for DM, Extend and Hook; Commit's populated clone retired 21 pending jobs. The full-schema rehearsal also preserved private resource keys, provider URLs and encrypted plaintext. Evidence is local in Commit's `.mig/uuid-proof/results.json`, `.mig/uuid-proof/queue-fixtures.json` and `.mig/uuid-queue-rehearsal.log`; these rehearsal clones and maps are not the coordinated Accounts cutover export.
+
+Commit alone exempts validated `iam:<canonical organization UUID>:<canonical principal UUID>` rows whose status is exactly `unlinked`, through the manifest's explicit `allow_unlinked_iam_placeholders` option. Migration0033 creates these private IAM provenance placeholders and forbids them from signing in; they are not Accounts subjects. Invalid placeholder shapes or any other status still require a mapping. The four populated unlinked placeholders and all their private resource references remain unchanged.
+
+## Checked coverage and notification retirement
+
+The preflight reads every account row while holding table locks. Every noncanonical Accounts UUID must be present in the export, including deleted and webhook-first tombstones. A missing mapping rejects the transaction with only the missing count; existing canonical UUIDs may remain. Known account kinds must agree with the map; Hook explicitly permits an unknown kind for pre-first-use tombstones. The six pure contract regressions and full-schema clone checks cover an omitted mapping, rollback, reapply and conflicting mapping refusal.
+
+Prepared outgoing notifications retain their historical bodies, delivery IDs and idempotency keys. DM marks unaccepted prepared handoffs discarded. Hook parks unaccepted mapped recipients with `legacy_identity`, which the worker excludes even if their next-attempt time is changed. Commit marks pending/in-flight mapped notifications as terminal dead letters with the existing 90-day retention. Extend parks pending request/wake notifications and records hashes of every affected prepared body; its sending boundary refuses those hashes on later operation retries. Existing requests, native sessions and wake state remain available. Fresh actions create fresh delivery identities. The cutover must stop all writers before applying the map.
+
+Populated queue fixtures proved exact body/key preservation and replay exclusion for DM, Extend and Hook; Commit's populated clone retired 21 pending jobs. The full-schema rehearsal also preserved private resource keys, provider URLs and encrypted plaintext. Evidence is local in Commit's `.mig/uuid-proof/results.json`, `.mig/uuid-proof/queue-fixtures.json` and `.mig/uuid-queue-rehearsal.log`; these rehearsal clones and maps are not the coordinated Accounts cutover export.
+
+Hook additionally expires only mapped-old-actor `hook_private.management_idempotency` rows because secret replay ciphertext is bound to that actor. Actual hook signing secrets remain byte-for-byte unchanged. `silicon_id` ingress namespaces, hook/event IDs, provider paths, archived event payloads and foreign provider credentials are intentionally preserved; live authorization uses the rekeyed `silicon_uuid`/`actor_uuid`/grant/allow-list/observer columns in the manifest. The populated rehearsal included 23 accounts, a NULL-kind tombstone, seven decryptable hook secrets, and 16 expired transient replay rows. Accounts access tests passed8/8, including a real UUID subject and retired-subject401 without account recreation; all-target clippy passed.

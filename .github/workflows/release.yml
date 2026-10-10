@@ -1,58 +1,116 @@
-name: Honeycomb release archive
+name: Silicon Apps release archives
+
+# Builds the hook CLI for the six targets it ships, checks each binary on the
+# runner that built it (the three discovery commands run there whenever the
+# runner can execute it), then packs one Silicon Apps archive per target with
+# SHA256SUMS and uploads them as the workflow artifact
+# `hook-silicon-apps-release`. It publishes nothing: uploading to Silicon Apps
+# and publishing the crates are separate, reviewed steps (docs/releases.md).
+
 on:
   workflow_dispatch:
   push:
     tags: ['v*']
+
 permissions:
   contents: read
+
+env:
+  RUST_TOOLCHAIN: 1.98.0
+  SILICON_APPS_CLI_VERSION: 0.2.0
+
 jobs:
+  version:
+    name: Read the release version
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Check the tag against crates/cli/Cargo.toml
+        id: version
+        env:
+          REF_TYPE: ${{ github.ref_type }}
+          REF_NAME: ${{ github.ref_name }}
+        run: |
+          version=$(python3 -c 'import tomllib; print(tomllib.load(open("crates/cli/Cargo.toml", "rb"))["package"]["version"])')
+          if [ "$REF_TYPE" = tag ] && [ "$REF_NAME" != "v$version" ]; then
+            echo "::error::The release tag $REF_NAME must be v$version, the version in crates/cli/Cargo.toml."
+            exit 1
+          fi
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
   binaries:
+    name: Build ${{ matrix.package }}
+    needs: version
     strategy:
       fail-fast: false
       matrix:
         include:
-          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, package: linux-x86_64, binary: hook}
-          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, package: linux-aarch64, binary: hook}
-          - {os: windows-2025, target: x86_64-pc-windows-msvc, package: windows-x86_64, binary: hook.exe}
-          - {os: windows-2025, target: aarch64-pc-windows-msvc, package: windows-aarch64, binary: hook.exe}
-          - {os: macos-15, target: x86_64-apple-darwin, package: macos-x86_64, binary: hook}
-          - {os: macos-15, target: aarch64-apple-darwin, package: macos-aarch64, binary: hook}
+          # discovery: require where the runner executes the binary natively;
+          # auto for the cross builds (Silicon Apps' validation worker for the
+          # target runs the commands at upload).
+          - {os: ubuntu-24.04, target: x86_64-unknown-linux-gnu, package: linux-x86_64, binary: hook, discovery: require}
+          - {os: ubuntu-24.04-arm, target: aarch64-unknown-linux-gnu, package: linux-aarch64, binary: hook, discovery: require}
+          - {os: windows-2025, target: x86_64-pc-windows-msvc, package: windows-x86_64, binary: hook.exe, discovery: require}
+          - {os: windows-2025, target: aarch64-pc-windows-msvc, package: windows-aarch64, binary: hook.exe, discovery: auto}
+          - {os: macos-15, target: x86_64-apple-darwin, package: macos-x86_64, binary: hook, discovery: auto}
+          - {os: macos-15, target: aarch64-apple-darwin, package: macos-aarch64, binary: hook, discovery: require}
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
-      - run: rustup target add ${{ matrix.target }}
-      - run: cargo build --locked --release -p silicon-hook-cli --target ${{ matrix.target }}
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal --target ${{ matrix.target }}
+      - name: Build the release binary
+        run: cargo build --locked --release -p silicon-hook-cli --target ${{ matrix.target }}
+      - name: Check the binary on the runner that built it
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+          PYTHON: ${{ runner.os == 'Windows' && 'python' || 'python3' }}
+        run: >-
+          "$PYTHON" scripts/package_apps.py "$VERSION" ${{ matrix.package }}
+          target/${{ matrix.target }}/release/${{ matrix.binary }}
+          --check-only --discovery ${{ matrix.discovery }}
       - uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.package }}
           path: target/${{ matrix.target }}/release/${{ matrix.binary }}
           if-no-files-found: error
+
   pack:
-    needs: binaries
+    name: Pack the Silicon Apps archives
+    needs: [version, binaries]
     runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
       - uses: actions/download-artifact@v4
         with:
           path: artifacts
-      - name: Verify release tag
-        shell: bash
+      - name: Install the Silicon Apps packer
         run: |
-          python3 - <<'PY'
-          import os, tomllib
-          from pathlib import Path
-          version = tomllib.loads(Path('crates/cli/Cargo.toml').read_text())['package']['version']
-          if os.environ['GITHUB_REF_TYPE'] == 'tag':
-              assert os.environ['GITHUB_REF_NAME'] == f'v{version}', 'Release tag and app version differ'
-          PY
-      - name: Install Honeycomb packager
-        run: cargo install silicon-honeycomb-cli --locked --version 0.4.0
-      - name: Validate and pack every platform
-        run: python3 scripts/package-cli.py --artifacts artifacts --output dist
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          cargo install --locked silicon-apps-cli --version "$SILICON_APPS_CLI_VERSION"
+      - name: Validate and pack one archive per target
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          for target in linux-x86_64 linux-aarch64 windows-x86_64 windows-aarch64 macos-x86_64 macos-aarch64; do
+            binary=hook
+            case "$target" in windows-*) binary=hook.exe ;; esac
+            scripts/package-apps.sh "$VERSION" "$target" "artifacts/$target/$binary"
+          done
+          cd dist/apps
+          sha256sum hook-*.tar.gz > SHA256SUMS
+          sha256sum --check SHA256SUMS
+          cat SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
       - uses: actions/upload-artifact@v4
         with:
-          name: hook-honeycomb-release
+          name: hook-silicon-apps-release
           path: |
-            dist/*.tar.gz
-            dist/*.tar.gz.sha256
+            dist/apps/*.tar.gz
+            dist/apps/*.tar.gz.sha256
+            dist/apps/SHA256SUMS
           if-no-files-found: error

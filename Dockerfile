@@ -4,7 +4,6 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock* ./
 COPY migrations ./migrations
 COPY src ./src
-COPY vendor ./vendor
 COPY crates ./crates
 COPY docs ./docs
 RUN cargo build --locked --release -p silicon-hook --bins

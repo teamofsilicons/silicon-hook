@@ -1,0 +1,25 @@
+/* Accounts shown the same way everywhere: photo, name, id and kind (a word, never colour alone). */
+.row { display: inline-flex; min-width: 0; align-items: center; gap: var(--space-3); }
+.avatar { flex: none; }
+.rowText { display: grid; min-width: 0; gap: 1px; }
+.name { overflow: hidden; color: var(--foreground); font-size: var(--text-sm); font-weight: 500; line-height: 1.3; text-overflow: ellipsis; white-space: nowrap; }
+.meta { display: inline-flex; min-width: 0; flex-wrap: wrap; align-items: center; gap: 4px 8px; color: var(--text-secondary); font-size: var(--text-xs); line-height: 1.3; }
+.id { overflow-wrap: anywhere; }
+.note { color: var(--text-muted); }
+
+.kind { --sq-r: 6px; --sq-fill: var(--surface-muted); display: inline-flex; height: 18px; align-items: center; padding: 0 6px; background: var(--sq-fill); color: var(--text-secondary); font-size: 11px; font-weight: 500; letter-spacing: 0; white-space: nowrap; }
+.kind[data-kind="silicon"] { --sq-fill: var(--accent-subtle); color: var(--accent-ink); }
+.kind[data-size="xs"] { height: 16px; padding: 0 5px; font-size: 10.5px; }
+
+.chip { --sq-r: var(--radius-pill); --sq-fill: var(--surface); --sq-stroke: var(--border); position: relative; display: inline-flex; min-width: 0; max-width: 100%; min-height: 32px; align-items: center; gap: 6px; border: 1px solid var(--sq-stroke); padding: 2px 4px 2px 3px; background: var(--sq-fill); color: var(--foreground); font-size: var(--text-sm); }
+.chip .avatar { width: 24px; height: 24px; font-size: 9.5px; }
+.chipText { display: inline-flex; min-width: 0; align-items: baseline; gap: 6px; }
+.chip .name { font-size: var(--text-sm); }
+.idMuted { overflow: hidden; color: var(--text-muted); font-size: var(--text-xs); text-overflow: ellipsis; white-space: nowrap; }
+.chip[data-state="resolving"] { animation: chip-pulse 1.4s var(--ease-in-out) infinite; }
+.chip[data-state="problem"] { --sq-stroke: color-mix(in oklab, var(--danger) 55%, var(--border)); --sq-fill: color-mix(in oklab, var(--danger) 6%, var(--surface)); }
+.remove { display: grid; width: 24px; height: 24px; flex: none; place-items: center; border: 0; border-radius: 50%; background: transparent; color: var(--text-secondary); cursor: pointer; transition: background-color var(--duration-fast) var(--ease-standard), color var(--duration-fast) var(--ease-standard); }
+@media (hover: hover) and (pointer: fine) { .remove:hover { background: var(--surface-muted); color: var(--foreground); } }
+.remove:focus-visible { outline: none; background: var(--surface-muted); color: var(--foreground); box-shadow: inset 0 0 0 1.5px var(--border-strong); }
+@keyframes chip-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .55; } }
+@media (prefers-reduced-motion: reduce) { .chip[data-state="resolving"] { animation: none; } .remove { transition: none; } }

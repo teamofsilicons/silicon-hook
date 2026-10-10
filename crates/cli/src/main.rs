@@ -1,14 +1,18 @@
+//! `hook`: the Silicon Hook CLI, built on `silicon-hook-client` only.
+
 mod args;
-mod receiving;
+mod commands;
+mod config;
+mod login;
+mod output;
+mod session;
+mod status;
 mod store;
 
-use anyhow::{Context as _, Result};
-use args::{Cli, Command, Config, Environment, Publisher, Receiving, Rotate, System};
+use args::{Cli, Command, LoginAction};
 use clap::{CommandFactory as _, FromArgMatches as _};
-use serde::Serialize;
-use silicon_hook_client::{Client, Mutation, models::*};
-use std::io::Read as _;
-use store::{LockedStore, Session};
+use output::{CliError, CliResult};
+use serde_json::json;
 
 #[tokio::main]
 async fn main() {
@@ -16,103 +20,27 @@ async fn main() {
         Ok(matches) => matches,
         Err(error) => {
             let _ = error.print();
-            let raw: Vec<String> = std::env::args().collect();
-            let option = |name: &str| {
-                raw.iter().enumerate().find_map(|(i, arg)| {
-                    arg.strip_prefix(&format!("{name}="))
-                        .map(str::to_owned)
-                        .or_else(|| (arg == name).then(|| raw.get(i + 1).cloned()).flatten())
-                })
-            };
-            let profile = option("--profile").unwrap_or_else(|| "default".into());
-            let test = option("--test").and_then(|value| value.parse().ok());
-            testing_footer(&profile, test, raw.iter().any(|p| p == "--production"));
             std::process::exit(error.exit_code());
         }
     };
-    let mut cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
-    // Silicon runtimes select the organization through the shared SILICON_ORG
-    // variable. --org and SILICON_HOOK_ORG still take precedence.
-    if cli.org.is_none() {
-        cli.org = shared_org(std::env::var("SILICON_ORG").ok());
-    }
-    if !cli.production && cli.test.is_none() {
-        cli.test = LockedStore::open()
-            .ok()
-            .and_then(|mut s| s.profile(&cli.profile).selected_test);
-    }
+    let cli = Cli::from_arg_matches(&matches).unwrap_or_else(|error| error.exit());
     let started = std::time::Instant::now();
-    let result = run(&cli).await;
-    let telemetry_client = LockedStore::open().ok().and_then(|mut stored| {
-        store::select_client(
-            stored.profile(&cli.profile),
-            cli.test,
-            cli.url.as_deref(),
-            cli.org.as_deref(),
-        )
-        .ok()
-    });
-    if let Some(client) = telemetry_client {
-        client
-            .emit_telemetry(
-                "cli",
-                "command",
-                if result.is_ok() {
-                    "succeeded"
-                } else {
-                    "failed"
-                },
-                matches.subcommand_name().unwrap_or("commands"),
-                u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
-                1,
-            )
-            .await;
-    }
-    let failed = result.is_err();
+    let result = dispatch(&cli).await;
+    let code = match &result {
+        Ok(code) => *code,
+        Err(error) => error.exit_code(),
+    };
+    telemetry(
+        &cli,
+        matches.subcommand_name().unwrap_or("commands"),
+        code == 0,
+        started,
+    )
+    .await;
     if let Err(error) = result {
-        if cli.json {
-            eprintln!("{}", serde_json::json!({"error":error.to_string()}));
-        } else {
-            eprintln!(
-                "error: {error:#}\nRun hook {} --help for usage, or hook commands to explore.",
-                command_path(&matches)
-            );
-        }
+        output::error(cli.json, &error, &command_path(&matches));
     }
-    testing_footer(
-        &cli.profile,
-        if matches!(
-            cli.command,
-            Command::Env {
-                action: Environment::Exit | Environment::Use { .. }
-            }
-        ) {
-            None
-        } else {
-            cli.test
-        },
-        cli.production,
-    );
-    if failed {
-        std::process::exit(1);
-    }
-}
-
-fn testing_footer(profile: &str, explicit: Option<uuid::Uuid>, production: bool) {
-    if production {
-        return;
-    }
-    let stored = LockedStore::open().ok();
-    let p = stored.as_ref().and_then(|s| s.data.profiles.get(profile));
-    if let Some(id) = explicit.or_else(|| p.and_then(|p| p.selected_test)) {
-        let name = p
-            .and_then(|p| p.test_names.get(&id))
-            .map_or("unnamed sandbox", String::as_str);
-        let actor = p
-            .and_then(|p| p.test_sessions.get(&id))
-            .map_or("not signed in", |s| s.tokens.actor.id.as_str());
-        eprintln!("TEST ENVIRONMENT: {name} ({id}) · identity: {actor} · exit: hook env exit");
-    }
+    std::process::exit(code);
 }
 
 fn command_path(mut matches: &clap::ArgMatches) -> String {
@@ -124,816 +52,100 @@ fn command_path(mut matches: &clap::ArgMatches) -> String {
     names.join(" ")
 }
 
-fn read_text(path: &str) -> Result<String> {
-    let mut text = String::new();
-    if path == "-" {
-        std::io::stdin().read_to_string(&mut text)?;
-    } else {
-        text = std::fs::read_to_string(path).with_context(|| format!("could not read {path}"))?;
+/// Flags that existed before 1.0 and no longer mean anything.
+fn removed_flags(cli: &Cli) -> CliResult<()> {
+    if cli.org.is_some() {
+        return Err(CliError::invalid(
+            "--org is no longer accepted: Hook 1.0 keys every hook on the Silicon's Silicon Accounts account.",
+            "Drop --org. Choose the Silicon with --silicon si:<id> (or its uuid); `hook silicons` lists the ones you can open.",
+        ));
     }
-    Ok(text.trim().to_owned())
-}
-fn input<T: serde::de::DeserializeOwned>(value: &str) -> Result<T> {
-    let value = if let Some(path) = value.strip_prefix('@') {
-        read_text(path)?
-    } else {
-        value.to_owned()
-    };
-    serde_json::from_str(&value).context("invalid JSON input")
-}
-
-fn read_secret(path: &str) -> Result<Secret> {
-    let mut text = zeroize::Zeroizing::new(String::new());
-    if path == "-" {
-        std::io::stdin().read_to_string(&mut text)?;
-    } else {
-        std::fs::File::open(path)
-            .with_context(|| format!("could not read {path}"))?
-            .read_to_string(&mut text)?;
+    if cli.test.is_some() || cli.production {
+        return Err(CliError::invalid(
+            "--test and --production are no longer accepted: Hook 1.0 has no test environments.",
+            "Drop the flag. For a local Hook, point --url (or SILICON_HOOK_URL) and ACCOUNTS_URL at it and sign in with another --profile.",
+        ));
     }
-    if text.ends_with('\n') {
-        text.pop();
-        if text.ends_with('\r') {
-            text.pop();
-        }
-    }
-    anyhow::ensure!(!text.is_empty(), "secret must not be empty");
-    anyhow::ensure!(text.len() <= 4096, "secret must not exceed 4096 bytes");
-    anyhow::ensure!(
-        !text.chars().any(char::is_control),
-        "secret must not contain control characters"
-    );
-    Ok(Secret::new(std::mem::take(&mut *text)))
-}
-fn print<T: Serialize>(value: &T) -> Result<()> {
-    println!("{}", serde_json::to_string_pretty(value)?);
     Ok(())
 }
-fn target(cli: &Cli, profile: &store::Profile) -> Result<String> {
-    let session = match cli.test {
-        Some(id) => profile.test_sessions.get(&id),
-        None => profile.session.as_ref(),
-    };
-    cli.silicon
-        .clone()
-        .or_else(|| match cli.test {
-            Some(id) => profile.test_silicons.get(&id).cloned(),
-            None => profile.silicon.clone(),
-        })
-        .or_else(|| {
-            session
-                .filter(|s| s.tokens.actor.kind == "silicon")
-                .map(|s| s.tokens.actor.id.clone())
-        })
-        .context("Choose a Silicon with --silicon <id>, or sign in as that Silicon")
-}
 
-async fn run(cli: &Cli) -> Result<()> {
-    if let Command::Report { message, pr } = &cli.command {
-        anyhow::ensure!(
-            cli.test.is_none(),
-            "Bug reports create a real GitHub issue and email notification. Use hook --production report to submit explicitly outside the sandbox."
-        );
-        let url = silicon_hook_client::support::report(message, pr.as_deref())
-            .map_err(anyhow::Error::msg)?;
-        print(&serde_json::json!({"submitted": true, "url":url}))?;
-        if pr.is_none() {
-            eprintln!(
-                "You can also propose a fix: https://github.com/teamofsilicons/silicon-hook/pulls"
-            );
-        }
-        return Ok(());
-    }
-    if matches!(cli.command, Command::About) {
-        return print(
-            &serde_json::json!({"repository":silicon_hook_client::support::REPOSITORY,"docs":silicon_hook_client::support::DOCUMENTATION,"rust_package":silicon_hook_client::support::PACKAGE,"cli_package":"https://crates.io/crates/silicon-hook-cli","version":env!("CARGO_PKG_VERSION")}),
-        );
-    }
-
-    if matches!(cli.command, Command::Commands) {
-        return commands(cli.json);
-    }
-    if let Command::Docs { topic } = &cli.command {
-        return docs(topic);
-    }
-    if matches!(
-        cli.command,
-        Command::Receiving {
-            action: Receiving::Authorize
-                | Receiving::Complete { .. }
-                | Receiving::DisconnectAuthorization
-        }
-    ) {
-        anyhow::ensure!(
-            cli.idempotency_key.is_some(),
-            "Ting authorization mutations require --idempotency-key; reuse it for the same operation after uncertainty"
-        );
-    }
-    if matches!(cli.command, Command::Publisher { .. }) {
-        anyhow::ensure!(
-            cli.idempotency_key.is_some(),
-            "publisher provision requires --idempotency-key; reuse the same key and SLT when retrying"
-        );
-    }
-    if matches!(
-        cli.command,
-        Command::Receiving {
-            action: Receiving::Scope | Receiving::Bootstrap { .. }
-        }
-    ) {
-        anyhow::ensure!(
-            cli.test.is_some() && !cli.production,
-            "scoped receiving requires a selected test environment"
-        );
-    }
-    let mut receiver_bootstrap = if let Command::Receiving {
-        action: Receiving::Bootstrap {
-            scope_file, output, ..
-        },
-    } = &cli.command
-    {
-        let key = cli.idempotency_key.as_ref().context("receiving bootstrap requires --idempotency-key; reuse the same scope file and key after uncertainty")?;
-        Mutation::with_key(key.clone())?;
-        let scope =
-            receiving::read_scope(scope_file, cli.test.context("select a test environment")?)?;
-        Some((scope, receiving::PrivateOutput::reserve(output)?))
-    } else {
-        None
-    };
-    let mut stored = LockedStore::open()?;
-    if let Command::Env {
-        action: Environment::Use { app_secret_file },
-    } = &cli.command
-    {
-        let secret = read_secret(app_secret_file)?;
-        let p = stored.profile(&cli.profile);
-        let client = store::select_client(p, None, cli.url.as_deref(), None)?
-            .with_test_app_secret(secret.expose())?;
-        let env = client.selected_environment().await?;
-        // select_client already rejects changing an existing credential-bound
-        // profile. Bind a fresh profile to the origin that verified this secret.
-        p.url = client.base_url().as_str().to_owned();
-        p.test_app_secrets.insert(env.id, secret);
-        p.test_names.insert(env.id, env.name.clone());
-        p.test_orgs.insert(env.id, env.org_id.clone());
-        p.selected_test = Some(env.id);
-        stored.save()?;
-        return print(&env);
-    }
-    if let Command::Env {
-        action: Environment::Exit,
-    } = &cli.command
-    {
-        stored.profile(&cli.profile).selected_test = None;
-        stored.save()?;
-        return print(&serde_json::json!({"testing":false,"next":"hook login status --json"}));
-    }
-    if let Command::Config { action } = &cli.command {
-        return configuration(cli, action, &mut stored);
-    }
-    if matches!(&cli.command, Command::Login(args) if args.action.is_some()) {
-        return login_status(cli, &mut stored).await;
-    }
-    if let Command::Whoami = &cli.command {
-        let p = stored.profile(&cli.profile);
-        let session = match cli.test {
-            Some(id) => p.test_sessions.get(&id),
-            None => p.session.as_ref(),
-        };
-        let s = session.context("Not signed in; run hook login --help")?;
-        s.tokens.validate_context(cli.org.as_deref())?;
-        return print(
-            &serde_json::json!({"profile":cli.profile,"test":cli.test,"actor":s.tokens.actor,"org_id":s.tokens.org_id,"expires_at":s.expires_at}),
-        );
-    }
-    if !matches!(
-        cli.command,
-        Command::Login(_)
-            | Command::Iam
-            | Command::Logout
-            | Command::System { .. }
-            | Command::Env {
-                action: Environment::Attach { .. }
-                    | Environment::Current
-                    | Environment::Clean
-                    | Environment::ConfigureIam { .. }
-            }
-    ) {
-        let status = store::verified_status(
-            &mut stored,
-            &cli.profile,
-            cli.test,
-            cli.url.as_deref(),
-            cli.org.as_deref(),
-        )
-        .await?;
-        anyhow::ensure!(
-            status.authenticated,
-            "Session is no longer valid; sign in again with hook login"
-        );
-    }
-    let profile = stored.profile(&cli.profile).clone();
-    // Attaching is the bootstrap operation for a test environment, so it
-    // must validate the supplied key before the normal test-key selection.
-    let client = if matches!(cli.command, Command::Login(_)) {
-        store::login_client(&profile, cli.test, cli.url.as_deref(), cli.org.as_deref())?
-    } else if matches!(
-        cli.command,
-        Command::Env {
-            action: Environment::Attach { .. }
-        }
-    ) {
-        store::select_client(&profile, None, cli.url.as_deref(), cli.org.as_deref())?
-    } else {
-        store::select_client(&profile, cli.test, cli.url.as_deref(), cli.org.as_deref())?
-    };
-    let mutation = cli
-        .idempotency_key
-        .as_ref()
-        .map(|key| Mutation::with_key(key.clone()))
-        .transpose()?
-        .unwrap_or_default();
-    let mut stored = Some(stored);
-    if !matches!(
-        cli.command,
-        Command::Login(_) | Command::Logout | Command::Env { .. }
-    ) {
-        // Ordinary API operations only need the immutable snapshot. Keep the
-        // process lock for refresh and operations that update saved state.
-        drop(stored.take());
-    }
+async fn dispatch(cli: &Cli) -> CliResult<i32> {
+    removed_flags(cli)?;
     match &cli.command {
-        Command::Login(args) => {
-            let mut stored = stored.take().context("missing login state")?;
-            let slt = zeroize::Zeroizing::new(match &args.slt {
-                Some(s) => s.clone(),
-                None => match &args.token {
-                    Some(s) => s.clone(),
-                    None => read_text(
-                        args.slt_file
-                            .as_deref()
-                            .context("provide SLT, --slt, or --slt-file")?,
-                    )?,
-                },
-            });
-            use sha2::{Digest as _, Sha256};
-            let slot = cli
-                .test
-                .map_or_else(|| "production".to_owned(), |id| id.to_string());
-            let input_hash = format!(
-                "{:x}",
-                Sha256::digest(serde_json::to_vec(&(
-                    &*slt,
-                    cli.org.as_deref(),
-                    client.base_url().as_str(),
-                    &slot
-                ))?)
+        Command::Accounts | Command::Iam => {
+            output::print(&status::accounts(cli))?;
+            output::hint(
+                cli.json,
+                "Sign in: hook login (Carbons) · silicon-accounts login --app hook -q | hook login --slt-stdin (Silicons)",
             );
-            let p = stored.profile(&cli.profile);
-            if let (Some(saved), Some(key)) =
-                (p.pending_logins.get(&slot), cli.idempotency_key.as_ref())
-            {
-                anyhow::ensure!(
-                    saved.key != *key || saved.input_hash == input_hash,
-                    "This idempotency key belongs to another login input"
-                );
-            }
-            let receipt = match p
-                .pending_logins
-                .get(&slot)
-                .filter(|r| r.input_hash == input_hash)
-            {
-                Some(receipt) => {
-                    anyhow::ensure!(
-                        store::now() < receipt.started_at.saturating_add(600),
-                        "Login recovery expired; obtain a fresh IAM login credential"
-                    );
-                    if let Some(key) = &cli.idempotency_key {
-                        anyhow::ensure!(
-                            key == &receipt.key,
-                            "Retry this login with its original idempotency key"
-                        );
-                    }
-                    receipt.clone()
-                }
-                None => store::LoginReceipt {
-                    input_hash,
-                    key: mutation.key().to_owned(),
-                    started_at: store::now(),
-                },
-            };
-            p.pending_logins.insert(slot, receipt.clone());
-            stored.save()?;
-            let tokens = client
-                .login(&slt, &Mutation::with_key(receipt.key)?)
-                .await?;
-            if slt.starts_with("c:") || slt.starts_with("si:") {
-                anyhow::ensure!(
-                    tokens.actor.id == *slt,
-                    "Testing login returned a different account"
-                );
-            }
-            let p = stored.profile(&cli.profile);
-            let previous = match cli.test {
-                Some(id) => p.test_sessions.get(&id),
-                None => p.session.as_ref(),
-            };
-            if let Some(previous) =
-                previous.filter(|previous| previous.tokens.validate_context(None).is_ok())
-            {
-                store::same_context(&previous.tokens, &tokens)?;
-            }
-            let actor = tokens.actor.clone();
-            let selected_org = tokens.org_id.clone();
-            let p = stored.profile(&cli.profile);
-            if let Some(url) = &cli.url {
-                p.url = url.clone();
-            }
-            let org = tokens.org_id.clone();
-            let session = Session {
-                expires_at: receipt.started_at.saturating_add(tokens.expires_in),
-                pending_refresh_key: None,
-                refresh_started_at: None,
-                tokens,
-            };
-            if let Some(id) = cli.test {
-                p.test_sessions.insert(id, session);
-                if let Some(org) = org {
-                    p.test_orgs.insert(id, org);
-                }
-                if let Some(silicon) = &cli.silicon {
-                    p.test_silicons.insert(id, silicon.clone());
-                }
-            } else {
-                p.session = Some(session);
-                p.org = org;
-                if let Some(silicon) = &cli.silicon {
-                    p.silicon = Some(silicon.clone());
-                }
-            }
-            stored.save()?;
-            drop(stored);
-            print(
-                &serde_json::json!({"signed_in":true,"authenticated":true,"actor":actor,"org_id":selected_org,"profile":cli.profile,"test":cli.test}),
-            )?;
-            if !cli.json {
-                eprintln!(
-                    "Next: hook login status --json; hook list. Applications handle receiving internally."
-                );
-            }
-            return Ok(());
+            Ok(0)
         }
-        Command::Iam => print(&client.iam().await?)?,
-        Command::Logout => {
-            let mut stored = stored.take().context("missing logout state")?;
-            let p = stored.profile(&cli.profile);
-            let session = match cli.test {
-                Some(id) => p.test_sessions.get(&id),
-                None => p.session.as_ref(),
-            }
-            .context("Not signed in")?;
-            client
-                .with_token(session.tokens.refresh_token.expose())
-                .logout(&mutation)
-                .await?;
-            if let Some(id) = cli.test {
-                p.test_sessions.remove(&id);
-            } else {
-                p.session = None;
-            }
-            stored.save()?;
-            print(&serde_json::json!({"signed_out":true}))?;
-        }
-        Command::Create {
-            name,
-            description,
-            time_zone,
-            signature,
-            secret_file,
-            unsigned,
-        } => {
-            let mut signature = signature
-                .as_ref()
-                .map(|value| input::<Signature>(value))
-                .transpose()?;
-            if let Some(path) = secret_file {
-                let signature = signature.get_or_insert_with(Signature::default);
-                anyhow::ensure!(
-                    signature.secret.is_none(),
-                    "supply a secret in --signature or --secret-file, not both"
-                );
-                signature.secret = Some(read_secret(path)?);
-            }
-            if *unsigned {
-                signature.get_or_insert_with(Signature::default).required = Some(false);
-            }
-            print(
-                &client
-                    .create_hook(
-                        &target(cli, &profile)?,
-                        &CreateHook {
-                            name: name.clone(),
-                            description: description.clone(),
-                            time_zone: time_zone.clone(),
-                            signature,
-                        },
-                        &mutation,
-                    )
-                    .await?,
-            )?;
-        }
-        Command::SetSecret {
-            id,
-            secret_file,
-            secret_encoding,
-        } => print(
-            &client
-                .set_secret(
-                    &target(cli, &profile)?,
-                    *id,
-                    read_secret(secret_file)?,
-                    secret_encoding.clone(),
-                    &mutation,
-                )
-                .await?,
-        )?,
-        Command::List { include_deleted } => print(
-            &client
-                .list_hooks(&target(cli, &profile)?, *include_deleted)
-                .await?,
-        )?,
-        Command::Show { id } => print(&client.get_hook(&target(cli, &profile)?, *id).await?)?,
-        Command::Update { id, patch } => print(
-            &client
-                .update_hook(
-                    &target(cli, &profile)?,
-                    *id,
-                    &input::<UpdateHook>(patch)?,
-                    &mutation,
-                )
-                .await?,
-        )?,
-        Command::Delete { id } => {
-            client
-                .delete_hook(&target(cli, &profile)?, *id, &mutation)
-                .await?;
-            print(&serde_json::json!({"deleted":id,"recoverable_days":45}))?;
-        }
-        Command::Restore { id } => print(
-            &client
-                .restore_hook(&target(cli, &profile)?, *id, &mutation)
-                .await?,
-        )?,
-        Command::Enable { ids } | Command::Disable { ids } => print(
-            &client
-                .set_enabled(
-                    &target(cli, &profile)?,
-                    ids,
-                    matches!(cli.command, Command::Enable { .. }),
-                    &mutation,
-                )
-                .await?,
-        )?,
-        Command::Rotate { kind } => match kind {
-            Rotate::Endpoint { id } => print(
-                &client
-                    .rotate_endpoint(&target(cli, &profile)?, *id, &mutation)
-                    .await?,
-            )?,
-            Rotate::Secret { id } => print(
-                &client
-                    .rotate_secret(&target(cli, &profile)?, *id, &mutation)
-                    .await?,
-            )?,
+        Command::Login(args) => match &args.action {
+            Some(LoginAction::Status { offline }) => status::status(cli, *offline).await,
+            None => login::login(cli, args).await.map(|()| 0),
         },
-        Command::Events(q) => print(
-            &client
-                .events(
-                    &target(cli, &profile)?,
-                    q.hook,
-                    q.limit,
-                    q.cursor.as_deref(),
-                )
-                .await?,
-        )?,
-        Command::Blocked(q) => print(
-            &client
-                .blocked_requests(
-                    &target(cli, &profile)?,
-                    q.hook,
-                    q.limit,
-                    q.cursor.as_deref(),
-                )
-                .await?,
-        )?,
-        Command::Event { id } => print(&client.event(&target(cli, &profile)?, *id, None).await?)?,
-        Command::Publication { event_id } => {
-            print(
-                &client
-                    .publication(&target(cli, &profile)?, *event_id)
-                    .await?,
-            )?;
+        Command::Logout => login::logout(cli).await.map(|()| 0),
+        Command::Whoami => login::whoami(cli).map(|()| 0),
+        Command::Config { action } => config::run(cli, action).map(|()| 0),
+        Command::Commands => commands_tree(cli.json).map(|()| 0),
+        Command::Docs { topic } => docs(topic).map(|()| 0),
+        Command::Report { message, pr } => report(cli, message, pr.as_deref()).map(|()| 0),
+        Command::About => {
+            output::print(&json!({
+                "name": "Silicon Hook",
+                "version": env!("CARGO_PKG_VERSION"),
+                "repository": silicon_hook_client::support::REPOSITORY,
+                "docs": silicon_hook_client::support::DOCUMENTATION,
+                "rust_package": silicon_hook_client::support::PACKAGE,
+                "cli_package": "https://crates.io/crates/silicon-hook-cli",
+                "install": "silicon-apps install hook",
+                "web": "https://hook.teamofsilicons.com",
+            }))?;
+            Ok(0)
         }
-        Command::Publisher { action } => match action {
-            Publisher::Provision {
-                slt_file,
-                replace_rejected,
-            } => {
-                let slt = read_secret(slt_file)?;
-                let metadata = if *replace_rejected {
-                    client.replace_rejected_publisher(&slt, &mutation).await?
-                } else {
-                    client.provision_publisher(&slt, &mutation).await?
-                };
-                print(&metadata)?;
-            }
-        },
-        Command::Receiving { action } => match action {
-            Receiving::Authorize => print(&client.authorize_ting(&mutation).await?)?,
-            Receiving::Complete {
-                authorization_id,
-                code_file,
-            } => {
-                let code = read_secret(code_file)?;
-                print(
-                    &client
-                        .complete_ting_authorization(*authorization_id, &code, &mutation)
-                        .await?,
-                )?;
-            }
-            Receiving::AuthorizationStatus => print(&client.ting_authorization().await?)?,
-            Receiving::DisconnectAuthorization => {
-                print(&client.disconnect_ting_authorization(&mutation).await?)?
-            }
-            Receiving::Scope => print(&client.receiver_scope().await?)?,
-            Receiving::Bootstrap { receiver_id, .. } => {
-                let (scope, mut output) = receiver_bootstrap
-                    .take()
-                    .context("missing receiver output reservation")?;
-                let capability = if let Some(id) = receiver_id {
-                    client.renew_receiver(&scope, id, &mutation).await?
-                } else {
-                    client.bootstrap_receiver(&scope, &mutation).await?
-                };
-                print(&output.write(&capability)?)?;
-            }
-            Receiving::Register => print(&client.register_recipient().await?)?,
-            Receiving::Status => {
-                let subscription = client
-                    .receiving_subscription(&target(cli, &profile)?)
-                    .await?;
-                print(
-                    &serde_json::json!({"receiving":subscription.is_some(),"subscription":subscription}),
-                )?;
-            }
-            Receiving::Subscribe => print(&client.subscribe(&target(cli, &profile)?).await?)?,
-            Receiving::Unsubscribe => {
-                let silicon = target(cli, &profile)?;
-                client.unsubscribe(&silicon).await?;
-                print(&serde_json::json!({"receiving":false,"silicon_id":silicon}))?;
-            }
-        },
-        Command::ConnectIam => print(
-            &client
-                .connect_iam_hook(&target(cli, &profile)?, &mutation)
-                .await?,
-        )?,
-        Command::Env { action } => {
-            environments(
-                cli,
-                action,
-                &client,
-                &mutation,
-                stored.as_mut().context("missing environment state")?,
-            )
-            .await?
-        }
-        Command::System { action } => match action {
-            System::Version => print(&client.version().await?)?,
-            System::Health => print(&client.health().await?)?,
-        },
-        Command::Whoami
-        | Command::Commands
-        | Command::Report { .. }
-        | Command::About
-        | Command::Docs { .. }
-        | Command::Config { .. } => {
-            unreachable!()
-        }
+        _ => commands::run(cli).await.map(|()| 0),
     }
-    if !cli.json {
-        eprintln!(
-            "Next: hook list · hook events · hook publication <event-id> · hook <command> --help"
-        );
-    }
-    Ok(())
 }
 
-async fn login_status(cli: &Cli, stored: &mut LockedStore) -> Result<()> {
-    let status = match store::verified_status(
-        stored,
-        &cli.profile,
-        cli.test,
-        cli.url.as_deref(),
-        cli.org.as_deref(),
-    )
-    .await
-    {
-        Ok(status) => status,
-        Err(error)
-            if matches!(
-                error.downcast_ref::<silicon_hook_client::Error>(),
-                Some(silicon_hook_client::Error::Api { status: 401, .. })
-            ) =>
-        {
-            return print(
-                &serde_json::json!({"authenticated":false,"actor":null,"profile":cli.profile,"test":cli.test}),
-            );
-        }
-        Err(error) => return Err(error),
+/// One best-effort diagnostic event per command, only when signed in and
+/// telemetry is on. Never refreshes, never blocks more than half a second.
+async fn telemetry(cli: &Cli, operation: &str, succeeded: bool, started: std::time::Instant) {
+    let Ok(folder) = store::folder() else { return };
+    let Ok(loaded) = store::read(&folder) else {
+        return;
     };
-    let profile = stored.profile(&cli.profile);
-    let session = match cli.test {
-        Some(id) => profile.test_sessions.get(&id),
-        None => profile.session.as_ref(),
+    let profile = loaded.profile(&cli.profile);
+    let Some(session) = &profile.session else {
+        return;
     };
-    print(
-        &serde_json::json!({"authenticated":status.authenticated,"actor":status.actor,
-        "org_id":status.org_id,"profile":cli.profile,"test":cli.test,
-        "expires_at":session.map(|s| s.expires_at)}),
-    )
-}
-
-async fn environments(
-    cli: &Cli,
-    action: &Environment,
-    client: &Client,
-    mutation: &Mutation,
-    stored: &mut LockedStore,
-) -> Result<()> {
-    match action {
-        Environment::Create {
-            name,
-            description,
-            iam_key_file,
-            iam_config,
-        } => {
-            let iam = iam_config
-                .as_ref()
-                .map(|path| read_text(path).and_then(|text| Ok(serde_json::from_str(&text)?)))
-                .transpose()?;
-            let result = client
-                .create_environment(
-                    &CreateEnvironment {
-                        name: name.clone(),
-                        description: description.clone(),
-                        iam_test_key: Secret::new(read_text(iam_key_file)?),
-                        iam,
-                    },
-                    mutation,
-                )
-                .await?;
-            stored
-                .profile(&cli.profile)
-                .test_keys
-                .insert(result.environment.id, result.key.clone());
-            stored.save()?;
-            print(&result)?;
-        }
-        Environment::Attach { id, key_file } => {
-            let key = Secret::new(read_text(key_file)?);
-            let context = client
-                .without_test_environment()
-                .with_test_key(key.expose())?
-                .current_environment()
-                .await?;
-            anyhow::ensure!(
-                context.id == *id,
-                "The key belongs to a different environment"
-            );
-            let profile = stored.profile(&cli.profile);
-            if let Some(url) = &cli.url {
-                profile.url = url.clone();
-            }
-            profile.test_keys.insert(*id, key);
-            stored.save()?;
-            print(&context)?;
-        }
-        Environment::List {
-            status,
-            limit,
-            after,
-        } => print(
-            &client
-                .list_environments_page(status, *limit, *after)
-                .await?,
-        )?,
-        Environment::Show { id } => print(&client.environment(*id).await?)?,
-        Environment::Key { id } => {
-            let result = client.environment_key(*id).await?;
-            stored
-                .profile(&cli.profile)
-                .test_keys
-                .insert(*id, result.key.clone());
-            stored.save()?;
-            print(&result)?;
-        }
-        Environment::RotateKey { id } => {
-            let result = client.rotate_environment_key(*id, mutation).await?;
-            stored
-                .profile(&cli.profile)
-                .test_keys
-                .insert(*id, result.key.clone());
-            stored.save()?;
-            print(&result)?;
-        }
-        Environment::Delete { id } => print(&client.delete_environment(*id, mutation).await?)?,
-        Environment::Restore { id } => print(&client.restore_environment(*id, mutation).await?)?,
-        Environment::Use { .. } | Environment::Exit => unreachable!(),
-        Environment::Current => print(&client.selected_environment().await?)?,
-        Environment::Clean => print(&client.clean_environment(mutation).await?)?,
-        Environment::ConfigureIam { file } => print(
-            &client
-                .configure_test_iam(
-                    &serde_json::from_str::<TestIamConfiguration>(&read_text(file)?)?,
-                    mutation,
-                )
-                .await?,
-        )?,
+    if !profile.telemetry || session.expires_at <= store::now() {
+        return;
     }
-    Ok(())
+    let Ok(client) = silicon_hook_client::Client::new(&session.url) else {
+        return;
+    };
+    client
+        .with_telemetry(profile.telemetry)
+        .with_token(session.access_token.expose())
+        .emit_telemetry(
+            "cli",
+            "command",
+            if succeeded { "succeeded" } else { "failed" },
+            operation,
+            u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX),
+            1,
+        )
+        .await;
 }
 
-fn configuration(cli: &Cli, action: &Config, stored: &mut LockedStore) -> Result<()> {
-    match action {
-        Config::Profiles => print(&stored.data.profiles.keys().collect::<Vec<_>>()),
-        Config::Home { location } => {
-            let path = store::set_home(location)?;
-            print(&serde_json::json!({"home":path}))
-        }
-        Config::Show => {
-            let p = stored.profile(&cli.profile);
-            print(
-                &serde_json::json!({"profile":cli.profile,"telemetry":p.telemetry,"home":store::folder()?,"url":p.url,"test":cli.test,"org":cli.test.and_then(|id| p.test_orgs.get(&id)).or(p.org.as_ref()),"silicon":match cli.test {Some(id)=>p.test_silicons.get(&id),None=>p.silicon.as_ref()},"signed_in":match cli.test {Some(id)=>p.test_sessions.contains_key(&id),None=>p.session.is_some()},"test_environments":p.test_keys.keys().collect::<Vec<_>>()}),
-            )
-        }
-        Config::Set { key, value } => {
-            match key.as_str() {
-                "url" => {
-                    Client::new(value)?;
-                    let profile = stored.profile(&cli.profile);
-                    anyhow::ensure!(
-                        profile.session.is_none()
-                            && profile.test_sessions.is_empty()
-                            && profile.test_keys.is_empty()
-                            && profile.test_app_secrets.is_empty(),
-                        "Use a new --profile to change the backend without mixing credentials"
-                    );
-                    profile.url = value.clone();
-                }
-                "org" => {
-                    let p = stored.profile(&cli.profile);
-                    let session = match cli.test {
-                        Some(id) => p.test_sessions.get(&id),
-                        None => p.session.as_ref(),
-                    };
-                    if let Some(session) = session {
-                        session.tokens.validate_context(Some(value))?;
-                    }
-                    if let Some(id) = cli.test {
-                        p.test_orgs.insert(id, value.clone());
-                    } else {
-                        p.org = Some(value.clone());
-                    }
-                }
-                "silicon" => {
-                    let p = stored.profile(&cli.profile);
-                    if let Some(id) = cli.test {
-                        p.test_silicons.insert(id, value.clone());
-                    } else {
-                        p.silicon = Some(value.clone());
-                    }
-                }
-                "telemetry" => {
-                    stored.profile(&cli.profile).telemetry = match value.as_str() {
-                        "on" | "true" => true,
-                        "off" | "false" => false,
-                        _ => anyhow::bail!("Use on or off"),
-                    };
-                }
-                _ => anyhow::bail!("unknown configuration key"),
-            }
-            stored.save()?;
-            print(&serde_json::json!({"saved":key}))
-        }
-    }
-}
-
-fn commands(json: bool) -> Result<()> {
+fn commands_tree(json: bool) -> CliResult<()> {
     fn walk(command: &clap::Command, path: String, out: &mut Vec<serde_json::Value>) {
         let mut command = command.clone();
+        if command.is_hide_set() {
+            return;
+        }
         let help = command.render_long_help().to_string();
-        out.push(serde_json::json!({"command":path,"help":help}));
+        out.push(json!({"command": path, "about": command.get_about().map(ToString::to_string), "help": help}));
         for child in command.get_subcommands() {
             walk(child, format!("{path} {}", child.get_name()), out);
         }
@@ -941,80 +153,58 @@ fn commands(json: bool) -> Result<()> {
     let mut items = Vec::new();
     walk(&Cli::command(), "hook".into(), &mut items);
     if json {
-        print(&items)
+        output::print(&items)
     } else {
         for item in items {
-            println!("{}", item["command"].as_str().unwrap_or_default());
+            println!(
+                "{:<36} {}",
+                item["command"].as_str().unwrap_or_default(),
+                item["about"].as_str().unwrap_or_default()
+            );
         }
         Ok(())
     }
 }
 
-fn docs(topic: &str) -> Result<()> {
+const TOPICS: &str = "overview, signin, cli, client, receiving, signatures (or api), delivery, contracts, configuration, telemetry, deployment, releases";
+
+fn docs(topic: &str) -> CliResult<()> {
     let text = match topic {
-        "telemetry" => include_str!("../docs/telemetry.md"),
+        "overview" => include_str!("../docs/README.md"),
+        "signin" | "accounts" | "iam" => include_str!("../docs/accounts/README.md"),
+        "cli" => include_str!("../docs/cli/README.md"),
+        "client" => include_str!("../docs/client/README.md"),
+        "receiving" | "relay" => include_str!("../docs/client/relay.md"),
+        "api" | "signatures" => include_str!("../docs/api/README.md"),
+        "delivery" => include_str!("../docs/ting-delivery.md"),
         "contracts" => include_str!("../docs/contracts.md"),
         "configuration" => include_str!("../docs/configuration.md"),
+        "telemetry" => include_str!("../docs/telemetry.md"),
         "deployment" => include_str!("../docs/deployment.md"),
-        "overview" => include_str!("../docs/README.md"),
-        "api" | "signatures" => include_str!("../docs/api/README.md"),
-        "client" => include_str!("../docs/client/README.md"),
-        "cli" => include_str!("../docs/cli/README.md"),
-        "iam" => include_str!("../docs/iam/README.md"),
-        "testing" => include_str!("../docs/testing/README.md"),
-        "testing-api" => include_str!("../docs/testing/api.md"),
-        "testing-client" => include_str!("../docs/testing/client.md"),
-        "testing-cli" => include_str!("../docs/testing/cli.md"),
-        "delivery" => include_str!("../docs/ting-delivery.md"),
-        "delivery-issues" => include_str!("../docs/ting-integration-issues.md"),
-        "relay" => include_str!("../docs/client/relay.md"),
-        _ => anyhow::bail!(
-            "Unknown guide; choose overview, api, client, cli, iam, signatures, testing, testing-api, testing-client, testing-cli, delivery, delivery-issues, relay, contracts, configuration, telemetry or deployment"
-        ),
+        "releases" => include_str!("../docs/releases.md"),
+        _ => {
+            return Err(CliError::invalid(
+                format!("There is no guide called `{topic}`."),
+                format!("Choose one of: {TOPICS}."),
+            ));
+        }
     };
     println!("{text}");
     Ok(())
 }
 
-/// A usable organization from the shared SILICON_ORG variable.
-fn shared_org(value: Option<String>) -> Option<String> {
-    value
-        .map(|org| org.trim().to_owned())
-        .filter(|org| !org.is_empty())
+fn report(cli: &Cli, message: &str, pr: Option<&str>) -> CliResult<()> {
+    let url = silicon_hook_client::support::report(message, pr)
+        .map_err(|error| CliError::new(output::EXIT_FAILURE, "report_failed", error, ""))?;
+    output::print(&json!({"submitted": true, "url": url}))?;
+    if pr.is_none() {
+        output::hint(
+            cli.json,
+            "Found the fix too? Open a pull request at https://github.com/teamofsilicons/silicon-hook/pulls and report again with --pr <url>.",
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]
-mod byos_tests {
-    use super::read_secret;
-
-    #[test]
-    fn secret_files_preserve_spaces_and_reject_empty_or_multiline_values() -> anyhow::Result<()> {
-        let path = std::env::temp_dir().join(format!("hook-byos-{}", uuid::Uuid::new_v4()));
-        let result = (|| -> anyhow::Result<()> {
-            for ending in ["", "\n", "\r\n"] {
-                std::fs::write(&path, format!(" provider secret {ending}"))?;
-                assert_eq!(
-                    read_secret(
-                        path.to_str()
-                            .ok_or_else(|| anyhow::anyhow!("invalid path"))?
-                    )?
-                    .expose(),
-                    " provider secret "
-                );
-            }
-            for value in ["", "\n", "first\nsecond", "first\n\n"] {
-                std::fs::write(&path, value)?;
-                assert!(
-                    read_secret(
-                        path.to_str()
-                            .ok_or_else(|| anyhow::anyhow!("invalid path"))?
-                    )
-                    .is_err()
-                );
-            }
-            Ok(())
-        })();
-        std::fs::remove_file(path)?;
-        result
-    }
-}
+mod tests;

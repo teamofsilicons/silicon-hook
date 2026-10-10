@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::{HookId, OrganizationId, SiliconId};
+use super::{AccountUuid, HookId};
 
 /// Which retained log a cursor pages through.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -36,52 +36,36 @@ impl HistoryFilter {
     }
 }
 
-/// Tenant, collection, and filter identity to which a cursor is bound.
+/// Silicon, collection, and filter identity to which a cursor is bound.
+///
+/// Cursors issued before Silicon Accounts named an organization and an
+/// IAM-era Silicon id; they no longer decode, which only restarts paging.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct HistoryCursorScope {
-    organization_id: OrganizationId,
-    silicon_id: SiliconId,
+    silicon: AccountUuid,
     collection: HistoryCollection,
     filter: HistoryFilter,
-    #[serde(default)]
-    environment: Option<(Uuid, i64)>,
 }
 
 impl HistoryCursorScope {
     /// Constructs a cursor scope from the authorized query.
     #[must_use]
     pub const fn new(
-        organization_id: OrganizationId,
-        silicon_id: SiliconId,
+        silicon: AccountUuid,
         collection: HistoryCollection,
         filter: HistoryFilter,
     ) -> Self {
         Self {
-            organization_id,
-            silicon_id,
+            silicon,
             collection,
             filter,
-            environment: None,
         }
-    }
-
-    /// Binds a cursor to a test world and its current lifecycle generation.
-    #[must_use]
-    pub const fn with_environment(mut self, environment: Option<(Uuid, i64)>) -> Self {
-        self.environment = environment;
-        self
-    }
-
-    /// Returns the organization restriction.
-    #[must_use]
-    pub const fn organization_id(&self) -> &OrganizationId {
-        &self.organization_id
     }
 
     /// Returns the Silicon restriction.
     #[must_use]
-    pub const fn silicon_id(&self) -> &SiliconId {
-        &self.silicon_id
+    pub const fn silicon(&self) -> &AccountUuid {
+        &self.silicon
     }
 
     /// Returns the collection being paged.

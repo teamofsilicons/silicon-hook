@@ -1,15 +1,18 @@
 FROM node:24-bookworm-slim AS build
 WORKDIR /app
-COPY package.json package-lock.json ./
-RUN npm ci
+RUN corepack enable
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+RUN pnpm install --frozen-lockfile
 COPY . .
-RUN npm run build
-FROM node:24-bookworm-slim
+ENV NEXT_TELEMETRY_DISABLED=1
+RUN pnpm typecheck && NEXT_OUTPUT=standalone pnpm build
+
+FROM node:24-bookworm-slim AS runtime
 WORKDIR /app
-ENV NODE_ENV=production HOST=0.0.0.0 PORT=4317 HOOK_SESSION_DIR=/var/lib/hook-web/sessions
-COPY package.json package-lock.json ./
-RUN npm ci --omit=dev && mkdir -p /var/lib/hook-web/sessions && chown -R node:node /var/lib/hook-web
-COPY --from=build --chown=node:node /app/dist ./dist
+ENV NODE_ENV=production NEXT_TELEMETRY_DISABLED=1 HOSTNAME=0.0.0.0 PORT=4200
+COPY --from=build --chown=node:node /app/.next/standalone ./
+COPY --from=build --chown=node:node /app/.next/static ./.next/static
+COPY --from=build --chown=node:node /app/public ./public
 USER node
-EXPOSE 4317
-CMD ["node", "dist/server.js"]
+EXPOSE 4200
+CMD ["node", "server.js"]

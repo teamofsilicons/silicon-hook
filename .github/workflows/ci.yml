@@ -16,6 +16,22 @@ jobs:
     name: Rust, PostgreSQL, and API contract
     runs-on: ubuntu-24.04
     timeout-minutes: 45
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # Every database test creates and drops its own database and runtime
+      # roles on this server; without the variable those tests skip.
+      HOOK_TEST_POSTGRES_URL: postgres://postgres@127.0.0.1:5432/postgres
     steps:
       - name: Check out the repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -37,6 +53,9 @@ jobs:
       - name: Run strict Clippy
         run: cargo clippy --workspace --locked --all-targets --all-features -- -D warnings
 
+      - name: Make sure psql is available (the tests apply the real grant manifest with it)
+        run: command -v psql || { sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends postgresql-client; }
+
       - name: Run unit and PostgreSQL integration tests
         run: cargo test --workspace --locked --all-targets --all-features
 
@@ -55,7 +74,7 @@ jobs:
         run: cargo deny --locked check
 
   frontend:
-    name: SolidJS frontend and session gateway
+    name: Next.js console and Accounts session
     runs-on: ubuntu-24.04
     container: node:24-bookworm
     timeout-minutes: 10
@@ -65,22 +84,30 @@ jobs:
     steps:
       - name: Check out the repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Enable the pinned package manager
+        run: corepack enable
       - name: Install locked frontend dependencies
-        run: npm ci
-      - name: Type-check and build the frontend and gateway
-        run: npm run build
-      - name: Check session and gateway security invariants
-        run: npm test
+        run: pnpm install --frozen-lockfile
+      - name: Check types and lint
+        run: pnpm typecheck && pnpm lint
+      - name: Check Accounts session security
+        run: pnpm test
+      - name: Build the standalone Next.js console
+        run: NEXT_OUTPUT=standalone pnpm build
 
   docs:
-    name: Documentation and Honeycomb packaging
+    name: Documentation, packaging and deployment scripts
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 24
-      - run: python3 -m unittest discover -s scripts -p 'test_*.py'
-      - run: npm ci --prefix docs-site
-      - run: npm run build --prefix docs-site
-      - run: npm run check --prefix docs-site
+      - name: Test the Silicon Apps packager and the deployment installer
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+      - name: Install the documentation site's locked dependencies
+        run: npm ci --prefix docs-site
+      - name: Build the documentation site
+        run: npm run build --prefix docs-site
+      - name: Check every page's links and anchors
+        run: npm run check --prefix docs-site

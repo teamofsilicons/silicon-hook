@@ -1,425 +1,266 @@
-//! Stateful CLI storage. The SDK has no dependency on this module.
+//! The CLI's private state: `profiles.json` under the state directory.
+//!
+//! Directory: `SILICON_HOOK_HOME` as is; else `<base>/.silicon-hook`, where the
+//! base is the one set with `hook config home <dir>`, else `SILICON_HOME`, else
+//! `HOME`. The directory is 0700 and files 0600 on Unix. Writes are atomic
+//! (temporary file, fsync, rename). A file lock (`profiles.lock`) serializes
+//! every change, and above all every token refresh: Silicon Accounts rotates
+//! refresh tokens and treats a spent one presented again as theft.
+//!
+//! Hook before 1.0 kept IAM sign-ins in `state.json`. That file is never read
+//! for credentials and never changed; its non-secret settings (url, silicon,
+//! telemetry) are carried over once, and profiles that were signed in are told
+//! to sign in again.
 
-use anyhow::{Context as _, Result};
-use fs2::FileExt as _;
-use serde::{Deserialize, Serialize};
-use silicon_hook_client::{Client, Mutation, Secret, models::Tokens};
 use std::{
     collections::BTreeMap,
     fs::{self, File, OpenOptions},
     io::Write as _,
-    path::PathBuf,
+    path::{Path, PathBuf},
     time::{SystemTime, UNIX_EPOCH},
 };
-use uuid::Uuid;
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Session {
-    pub tokens: Tokens,
-    pub expires_at: u64,
-    /// Persisted before refresh so a lost response can be retried safely.
+use serde::{Deserialize, Serialize};
+use silicon_hook_client::{Secret, models::AccountKind};
+
+use crate::output::{CliError, CliResult, EXIT_FAILURE};
+
+mod load;
+pub use load::{Locked, read};
+
+pub const STATE_FILE: &str = "profiles.json";
+pub const LOCK_FILE: &str = "profiles.lock";
+pub const LEGACY_FILE: &str = "state.json";
+const DIR_NAME: &str = ".silicon-hook";
+const LEGACY_DEFAULT_URL: &str = "https://api.hook.teamofsilicons.com";
+
+pub fn now() -> i64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |d| i64::try_from(d.as_secs()).unwrap_or(i64::MAX))
+}
+
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+pub struct State {
+    #[serde(default = "schema")]
+    pub schema: u32,
     #[serde(default)]
-    pub pending_refresh_key: Option<String>,
-    #[serde(default)]
-    pub refresh_started_at: Option<u64>,
+    pub profiles: BTreeMap<String, Profile>,
+}
+
+fn schema() -> u32 {
+    1
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Profile {
-    #[serde(default)]
-    pub pending_logins: BTreeMap<String, LoginReceipt>,
-    #[serde(default = "enabled")]
-    pub telemetry: bool,
-    #[serde(default)]
-    pub selected_test: Option<Uuid>,
-    #[serde(default)]
-    pub test_app_secrets: BTreeMap<Uuid, Secret>,
-    #[serde(default)]
-    pub test_names: BTreeMap<Uuid, String>,
-    pub url: String,
-    pub org: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub accounts_url: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silicon: Option<String>,
+    #[serde(default = "yes")]
+    pub telemetry: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<Session>,
-    #[serde(default)]
-    pub test_sessions: BTreeMap<Uuid, Session>,
-    #[serde(default)]
-    pub test_keys: BTreeMap<Uuid, Secret>,
-    #[serde(default)]
-    pub test_orgs: BTreeMap<Uuid, String>,
-    #[serde(default)]
-    pub test_silicons: BTreeMap<Uuid, String>,
+    /// This profile was signed in with Hook before 1.0 (IAM); that sign-in
+    /// was not carried over.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub previous_version_session: bool,
 }
+
 impl Default for Profile {
     fn default() -> Self {
         Self {
-            pending_logins: BTreeMap::new(),
-            selected_test: None,
-            telemetry: true,
-            test_app_secrets: BTreeMap::new(),
-            test_names: BTreeMap::new(),
-            url: "https://backend.hook.teamofsilicons.com".into(),
-            org: None,
+            url: None,
+            accounts_url: None,
             silicon: None,
+            telemetry: true,
             session: None,
-            test_sessions: BTreeMap::new(),
-            test_keys: BTreeMap::new(),
-            test_orgs: BTreeMap::new(),
-            test_silicons: BTreeMap::new(),
+            previous_version_session: false,
         }
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LoginReceipt {
-    pub input_hash: String,
-    pub key: String,
-    pub started_at: u64,
-}
-
-pub fn same_context(previous: &Tokens, next: &Tokens) -> Result<()> {
-    previous.validate_context(None)?;
-    next.validate_context(previous.org_id.as_deref())?;
-    anyhow::ensure!(
-        previous.actor.kind == next.actor.kind && previous.actor.id == next.actor.id,
-        "The returned account does not match this saved profile. Use a new --profile for another account."
-    );
-    Ok(())
-}
-
-#[derive(Debug, Default, Serialize, Deserialize)]
-pub struct Store {
-    #[serde(default)]
-    pub profiles: BTreeMap<String, Profile>,
-}
-fn enabled() -> bool {
+fn yes() -> bool {
     true
 }
 
-pub struct LockedStore {
-    pub data: Store,
-    file: File,
-    folder: PathBuf,
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !value
 }
 
-pub fn folder() -> Result<PathBuf> {
+/// A Silicon Accounts sign-in to Hook.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Session {
+    pub app_id: String,
+    /// The Silicon Accounts deployment that issued the tokens.
+    pub accounts_url: String,
+    /// The Hook API the tokens are sent to.
+    pub url: String,
+    pub access_token: Secret,
+    pub refresh_token: Option<Secret>,
+    /// Unix seconds.
+    pub expires_at: i64,
+    #[serde(default)]
+    pub refresh_expires_at: Option<i64>,
+    #[serde(default)]
+    pub scope: Option<String>,
+    pub account: SessionAccount,
+    /// `device` or `slt`.
+    pub method: String,
+    pub signed_in_at: i64,
+    /// Set while a refresh is in flight. Found set later, it means a refresh
+    /// was interrupted and the refresh token may already be spent.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub refresh_started_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SessionAccount {
+    pub uuid: String,
+    pub kind: AccountKind,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub display_name: String,
+}
+
+impl Session {
+    pub fn who(&self) -> String {
+        if self.account.id.is_empty() {
+            self.account.uuid.clone()
+        } else {
+            format!("{} ({})", self.account.id, self.account.uuid)
+        }
+    }
+
+    pub fn ended(&self) -> bool {
+        self.refresh_expires_at.is_some_and(|at| at <= now())
+    }
+}
+
+/// The resolved state directory.
+pub fn folder() -> CliResult<PathBuf> {
     if let Some(path) = std::env::var_os("SILICON_HOOK_HOME").filter(|path| !path.is_empty()) {
         return Ok(PathBuf::from(path));
     }
-    let home = default_home()?;
-    let marker = home.join("home");
-    if let Ok(value) = fs::read_to_string(&marker) {
+    let home = default_folder()?;
+    if let Ok(value) = fs::read_to_string(home.join("home")) {
         let base = PathBuf::from(value.trim());
-        anyhow::ensure!(!base.as_os_str().is_empty(), "configured home is empty");
-        anyhow::ensure!(
-            base.is_dir(),
-            "configured home is not a directory: {}",
-            base.display()
-        );
-        return Ok(base.join(".silicon-hook"));
+        if base.as_os_str().is_empty() || !base.is_dir() {
+            return Err(CliError::new(
+                EXIT_FAILURE,
+                "home_missing",
+                format!(
+                    "The home set with `hook config home` ({}) is not a directory anymore.",
+                    base.display()
+                ),
+                format!(
+                    "Run `hook config home <existing dir>`, or delete {} to go back to the default.",
+                    home.join("home").display()
+                ),
+            ));
+        }
+        return Ok(base.join(DIR_NAME));
     }
     Ok(home)
 }
 
-fn default_home() -> Result<PathBuf> {
-    Ok(PathBuf::from(
-        std::env::var_os("SILICON_HOME")
-            .filter(|home| !home.is_empty())
-            .or_else(|| std::env::var_os("HOME"))
-            .context("HOME is unset; set SILICON_HOME or SILICON_HOOK_HOME")?,
-    )
-    .join(".silicon-hook"))
+fn default_folder() -> CliResult<PathBuf> {
+    std::env::var_os("SILICON_HOME")
+        .filter(|home| !home.is_empty())
+        .or_else(|| std::env::var_os("HOME").filter(|home| !home.is_empty()))
+        .map(|home| PathBuf::from(home).join(DIR_NAME))
+        .ok_or_else(|| {
+            CliError::new(
+                EXIT_FAILURE,
+                "no_home",
+                "Neither SILICON_HOME nor HOME is set, so Hook has nowhere to keep its sign-in.",
+                "Set SILICON_HOME (or HOME), or SILICON_HOOK_HOME for the exact directory.",
+            )
+        })
 }
 
-/// Point future CLI state at `{base}/.silicon-hook`.
-pub fn set_home(base: &str) -> Result<PathBuf> {
+/// Points future state at `{base}/.silicon-hook`.
+pub fn set_home(base: &str) -> CliResult<PathBuf> {
+    let home_dir = || std::env::var_os("HOME").map(PathBuf::from);
     let expanded = if base == "~" {
-        PathBuf::from(std::env::var_os("HOME").context("HOME is unset")?)
+        home_dir().ok_or_else(|| {
+            CliError::invalid(
+                "HOME is not set, so `~` cannot be expanded.",
+                "Give an absolute directory.",
+            )
+        })?
     } else if let Some(rest) = base.strip_prefix("~/") {
-        PathBuf::from(std::env::var_os("HOME").context("HOME is unset")?).join(rest)
+        home_dir()
+            .ok_or_else(|| {
+                CliError::invalid(
+                    "HOME is not set, so `~` cannot be expanded.",
+                    "Give an absolute directory.",
+                )
+            })?
+            .join(rest)
     } else {
         PathBuf::from(base)
     };
-    anyhow::ensure!(
-        expanded.is_dir(),
-        "home location is not a directory: {}",
-        expanded.display()
-    );
-    let expanded = expanded.canonicalize()?;
-    let marker_home = default_home()?;
-    fs::create_dir_all(&marker_home)?;
+    if !expanded.is_dir() {
+        return Err(CliError::invalid(
+            format!("not a directory: {}", expanded.display()),
+            "Create the directory first, or choose an existing one.",
+        ));
+    }
+    let expanded = expanded
+        .canonicalize()
+        .map_err(|error| CliError::io("resolve", &expanded, &error))?;
+    let marker_dir = default_folder()?;
+    private_dir(&marker_dir)?;
+    let mut text = expanded.to_string_lossy().into_owned();
+    text.push('\n');
+    write_atomic(&marker_dir, "home", text.as_bytes())?;
+    Ok(expanded.join(DIR_NAME))
+}
+
+fn private_dir(path: &Path) -> CliResult<()> {
+    fs::create_dir_all(path).map_err(|error| CliError::io("create", path, &error))?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt as _;
-        fs::set_permissions(&marker_home, fs::Permissions::from_mode(0o700))?;
+        fs::set_permissions(path, fs::Permissions::from_mode(0o700))
+            .map_err(|error| CliError::io("protect", path, &error))?;
     }
-    let marker = marker_home.join("home");
-    let temporary = marker_home.join(format!(".home-{}", Uuid::now_v7()));
-    let mut options = OpenOptions::new();
-    options.write(true).create_new(true);
-    private_file(&mut options);
-    let mut file = options.open(&temporary)?;
-    file.write_all(expanded.to_string_lossy().as_bytes())?;
-    file.write_all(b"\n")?;
-    file.sync_all()?;
-    fs::rename(&temporary, marker)?;
-    #[cfg(unix)]
-    File::open(&marker_home)?.sync_all()?;
-    Ok(expanded.join(".silicon-hook"))
+    Ok(())
 }
 
-pub fn private_file(options: &mut OpenOptions) {
+fn private_options(options: &mut OpenOptions) {
     #[cfg(unix)]
     {
         use std::os::unix::fs::OpenOptionsExt as _;
         options.mode(0o600);
     }
+    #[cfg(not(unix))]
+    let _ = options;
 }
 
-impl LockedStore {
-    pub fn open() -> Result<Self> {
-        let folder = folder()?;
-        fs::create_dir_all(&folder)?;
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt as _;
-            fs::set_permissions(&folder, fs::Permissions::from_mode(0o700))?;
-        }
-        let mut options = OpenOptions::new();
-        options.read(true).write(true).create(true).truncate(false);
-        private_file(&mut options);
-        let file = options.open(folder.join("state.lock"))?;
-        file.lock_exclusive()?;
-        let path = folder.join("state.json");
-        let data = if path.exists() {
-            serde_json::from_slice(&fs::read(path)?)
-                .context("Hook state is invalid; keep the file and repair it before retrying")?
-        } else {
-            Store::default()
-        };
-        Ok(Self { data, file, folder })
-    }
-    pub fn profile(&mut self, name: &str) -> &mut Profile {
-        self.data.profiles.entry(name.to_owned()).or_default()
-    }
-    pub fn save(&self) -> Result<()> {
-        let temporary = self.folder.join(format!(".state-{}.json", Uuid::now_v7()));
-        let mut options = OpenOptions::new();
-        options.write(true).create_new(true);
-        private_file(&mut options);
+/// Writes `name` in `dir` atomically with owner-only permissions.
+pub fn write_atomic(dir: &Path, name: &str, bytes: &[u8]) -> CliResult<()> {
+    let temporary = dir.join(format!(".{name}.{}.tmp", uuid::Uuid::now_v7()));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    private_options(&mut options);
+    let result = (|| -> std::io::Result<()> {
         let mut file = options.open(&temporary)?;
-        let encoded = zeroize::Zeroizing::new(serde_json::to_vec_pretty(&self.data)?);
-        file.write_all(&encoded)?;
+        file.write_all(bytes)?;
         file.sync_all()?;
-        fs::rename(&temporary, self.folder.join("state.json"))?;
+        fs::rename(&temporary, dir.join(name))?;
         #[cfg(unix)]
-        File::open(&self.folder)?.sync_all()?;
+        File::open(dir)?.sync_all()?;
         Ok(())
+    })();
+    if let Err(error) = result {
+        let _ = fs::remove_file(&temporary);
+        return Err(CliError::io("write", &dir.join(name), &error));
     }
-}
-impl Drop for LockedStore {
-    fn drop(&mut self) {
-        let _ = fs2::FileExt::unlock(&self.file);
-    }
-}
-
-pub fn now() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs()
-}
-
-pub fn select_client(
-    profile: &Profile,
-    env: Option<Uuid>,
-    url: Option<&str>,
-    org: Option<&str>,
-) -> Result<Client> {
-    build_client(profile, env, url, org, true)
-}
-pub fn login_client(
-    profile: &Profile,
-    env: Option<Uuid>,
-    url: Option<&str>,
-    org: Option<&str>,
-) -> Result<Client> {
-    build_client(profile, env, url, org, false)
-}
-fn build_client(
-    profile: &Profile,
-    env: Option<Uuid>,
-    url: Option<&str>,
-    org: Option<&str>,
-    use_session: bool,
-) -> Result<Client> {
-    if let Some(url) = url
-        && Client::new(url)?.base_url() != Client::new(&profile.url)?.base_url()
-        && (profile.session.is_some()
-            || !profile.test_sessions.is_empty()
-            || !profile.test_keys.is_empty()
-            || !profile.test_app_secrets.is_empty())
-    {
-        anyhow::bail!(
-            "This profile is bound to a different backend. Use a new --profile for a new service origin."
-        );
-    }
-    let mut client = Client::new(url.unwrap_or(&profile.url))?
-        .with_auto_update(false)
-        .with_telemetry(profile.telemetry);
-    if let Some(environment) = env {
-        if let Some(secret) = profile.test_app_secrets.get(&environment) {
-            client = client.with_test_app_secret(secret.expose())?;
-        } else {
-            let key=profile.test_keys.get(&environment).context("No key stored for this environment. Use hook env attach <id> --key-file <file>, or create it with hook env create.")?;
-            client = client.with_test_key(key.expose())?;
-        }
-    }
-    let session = env
-        .and_then(|id| profile.test_sessions.get(&id))
-        .or_else(|| {
-            if env.is_none() {
-                profile.session.as_ref()
-            } else {
-                None
-            }
-        });
-    // Select only explicit configuration or IAM session metadata. Public actor
-    // IDs do not carry organization membership.
-    let configured_org = match env {
-        Some(id) => profile.test_orgs.get(&id).map(String::as_str),
-        None => profile.org.as_deref(),
-    };
-    let org = org
-        .or(configured_org)
-        .or_else(|| session.and_then(|s| s.tokens.org_id.as_deref()));
-    if let Some(org) = org {
-        client = client.with_organization(org);
-    }
-    if let Some(session) = session.filter(|_| use_session) {
-        session.tokens.validate_context(org)?;
-        client = client.with_token(session.tokens.access_token.expose());
-    }
-    Ok(client)
-}
-
-pub async fn refresh_if_needed(
-    store: &mut LockedStore,
-    name: &str,
-    env: Option<Uuid>,
-    url: Option<&str>,
-    org: Option<&str>,
-) -> Result<()> {
-    for _ in 0..2 {
-        let profile = store.profile(name);
-        let session = match env {
-            Some(id) => profile.test_sessions.get(&id),
-            None => profile.session.as_ref(),
-        };
-        let Some(session) = session else {
-            return Ok(());
-        };
-        if session.expires_at > now() + 60 && session.pending_refresh_key.is_none() {
-            return Ok(());
-        }
-        let client = select_client(profile, env, url, org)?;
-        let mut session = session.clone();
-        let mutation = match &session.pending_refresh_key {
-            Some(key) => Mutation::with_key(key.clone())?,
-            None => Mutation::new(),
-        };
-        let started_at = session.refresh_started_at.unwrap_or_else(|| {
-            if session.pending_refresh_key.is_some() {
-                0
-            } else {
-                now()
-            }
-        });
-        session.refresh_started_at = Some(started_at);
-        session.pending_refresh_key = Some(mutation.key().to_owned());
-        match env {
-            Some(id) => {
-                profile.test_sessions.insert(id, session.clone());
-            }
-            None => profile.session = Some(session.clone()),
-        }
-        // The lock and durable write span the request: another CLI process
-        // must never rotate the same refresh token with a different key.
-        store.save()?;
-        let tokens = client.refresh(session.tokens.refresh_token.expose(), &mutation)
-        .await.context("Session refresh failed; retry the command, or sign in again with hook login --slt-file <file>")?;
-        same_context(&session.tokens, &tokens)?;
-        session.expires_at = started_at.saturating_add(tokens.expires_in);
-        session.tokens = tokens;
-        session.pending_refresh_key = None;
-        session.refresh_started_at = None;
-        let profile = store.profile(name);
-        match env {
-            Some(id) => {
-                profile.test_sessions.insert(id, session);
-            }
-            None => profile.session = Some(session),
-        };
-        store.save()?;
-    }
-    // Recheck after persisting a replay whose original access token had expired.
-    let profile = store.profile(name);
-    let session = match env {
-        Some(id) => profile.test_sessions.get(&id),
-        None => profile.session.as_ref(),
-    };
-    anyhow::ensure!(
-        session.is_some_and(|s| s.expires_at > now() + 60),
-        "refreshed access token has no usable lifetime; retry the command"
-    );
     Ok(())
-}
-
-/// Verify access online and recover one early-invalidated generation. The caller
-/// owns the session lock, so the successor is persisted before it is exposed.
-pub async fn verified_status(
-    store: &mut LockedStore,
-    name: &str,
-    env: Option<Uuid>,
-    url: Option<&str>,
-    org: Option<&str>,
-) -> Result<silicon_hook_client::models::LoginStatus> {
-    refresh_if_needed(store, name, env, url, org).await?;
-    for attempt in 0..2 {
-        let profile = store.profile(name);
-        let status = select_client(profile, env, url, org)?
-            .login_status()
-            .await?;
-        if status.authenticated {
-            let session = match env {
-                Some(id) => profile.test_sessions.get(&id),
-                None => profile.session.as_ref(),
-            }
-            .context("Authenticated response has no selected local session")?;
-            let actor = status
-                .actor
-                .as_ref()
-                .context("IAM 5 status omitted its selected account")?;
-            anyhow::ensure!(
-                status.org_id == session.tokens.org_id
-                    && actor.kind == session.tokens.actor.kind
-                    && actor.id == session.tokens.actor.id,
-                "Online identity differs from the saved account or organization; use the correct --profile and sign in again"
-            );
-            return Ok(status);
-        }
-        if attempt == 1 {
-            return Ok(status);
-        }
-        let session = match env {
-            Some(id) => profile.test_sessions.get_mut(&id),
-            None => profile.session.as_mut(),
-        };
-        let Some(session) = session else {
-            return Ok(status);
-        };
-        session.expires_at = 0;
-        store.save()?;
-        refresh_if_needed(store, name, env, url, org).await?;
-    }
-    unreachable!("the second status check returns directly")
 }

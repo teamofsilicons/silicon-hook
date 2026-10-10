@@ -4,12 +4,14 @@
 //! runtime-checked `SQLx` APIs so builds never require a live database or an
 //! offline query cache.
 
-mod deliveries;
+mod access;
+mod accounts;
+mod accounts_events;
 mod error;
 mod events;
 mod hooks;
 mod idempotency;
-mod listener;
+pub mod identity_links;
 mod maintenance;
 mod models;
 mod readiness;
@@ -17,7 +19,9 @@ mod safety;
 mod schema_contract;
 mod ting;
 mod types;
-pub(crate) use ting::enqueue_ting_for_subscription;
+pub use accounts::{AccountRecord, AccountView, AllowRecord, GrantRecord};
+pub use accounts_events::{AccountsChange, AccountsEvent, EventOutcome};
+pub(crate) use ting::enqueue_ting;
 pub use ting::{TingOutboxClaim, TingOutboxStatus, TingSendFailure};
 
 use std::str::FromStr as _;
@@ -32,19 +36,21 @@ use crate::config::DatabaseSettings;
 use crate::domain::ActorKind;
 
 pub use error::{Result, StoreError};
-pub use listener::{
-    AUTHORIZATION_CHANNEL, DELIVERY_CHANNEL, DeliveryWakeups, spawn_delivery_listener,
-};
 pub use readiness::RuntimeDatabaseRole;
 pub use types::{
     AcceptEvent, AuditAction, AuditContext, BatchHookActivation, CreateHook, CreateHookOutcome,
-    EndpointResolution, HistoryPage, HistoryPageRequest, HookMutation, IdempotencyScope,
-    MaintenanceResult, PersistedResponse, RecordBlockedRequest, RestoreHook, RestoreHookOutcome,
-    RotateEndpoint, RotateEndpointOutcome, RotateSecret, RotateSecretOutcome, UpdateHook,
+    EndpointResolution, EventDelivery, HistoryPage, HistoryPageRequest, HookMutation,
+    IdempotencyScope, MaintenanceResult, PersistedResponse, RecordBlockedRequest, RestoreHook,
+    RestoreHookOutcome, RotateEndpoint, RotateEndpointOutcome, RotateSecret, RotateSecretOutcome,
+    UpdateHook,
 };
 pub(crate) use types::{MaintenanceBatch, MaintenanceTask};
 
 static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!("./migrations");
+
+/// Value of the legacy organization column on rows written since Silicon
+/// Accounts (the column is no longer read; see migration 0019).
+pub(crate) const ACCOUNTS_ERA_ORG: &str = "accounts";
 
 /// Maximum interval in which an encrypted one-time secret may be replayed.
 pub const SECRET_REPLAY_WINDOW: time::Duration = time::Duration::minutes(10);
@@ -56,8 +62,6 @@ pub const SECRET_REPLAY_WINDOW: time::Duration = time::Duration::minutes(10);
 pub const HISTORY_PAGE_BYTE_BUDGET: usize = 16 * 1024 * 1024;
 /// Largest number of history records one request may ask for.
 pub const MAX_HISTORY_LIMIT: u32 = 10_000;
-/// Largest number of deliveries one pull may ask for.
-pub const MAX_DELIVERY_BATCH: u32 = 1_000;
 
 /// A cheap, cloneable handle to the PostgreSQL persistence adapter.
 #[derive(Clone, Debug)]
@@ -119,8 +123,7 @@ pub async fn connect(
     Ok(pool)
 }
 
-/// Builds connection options for a dedicated (non-pooled) connection such as
-/// the notification listener.
+/// Builds connection options for a dedicated (non-pooled) connection.
 ///
 /// # Errors
 ///

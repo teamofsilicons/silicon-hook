@@ -1,0 +1,141 @@
+/* Global base. Component styles live in CSS modules next to each component (copied from the developer site). */
+*, *::before, *::after { box-sizing: border-box; }
+
+html {
+  -webkit-text-size-adjust: 100%;
+  text-size-adjust: 100%;
+  background: var(--background);
+  color: var(--foreground);
+  font-family: var(--font-body);
+  font-size: 100%;
+  line-height: var(--leading-body);
+  letter-spacing: var(--tracking-body);
+  font-optical-sizing: auto;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
+  scrollbar-gutter: stable;
+  hanging-punctuation: first last;
+}
+
+body {
+  min-height: 100vh;
+  min-height: 100dvh;
+  margin: 0;
+  background: var(--background);
+  color: var(--foreground);
+  font-size: var(--text-base);
+  transition: background-color var(--duration-standard) var(--ease-standard), color var(--duration-standard) var(--ease-standard);
+}
+
+h1, h2, h3, h4, h5, h6, p, figure, blockquote, dl, dd { margin: 0; }
+h1, h2, h3, h4, h5, h6 { font-weight: 500; text-wrap: balance; }
+p { text-wrap: pretty; }
+ul[role="list"], ol[role="list"] { margin: 0; padding: 0; list-style: none; }
+img, picture, svg, video, canvas { display: block; max-width: 100%; }
+img { height: auto; }
+input, button, textarea, select { font: inherit; letter-spacing: inherit; color: inherit; }
+button { -webkit-tap-highlight-color: transparent; }
+a { color: var(--accent-ink); text-decoration-thickness: from-font; text-underline-offset: .2em; }
+a:not([data-variant]):hover { color: var(--accent-strong); }
+/* Keyboard focus on a plain link: the hover ink, a full underline and a soft fill (focus never shows as a ring). :where
+   keeps it at one pseudo-class of specificity, so a component's own focus rule for its links still wins. */
+:where(a:not([data-variant], [data-sq])):focus-visible {
+  outline: none;
+  border-radius: 4px;
+  background: color-mix(in oklab, var(--accent) 12%, transparent);
+  box-shadow: 0 0 0 2px color-mix(in oklab, var(--accent) 12%, transparent);
+  color: var(--accent-strong);
+  text-decoration-line: underline;
+  text-decoration-color: currentColor;
+}
+code, kbd, samp, pre { font-family: var(--font-mono); font-size: .92em; letter-spacing: 0; }
+strong, b { font-weight: 500; }
+hr { height: 1px; margin: 0; border: 0; background: var(--border); }
+
+::selection { background: color-mix(in oklab, var(--accent) 24%, transparent); color: inherit; }
+
+/* Thin scrollbars that disappear into the surface. */
+* { scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--foreground) 22%, transparent) transparent; }
+
+/* Shared utilities. Kept to a handful; layout belongs to the layout primitives (components/foundation/layout). */
+.sr-only {
+  position: absolute !important;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
+}
+.mono { font-family: var(--font-mono); letter-spacing: 0; font-variant-ligatures: none; }
+.serif, .display { font-family: var(--font-display); font-weight: 600; letter-spacing: var(--tracking-display); }
+.tabular { font-variant-numeric: tabular-nums; }
+.muted { color: var(--text-muted); }
+.secondary { color: var(--text-secondary); }
+
+/* Controls that only work with script (copy buttons) stay out of sight in a browser without it: the theme boot script
+   marks <html data-js> before the first paint. */
+:root:not([data-js]) [data-js-only] { display: none !important; }
+
+/* Skip link: invisible until keyboard focus reaches it. A squircle like every rounded surface: the element carries
+   data-sq="surface", so its corners come from --sq-r and its paint from --sq-fill. */
+.skip-link {
+  --sq-r: var(--radius-control);
+  --sq-fill: var(--foreground);
+  position: fixed;
+  top: 12px;
+  left: 12px;
+  z-index: 200;
+  padding: var(--space-2) var(--space-4);
+  background: var(--sq-fill);
+  color: var(--background);
+  font-size: var(--text-sm);
+  text-decoration: none;
+  transform: translateY(-160%);
+  transition: transform var(--duration-standard) var(--ease-enter);
+}
+.skip-link:focus-visible { transform: none; color: var(--background); }
+
+/* ------------------------------------------------------------------------------------------------------------------
+ * View transitions.
+ *
+ * Page changes inside the workspace (components/foundation/shell): React's <ViewTransition> tags the leaving page and
+ * the arriving one with a class per direction along the navigation (page-forward / page-back) or page-fade. The
+ * sidebar and the top bar are their own layer that never moves, so only the page slides.
+ * The theme change is Arc's eclipse (lib/theme.ts): the next appearance crosses the page as a disc from the switch.
+ * ------------------------------------------------------------------------------------------------------------------ */
+::view-transition { pointer-events: none; }
+
+/* Each still layer needs a name of its own (two elements with one name abort the transition). */
+[data-vt="sidebar"] { view-transition-name: kit-sidebar; }
+[data-vt="topbar"] { view-transition-name: kit-topbar; }
+:root[data-transition="eclipse"] :is([data-vt="sidebar"], [data-vt="topbar"]) { view-transition-name: none; }
+::view-transition-group(kit-sidebar), ::view-transition-group(kit-topbar) { z-index: 100; animation: none; }
+::view-transition-old(kit-sidebar), ::view-transition-old(kit-topbar) { display: none; }
+::view-transition-new(kit-sidebar), ::view-transition-new(kit-topbar) { animation: none; }
+
+::view-transition-old(.page-forward) { animation: page-out var(--duration-fast) var(--ease-standard) both; --page-dir: 1; }
+::view-transition-new(.page-forward) { animation: page-in var(--duration-considered) var(--ease-enter) both; --page-dir: 1; }
+::view-transition-old(.page-back) { animation: page-out var(--duration-fast) var(--ease-standard) both; --page-dir: -1; }
+::view-transition-new(.page-back) { animation: page-in var(--duration-considered) var(--ease-enter) both; --page-dir: -1; }
+::view-transition-old(.page-fade) { animation: page-out var(--duration-fast) var(--ease-standard) both; --page-dir: 0; }
+::view-transition-new(.page-fade) { animation: page-in var(--duration-considered) var(--ease-enter) both; --page-dir: 0; }
+@keyframes page-out { to { opacity: 0; transform: translateX(calc(var(--page-dir, 0) * -12px)); filter: blur(2px); } }
+@keyframes page-in { from { opacity: 0; transform: translateX(calc(var(--page-dir, 0) * 18px)); filter: blur(3px); } }
+
+::view-transition-old(root), ::view-transition-new(root) { mix-blend-mode: normal; }
+:root[data-transition="eclipse"]::view-transition-old(root) { animation: none; }
+:root[data-transition="eclipse"]::view-transition-new(root) { animation: eclipse-sweep var(--eclipse-duration, 720ms) var(--ease-in-out) both; }
+@keyframes eclipse-sweep {
+  from { clip-path: circle(var(--eclipse-r) at var(--eclipse-x0) var(--eclipse-y0)); }
+  to { clip-path: circle(var(--eclipse-r) at var(--eclipse-x1) var(--eclipse-y1)); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  body { transition: none; }
+  .skip-link { transition: none; }
+  ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
+}

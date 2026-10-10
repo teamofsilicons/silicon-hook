@@ -86,6 +86,7 @@ fn add_batch(result: &mut MaintenanceResult, task: MaintenanceTask, batch: Maint
         MaintenanceTask::ExpiredHooks => &mut result.hooks_purged,
         MaintenanceTask::ExpiredIdempotency => &mut result.idempotency_rows_purged,
         MaintenanceTask::StaleIpBlocks => &mut result.ip_blocks_purged,
+        MaintenanceTask::ExpiredAccountsEvents => &mut result.accounts_events_purged,
     };
     *destination = destination.saturating_add(batch.rows_affected);
 }
@@ -96,7 +97,8 @@ fn log_result(result: MaintenanceResult, cycle_limit_reached: bool, failed_tasks
         .saturating_add(result.blocked_requests_purged)
         .saturating_add(result.hooks_purged)
         .saturating_add(result.idempotency_rows_purged)
-        .saturating_add(result.ip_blocks_purged);
+        .saturating_add(result.ip_blocks_purged)
+        .saturating_add(result.accounts_events_purged);
     if affected_rows == 0 && failed_tasks == 0 && !cycle_limit_reached {
         tracing::debug!("retention maintenance cycle completed without eligible rows");
         return;
@@ -108,6 +110,7 @@ fn log_result(result: MaintenanceResult, cycle_limit_reached: bool, failed_tasks
         hooks_purged = result.hooks_purged,
         idempotency_rows_purged = result.idempotency_rows_purged,
         ip_blocks_purged = result.ip_blocks_purged,
+        accounts_events_purged = result.accounts_events_purged,
         cycle_limit_reached,
         failed_tasks,
         "retention maintenance cycle completed"
@@ -137,5 +140,6 @@ mod tests {
         assert_eq!(result.hooks_purged, 3);
         assert_eq!(result.idempotency_rows_purged, 4);
         assert_eq!(result.ip_blocks_purged, 5);
+        assert_eq!(result.accounts_events_purged, 6);
     }
 }

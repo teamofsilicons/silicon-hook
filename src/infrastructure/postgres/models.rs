@@ -11,10 +11,10 @@ use uuid::Uuid;
 
 use super::{StoreError, parse_actor_kind};
 use crate::domain::{
-    ActorId, ActorRef, BlockReason, BlockedRequest, BlockedRequestId, BlockedRequestSnapshot,
+    AccountUuid, ActorRef, BlockReason, BlockedRequest, BlockedRequestId, BlockedRequestSnapshot,
     DeliverySequence, EncryptedSecret, EncryptionKeyId, EndpointKey, EventRecord,
     EventRecordSnapshot, Hook, HookDescription, HookId, HookName, HookSnapshot, HookStatus,
-    HookTimeZone, OrganizationId, SigningPolicy, SiliconId,
+    HookTimeZone, SigningPolicy, SiliconId,
     request::{CapturedRequest, CapturedRequestParts},
     signature::SignatureConfig,
 };
@@ -22,11 +22,11 @@ use crate::domain::{
 /// Column list shared by every hook projection, usable inside `concat!`.
 macro_rules! hook_columns {
     () => {
-        "id, org_id, silicon_id, endpoint_key, name, description, \
+        "id, silicon_id, silicon_uuid, endpoint_key, name, description, \
          signature_required, signature_config, encryption_key_id, secret_nonce, \
          encrypted_signing_secret, time_zone, created_by_kind, created_by_id, \
-         created_at, disabled_at, deleted_at, last_received_at, last_blocked_at, \
-         endpoint_rotated_at"
+         created_by_uuid, created_at, disabled_at, deleted_at, last_received_at, \
+         last_blocked_at, endpoint_rotated_at"
     };
 }
 pub(super) use hook_columns;
@@ -34,8 +34,8 @@ pub(super) use hook_columns;
 #[derive(Debug, FromRow)]
 pub(super) struct HookRow {
     pub(super) id: Uuid,
-    pub(super) org_id: String,
     pub(super) silicon_id: String,
+    pub(super) silicon_uuid: Option<String>,
     pub(super) endpoint_key: String,
     pub(super) name: String,
     pub(super) description: Option<String>,
@@ -47,6 +47,7 @@ pub(super) struct HookRow {
     pub(super) time_zone: String,
     pub(super) created_by_kind: String,
     pub(super) created_by_id: String,
+    pub(super) created_by_uuid: Option<String>,
     pub(super) created_at: OffsetDateTime,
     pub(super) disabled_at: Option<OffsetDateTime>,
     pub(super) deleted_at: Option<OffsetDateTime>,
@@ -60,6 +61,14 @@ pub(super) struct ClockedHookRow {
     #[sqlx(flatten)]
     pub(super) hook: HookRow,
     pub(super) database_time: OffsetDateTime,
+}
+
+#[derive(Debug, FromRow)]
+pub(super) struct RoutedHookRow {
+    #[sqlx(flatten)]
+    pub(super) clocked: ClockedHookRow,
+    pub(super) path_matches: bool,
+    pub(super) owner_deleted: bool,
 }
 
 impl TryFrom<HookRow> for Hook {
@@ -95,15 +104,17 @@ impl TryFrom<HookRow> for Hook {
         };
         let config: SignatureConfig =
             serde_json::from_value(row.signature_config).map_err(|error| corrupt(&error))?;
-        let created_by = ActorRef::new(
+        let created_by = ActorRef::stored(
             parse_actor_kind(&row.created_by_kind)?,
-            ActorId::new(row.created_by_id).map_err(|error| corrupt(&error))?,
-        );
+            row.created_by_id,
+            optional_uuid(row.created_by_uuid.as_deref(), "hook")?,
+        )
+        .map_err(|error| corrupt(&error))?;
 
         Hook::rehydrate(HookSnapshot {
             id: row.id.into(),
-            organization_id: OrganizationId::new(row.org_id).map_err(|error| corrupt(&error))?,
             silicon_id: SiliconId::new(row.silicon_id).map_err(|error| corrupt(&error))?,
+            silicon_uuid: optional_uuid(row.silicon_uuid.as_deref(), "hook")?,
             name: HookName::new(row.name).map_err(|error| corrupt(&error))?,
             description: row
                 .description
@@ -219,12 +230,22 @@ fn decode_headers(value: &Value) -> Option<Vec<(String, String)>> {
         .collect()
 }
 
+fn optional_uuid(
+    value: Option<&str>,
+    entity: &'static str,
+) -> Result<Option<AccountUuid>, StoreError> {
+    value
+        .map(AccountUuid::new)
+        .transpose()
+        .map_err(|error| StoreError::corrupt(entity, error))
+}
+
 #[derive(Debug, FromRow)]
 pub(super) struct EventRow {
     pub(super) id: Uuid,
     pub(super) hook_id: Uuid,
-    pub(super) org_id: String,
     pub(super) silicon_id: String,
+    pub(super) silicon_uuid: Option<String>,
     pub(super) provider: String,
     pub(super) summary: String,
     pub(super) delivery_sequence: i64,
@@ -240,8 +261,8 @@ impl TryFrom<EventRow> for EventRecord {
         let received_at = row.capture.received_at;
         Ok(EventRecord::rehydrate(EventRecordSnapshot {
             id: row.id.into(),
-            organization_id: OrganizationId::new(row.org_id).map_err(|error| corrupt(&error))?,
             silicon_id: SiliconId::new(row.silicon_id).map_err(|error| corrupt(&error))?,
+            silicon_uuid: optional_uuid(row.silicon_uuid.as_deref(), "event")?,
             hook_id: row.hook_id.into(),
             provider: HookName::new(row.provider).map_err(|error| corrupt(&error))?,
             summary: row.summary,
@@ -257,8 +278,8 @@ impl TryFrom<EventRow> for EventRecord {
 pub(super) struct BlockedRequestRow {
     pub(super) id: Uuid,
     pub(super) hook_id: Uuid,
-    pub(super) org_id: String,
     pub(super) silicon_id: String,
+    pub(super) silicon_uuid: Option<String>,
     pub(super) provider: String,
     pub(super) reason_code: String,
     pub(super) reason_detail: String,
@@ -274,8 +295,8 @@ impl TryFrom<BlockedRequestRow> for BlockedRequest {
         let received_at = row.capture.received_at;
         Ok(BlockedRequest::rehydrate(BlockedRequestSnapshot {
             id: BlockedRequestId::from_uuid(row.id),
-            organization_id: OrganizationId::new(row.org_id).map_err(|error| corrupt(&error))?,
             silicon_id: SiliconId::new(row.silicon_id).map_err(|error| corrupt(&error))?,
+            silicon_uuid: optional_uuid(row.silicon_uuid.as_deref(), "blocked request")?,
             hook_id: HookId::from_uuid(row.hook_id),
             provider: HookName::new(row.provider).map_err(|error| corrupt(&error))?,
             request: row.capture.into_request("blocked request")?,

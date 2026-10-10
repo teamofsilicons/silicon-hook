@@ -1,0 +1,157 @@
+{
+  "source": "https://ui.teamofsilicons.com",
+  "files": {
+    "components/silicon-ui/alert/alert.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/alert.json",
+      "sha256": "ddcd481e2ebc6a1cbf6f053d6de1817d5dfd40b347e0bea561cc9fda2ea54950"
+    },
+    "components/silicon-ui/alert/alert.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/alert.json",
+      "sha256": "79c62cf3ae3b3861e8c8c42fdaef29381986ef68828d031855abc3d8a4176abc"
+    },
+    "components/silicon-ui/avatar/avatar.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/avatar.json",
+      "sha256": "0c6199133b971d92a1fdc75c1474f20446f9611ade3d11252b9f005efa4d2380"
+    },
+    "components/silicon-ui/avatar/avatar.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/avatar.json",
+      "sha256": "21be5f6428c89355e4b3915a70dcd65102c06e0680bbbf8e0d41a38d4e301dcf"
+    },
+    "components/silicon-ui/lib/silicon-provider.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/avatar.json",
+      "sha256": "fdfe0efa7f034006c40f1b6f3af39a3d5541b99eff9f5855719128e4476b7e09"
+    },
+    "components/silicon-ui/badge/badge.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/badge.json",
+      "sha256": "3c55d03480156cd7636e171ce8649ddc9616db7484dea50063d8b589810c4aad"
+    },
+    "components/silicon-ui/badge/badge.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/badge.json",
+      "sha256": "a609ce19faf31ce4624cbd1aad5b2d8a771f3087a074152c876c2a8a25c7e14d"
+    },
+    "components/silicon-ui/button/button.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/theme-switch.json",
+      "sha256": "6a56d78cb75a6fd5f5cfdd03be8b02bf96f0bc96790d3c81abeee10e089fecec"
+    },
+    "components/silicon-ui/button/button.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/theme-switch.json",
+      "sha256": "a3145c8c73560ac8ec6c793601c709f0744d33a6acf724eb8c6b74fb5067c43a"
+    },
+    "components/silicon-ui/checkbox/checkbox.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/checkbox.json",
+      "sha256": "4759251a0b2a83320cb4078e840f61481a23be0b38b9aa7c077c2e85e6dde00d"
+    },
+    "components/silicon-ui/checkbox/checkbox.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/checkbox.json",
+      "sha256": "7419398bebfa991b9b94f368a591a4b4a2c25569f77fda3967e9813d2dadc8c9"
+    },
+    "components/silicon-ui/command-palette/command-palette.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/command-palette.json",
+      "sha256": "2a4bd0804f3be91c9bf3f900c6dc0e2f0c889ff5f37863cfcbc81fe7931f7dca"
+    },
+    "components/silicon-ui/command-palette/command-palette.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/command-palette.json",
+      "sha256": "1d768c28b1f618555fdc54f318456682a65c679bc0a4e2b5a5fea223cf172b60"
+    },
+    "components/silicon-ui/confirm-morph/confirm-morph.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/confirm-morph.json",
+      "sha256": "151698eb1a316e38985d748f8e23b4e04d948a19a66212ef26de0b09fab2b563"
+    },
+    "components/silicon-ui/confirm-morph/confirm-morph.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/confirm-morph.json",
+      "sha256": "e95d1e0e092eec0025a40e64ce8d41d5d1ec70f29b2a03c92b72812072ea0ba8"
+    },
+    "components/silicon-ui/copy-button/copy-button.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/copy-button.json",
+      "sha256": "a6faac2922a48cc05ec72650ed63aee9b3871446df683cb7de6790f9bb19744a"
+    },
+    "components/silicon-ui/copy-button/copy-button.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/copy-button.json",
+      "sha256": "ad6821f03dd1b3bd76f688a2f80fb3f0e64362da54bdf2aeec599f0d5db55c0c"
+    },
+    "components/silicon-ui/lib/use-copy-feedback.ts": {
+      "registry": "https://ui.teamofsilicons.com/r/copy-button.json",
+      "sha256": "88d0ae55bb3e241f529912a4802bbf014e4ba437025acc90ab13e012702273c5"
+    },
+    "components/silicon-ui/dialog/dialog.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/dialog.json",
+      "sha256": "eb84a7eb2ac864dc07f2825eab252eac78e9c6b889d0e9f00bf6b2b799975ade"
+    },
+    "components/silicon-ui/dialog/dialog.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/dialog.json",
+      "sha256": "40ac3ebefc883a04e4c5249026f1fd1eedf1e97baeac3954ad8b2a34b9cc74c0"
+    },
+    "components/silicon-ui/drawer/drawer.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/drawer.json",
+      "sha256": "eca310cb947c8da843f1128a77a2683c4e031519081da8c08d7ee405e5bbd87a"
+    },
+    "components/silicon-ui/drawer/drawer.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/drawer.json",
+      "sha256": "715950296b26bcdb9afbc3a3a776f097608f6f71a885bab2251d2d232494452c"
+    },
+    "components/silicon-ui/input/input.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/input.json",
+      "sha256": "16a4e761b51482e9c066f284a38171085e71ae390e4b26f9f0c18dd8af21c8f2"
+    },
+    "components/silicon-ui/input/input.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/input.json",
+      "sha256": "da9aa5e0863ccaa5377aa4307f6063b542a5da201ef6653a37c4f7e46f2cce01"
+    },
+    "components/silicon-ui/select/select.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/select.json",
+      "sha256": "fb27423f88a741b87d4f15dd8d87d1e523831dd889b4ac1d6029559a33cf53fb"
+    },
+    "components/silicon-ui/select/select.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/select.json",
+      "sha256": "9e50140a4dad0dacc6508d09632cbef964c00abad2ed4febf594f508741a4170"
+    },
+    "components/silicon-ui/lib/menu-highlight.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/select.json",
+      "sha256": "e05dbfb0537d97d725ae1f615795195385f3e624863334fa827a8b91fb10e075"
+    },
+    "components/silicon-ui/foundation.css": {
+      "registry": "https://ui.teamofsilicons.com/r/silicon-foundation.json",
+      "sha256": "28e3780a68f2caa28f7b961ba4c7825f681db45bb2f421828b9a4983388451d0"
+    },
+    "components/silicon-ui/motion-tokens.ts": {
+      "registry": "https://ui.teamofsilicons.com/r/silicon-motion-tokens.json",
+      "sha256": "13af43b57ed38e5b72cfc06ff0ccc39b0593721f04840e73532893593cc61491"
+    },
+    "components/silicon-ui/lib/motion-tokens.ts": {
+      "registry": "https://ui.teamofsilicons.com/r/silicon-motion-tokens.json",
+      "sha256": "bec65d2e1b180dd3c574edc60cf84e0fa336e7ff8640eba0c70bcf0ae765fb8a"
+    },
+    "components/silicon-ui/textarea/textarea.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/textarea.json",
+      "sha256": "1ed43b87e45b04180f1c6b8b3b7543e071bed3a6fcb2033e98015c77a8b7135a"
+    },
+    "components/silicon-ui/textarea/textarea.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/textarea.json",
+      "sha256": "b501f42dec62067fbf5e492d5e40164315e1d97460c8f5908da963be05cbdf14"
+    },
+    "components/silicon-ui/theme-switch/theme-switch.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/theme-switch.json",
+      "sha256": "ab77cf084065de4d4ad6a25d972c5242e39a704142b285f1ce56b7d82c22dafd"
+    },
+    "components/silicon-ui/theme-switch/theme-switch.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/theme-switch.json",
+      "sha256": "06a1dae8e1608c3c1077ada74b8632a868fdf398e017b3589b429b747fa0a2c5"
+    },
+    "components/silicon-ui/toast-stack/toast-stack.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/toast-stack.json",
+      "sha256": "ba422f5d6e330c49b9f2a110af7cf91e46e20697490ef7f103909e982adde49a"
+    },
+    "components/silicon-ui/toast-stack/toast-stack.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/toast-stack.json",
+      "sha256": "388d56c3760c9623db743eeed2664bc7aef60843ee86da0012f4b3fb98d48ded"
+    },
+    "components/silicon-ui/user-menu/user-menu.tsx": {
+      "registry": "https://ui.teamofsilicons.com/r/user-menu.json",
+      "sha256": "ea41adfd5ef81396d4044a8d9d06759cd4628adcb7cd4e74c6cc6dfb98313c8f"
+    },
+    "components/silicon-ui/user-menu/user-menu.module.css": {
+      "registry": "https://ui.teamofsilicons.com/r/user-menu.json",
+      "sha256": "017af779f8a756260e9141e0477149b8a94b1c58f4867f0a5ba674930d6742b1"
+    }
+  }
+}

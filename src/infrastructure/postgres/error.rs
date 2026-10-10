@@ -28,7 +28,7 @@ pub enum StoreError {
         /// Non-sensitive validation detail.
         reason: String,
     },
-    /// The requested aggregate does not exist in the supplied tenant scope.
+    /// The requested aggregate does not exist in the supplied owner scope.
     #[error("{entity} was not found")]
     NotFound {
         /// Kind of missing aggregate.
@@ -52,9 +52,9 @@ pub enum StoreError {
     /// A generated endpoint key collided with a live or retired key.
     #[error("endpoint key already exists or was retired for this Silicon")]
     EndpointKeyConflict,
-    /// A concurrent request already created the Silicon's IAM hook.
-    #[error("the Silicon IAM hook already exists")]
-    IamDefaultExists,
+    /// A concurrent request already created the Silicon's Silicon Accounts hook.
+    #[error("the Silicon Accounts updates hook already exists")]
+    DefaultHookExists,
     /// The Silicon already owns the maximum number of recoverable hooks.
     #[error("the retained hook limit has been reached for this Silicon")]
     HookLimitReached,
@@ -102,7 +102,7 @@ impl StoreError {
             Self::SecretReplayExpired => "secret_replay_expired",
             Self::SecretSuperseded => "secret_superseded",
             Self::EndpointKeyConflict => "endpoint_key_conflict",
-            Self::IamDefaultExists => "iam_default_exists",
+            Self::DefaultHookExists => "default_hook_exists",
             Self::HookLimitReached => "hook_limit_reached",
             Self::NumericRange { .. } => "numeric_range",
             Self::InvalidArgument { .. } => "invalid_argument",

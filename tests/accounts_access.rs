@@ -1,0 +1,670 @@
+//! Who may do what with a Silicon's hooks, over HTTP with Silicon Accounts
+//! tokens: the Silicon, its custodian, view and manage grants, the allow-list
+//! that keeps Silicons from being open to the world, and introspection on
+//! the routes that reveal secrets or change access.
+
+mod support;
+
+use anyhow::Result;
+use http::{Method, StatusCode};
+use serde_json::{Value, json};
+use support::api::TestApi;
+
+/// Alice looks after Cos and Dev; Dave looks after Ext; Bob and Carol are
+/// other Carbons.
+struct People {
+    cos: String,
+    dev: String,
+    ext: String,
+    alice: String,
+    bob: String,
+    carol: String,
+    dave: String,
+}
+
+fn people(api: &TestApi) -> People {
+    let stub = &api.accounts;
+    stub.add_carbon("CAlice1", "c:alice");
+    stub.add_carbon("CBob2", "c:bob");
+    stub.add_carbon("CCarol3", "c:carol");
+    stub.add_carbon("CDave4", "c:dave");
+    stub.add_silicon("SCos1", "si:cos", Some(("CAlice1", "c:alice")));
+    stub.add_silicon("SDev2", "si:dev", Some(("CAlice1", "c:alice")));
+    stub.add_silicon("SExt3", "si:ext", Some(("CDave4", "c:dave")));
+    People {
+        cos: stub.token("SCos1", "silicon", "si:cos"),
+        dev: stub.token("SDev2", "silicon", "si:dev"),
+        ext: stub.token("SExt3", "silicon", "si:ext"),
+        alice: stub.token("CAlice1", "carbon", "c:alice"),
+        bob: stub.token("CBob2", "carbon", "c:bob"),
+        carol: stub.token("CCarol3", "carbon", "c:carol"),
+        dave: stub.token("CDave4", "carbon", "c:dave"),
+    }
+}
+
+async fn create_hook(
+    api: &TestApi,
+    silicon: &str,
+    token: &str,
+    name: &str,
+) -> Result<(StatusCode, Value)> {
+    api.call(
+        Method::POST,
+        &format!("/api/v3/silicons/{silicon}/hooks"),
+        Some(token),
+        Some(&json!({"name": name})),
+    )
+    .await
+}
+
+async fn list_hooks(api: &TestApi, silicon: &str, token: &str) -> Result<(StatusCode, Value)> {
+    api.call(
+        Method::GET,
+        &format!("/api/v3/silicons/{silicon}/hooks"),
+        Some(token),
+        None,
+    )
+    .await
+}
+
+async fn grant(
+    api: &TestApi,
+    token: &str,
+    grantee: &str,
+    level: &str,
+) -> Result<(StatusCode, Value)> {
+    api.call(
+        Method::PUT,
+        &format!("/api/v3/silicons/si:cos/access/{grantee}"),
+        Some(token),
+        Some(&json!({"level": level})),
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_carbon_cannot_own_a_namespace_by_using_its_uuid() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let p = people(&api);
+    for selector in ["CBob2", "c:bob"] {
+        for suffix in ["hooks", "access", "allow-list", "events"] {
+            let (status, body) = api
+                .call(
+                    Method::GET,
+                    &format!("/api/v3/silicons/{selector}/{suffix}"),
+                    Some(&p.bob),
+                    None,
+                )
+                .await?;
+            assert_eq!(status, StatusCode::NOT_FOUND, "{selector}/{suffix}: {body}");
+            assert_eq!(body["error"]["code"], "not_a_silicon");
+        }
+        let (status, body) = create_hook(&api, selector, &p.bob, "Forbidden").await?;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+        assert_eq!(body["error"]["code"], "not_a_silicon");
+    }
+    Ok(())
+}
+
+#[tokio::test]
+async fn the_silicon_and_its_custodian_have_full_control_and_nobody_else_has_any() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let p = people(&api);
+
+    let (status, own) = create_hook(&api, "si:cos", &p.cos, "GitHub").await?;
+    assert_eq!(status, StatusCode::CREATED, "{own}");
+    assert_eq!(own["silicon"], json!({"uuid": "SCos1", "id": "si:cos"}));
+    assert_eq!(own["created_by"]["uuid"], "SCos1");
+    assert!(
+        own["endpoint_url"]
+            .as_str()
+            .is_some_and(|url| url.starts_with("https://hook.example.test/silicon/si:cos/"))
+    );
+    assert!(
+        own["signing_secret"]
+            .as_str()
+            .is_some_and(|secret| !secret.is_empty())
+    );
+
+    // The custodian acts on the Silicon's hooks as itself, never as the Silicon.
+    let (status, by_custodian) = create_hook(&api, "si:cos", &p.alice, "Stripe").await?;
+    assert_eq!(status, StatusCode::CREATED, "{by_custodian}");
+    assert_eq!(
+        by_custodian["created_by"],
+        json!({"uuid": "CAlice1", "kind": "carbon", "id": "c:alice"})
+    );
+    let (status, listed) = list_hooks(&api, "SCos1", &p.alice).await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed["items"].as_array().map(Vec::len), Some(2));
+
+    // A sibling Silicon (same custodian), another Silicon and other Carbons see nothing.
+    for (who, token) in [
+        ("sibling", &p.dev),
+        ("outside Silicon", &p.ext),
+        ("Carbon", &p.bob),
+        ("another Carbon", &p.carol),
+        ("custodian of another", &p.dave),
+    ] {
+        let (status, body) = list_hooks(&api, "si:cos", token).await?;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{who}: {body}");
+        assert_eq!(body["error"]["code"], "no_access", "{who}");
+        let (status, _) = create_hook(&api, "si:cos", token, "Nope").await?;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{who}");
+    }
+
+    // Exact errors for Silicons that do not exist and for Carbons.
+    let (status, body) = list_hooks(&api, "si:nobody", &p.alice).await?;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("silicon_not_found"))
+    );
+    let (status, body) = list_hooks(&api, "c:bob", &p.alice).await?;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("not_a_silicon"))
+    );
+    let (status, body) = list_hooks(&api, "not%20an%20id", &p.alice).await?;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("invalid_account"))
+    );
+    let (status, body) = api
+        .call(Method::GET, "/api/v3/silicons/si:cos/hooks", None, None)
+        .await?;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (StatusCode::UNAUTHORIZED, json!("unauthenticated"))
+    );
+
+    // The custodian sees both Silicons it looks after once Hook has met them.
+    list_hooks(&api, "si:dev", &p.dev).await?;
+    let (status, silicons) = api
+        .call(Method::GET, "/api/v3/silicons", Some(&p.alice), None)
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    let mut seen = silicons["items"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|item| (item["silicon"]["id"].clone(), item["access"].clone()))
+        .collect::<Vec<_>>();
+    seen.sort_by_key(|(id, _)| id.to_string());
+    assert_eq!(
+        seen,
+        vec![
+            (json!("si:cos"), json!("custodian")),
+            (json!("si:dev"), json!("custodian"))
+        ]
+    );
+    let (_, own_list) = api
+        .call(Method::GET, "/api/v3/silicons", Some(&p.cos), None)
+        .await?;
+    assert_eq!(own_list["items"][0]["access"], "self");
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines, reason = "one sharing scenario, step by step")]
+async fn grants_give_view_or_manage_and_a_grantee_can_leave() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let p = people(&api);
+    let (_, hook) = create_hook(&api, "si:cos", &p.cos, "GitHub").await?;
+    let hook_path = format!(
+        "/api/v3/silicons/si:cos/hooks/{}",
+        hook["id"].as_str().unwrap_or_default()
+    );
+
+    let (status, granted) = grant(&api, &p.alice, "c:bob", "view").await?;
+    assert_eq!(status, StatusCode::OK, "{granted}");
+    assert_eq!(granted["grant"]["level"], "view");
+    assert_eq!(granted["grant"]["granted_by"]["uuid"], "CAlice1");
+    assert_eq!(granted["grant"]["granted_by"]["id"], "c:alice");
+    assert_eq!(granted["grant"]["granted_by"]["kind"], "carbon");
+    assert_eq!(list_hooks(&api, "si:cos", &p.bob).await?.0, StatusCode::OK);
+    assert_eq!(
+        api.call(
+            Method::GET,
+            "/api/v3/silicons/si:cos/events",
+            Some(&p.bob),
+            None
+        )
+        .await?
+        .0,
+        StatusCode::OK
+    );
+    let (status, body) = create_hook(&api, "si:cos", &p.bob, "Viewer").await?;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (StatusCode::FORBIDDEN, json!("forbidden"))
+    );
+    assert_eq!(
+        api.call(Method::DELETE, &hook_path, Some(&p.bob), None)
+            .await?
+            .0,
+        StatusCode::FORBIDDEN
+    );
+
+    // Only the Silicon and its custodian decide who has access.
+    let (status, _) = grant(&api, &p.bob, "c:carol", "view").await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, _) = api
+        .call(
+            Method::POST,
+            "/api/v3/silicons/si:cos/hooks/accounts",
+            Some(&p.bob),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        status,
+        StatusCode::FORBIDDEN,
+        "only the Silicon or its custodian connects its Accounts updates"
+    );
+    let (status, body) = grant(&api, &p.cos, "c:alice", "view").await?;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (StatusCode::CONFLICT, json!("already_has_access"))
+    );
+    let (status, body) = grant(&api, &p.cos, "c:bob", "admin").await?;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (StatusCode::UNPROCESSABLE_ENTITY, json!("invalid_level"))
+    );
+
+    // The Silicon itself raises Bob to manage; Bob can now change hooks.
+    assert_eq!(
+        grant(&api, &p.cos, "c:bob", "manage").await?.0,
+        StatusCode::OK
+    );
+    let (status, managed) = create_hook(&api, "si:cos", &p.bob, "Manager").await?;
+    assert_eq!(status, StatusCode::CREATED, "{managed}");
+    assert_eq!(managed["created_by"]["uuid"], "CBob2");
+    assert_eq!(
+        api.call(Method::DELETE, &hook_path, Some(&p.bob), None)
+            .await?
+            .0,
+        StatusCode::NO_CONTENT
+    );
+
+    let (status, access) = api
+        .call(
+            Method::GET,
+            "/api/v3/silicons/si:cos/access",
+            Some(&p.alice),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(access["you"]["access"], "custodian");
+    assert_eq!(access["custodian"]["uuid"], "CAlice1");
+    assert_eq!(access["grants"].as_array().map(Vec::len), Some(1));
+
+    // A grantee leaves; afterwards it has no access at all.
+    let (status, _) = api
+        .call(
+            Method::DELETE,
+            "/api/v3/silicons/si:cos/access/me",
+            Some(&p.bob),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::NO_CONTENT);
+    assert_eq!(
+        list_hooks(&api, "si:cos", &p.bob).await?.0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, body) = api
+        .call(
+            Method::DELETE,
+            "/api/v3/silicons/si:cos/access/c:bob",
+            Some(&p.alice),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (StatusCode::NOT_FOUND, json!("grant_not_found"))
+    );
+    Ok(())
+}
+
+/// While Silicon Accounts does not answer, routes verified locally keep
+/// working and the routes that must confirm a sign-in say exactly why they
+/// cannot (never a 401 that would end a client's sign-in).
+#[tokio::test]
+async fn an_unanswering_silicon_accounts_is_named_and_local_routes_keep_working() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let p = people(&api);
+    api.accounts.set_down(true);
+    let (status, refused) = list_hooks(&api, "si:cos", &p.cos).await?;
+    assert_eq!(
+        (status, refused["error"]["code"].clone()),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!("accounts_unavailable")
+        ),
+        "no signing keys yet: {refused}"
+    );
+    api.accounts.set_down(false);
+    assert_eq!(list_hooks(&api, "si:cos", &p.cos).await?.0, StatusCode::OK);
+    api.accounts.set_down(true);
+    assert_eq!(
+        list_hooks(&api, "si:cos", &p.cos).await?.0,
+        StatusCode::OK,
+        "verified locally with the cached keys"
+    );
+    let (status, refused) = create_hook(&api, "si:cos", &p.cos, "During").await?;
+    assert_eq!(
+        (status, refused["error"]["code"].clone()),
+        (
+            StatusCode::SERVICE_UNAVAILABLE,
+            json!("accounts_unavailable")
+        ),
+        "{refused}"
+    );
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.starts_with("Silicon Accounts did not answer")),
+        "{refused}"
+    );
+    api.accounts.set_down(false);
+    assert_eq!(
+        create_hook(&api, "si:cos", &p.cos, "After").await?.0,
+        StatusCode::CREATED
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_silicon_outside_the_circle_receives_access_only_after_allowing_the_sharer() -> Result<()>
+{
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let p = people(&api);
+    create_hook(&api, "si:cos", &p.cos, "GitHub").await?;
+
+    let (status, body) = grant(&api, &p.alice, "si:ext", "view").await?;
+    assert_eq!(
+        (status, body["error"]["code"].clone()),
+        (StatusCode::FORBIDDEN, json!("silicon_not_reachable")),
+        "{body}"
+    );
+    // A sibling (same custodian) is inside the circle and needs no allow-list.
+    assert_eq!(
+        grant(&api, &p.alice, "si:dev", "view").await?.0,
+        StatusCode::OK
+    );
+    assert_eq!(list_hooks(&api, "si:cos", &p.dev).await?.0, StatusCode::OK);
+
+    // Only Ext and its custodian manage Ext's allow-list.
+    let allow = "/api/v3/silicons/si:ext/allow-list/c:alice";
+    assert_eq!(
+        api.call(Method::PUT, allow, Some(&p.alice), None).await?.0,
+        StatusCode::FORBIDDEN
+    );
+    let (status, entry) = api.call(Method::PUT, allow, Some(&p.dave), None).await?;
+    assert_eq!(status, StatusCode::OK, "{entry}");
+    assert_eq!(entry["account"]["uuid"], "CAlice1");
+    let (status, listed) = api
+        .call(
+            Method::GET,
+            "/api/v3/silicons/si:ext/allow-list",
+            Some(&p.ext),
+            None,
+        )
+        .await?;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed["items"].as_array().map(Vec::len), Some(1));
+
+    assert_eq!(
+        grant(&api, &p.alice, "si:ext", "view").await?.0,
+        StatusCode::OK
+    );
+    assert_eq!(list_hooks(&api, "si:cos", &p.ext).await?.0, StatusCode::OK);
+    assert_eq!(
+        create_hook(&api, "si:cos", &p.ext, "Nope").await?.0,
+        StatusCode::FORBIDDEN
+    );
+
+    // Removing the allowance stops new grants, not the existing one.
+    assert_eq!(
+        api.call(Method::DELETE, allow, Some(&p.ext), None).await?.0,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        api.call(Method::DELETE, allow, Some(&p.ext), None).await?.0,
+        StatusCode::NOT_FOUND
+    );
+    let (status, _) = grant(&api, &p.alice, "si:ext", "manage").await?;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    Ok(())
+}
+
+#[tokio::test]
+async fn routes_that_reveal_secrets_or_change_access_confirm_the_token_is_still_active()
+-> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let p = people(&api);
+    let (_, hook) = create_hook(&api, "si:cos", &p.cos, "GitHub").await?;
+    let hook_id = hook["id"].as_str().unwrap_or_default().to_owned();
+    api.accounts.deactivate(&p.cos);
+
+    // Local checks still pass: the token is valid until it expires.
+    assert_eq!(list_hooks(&api, "si:cos", &p.cos).await?.0, StatusCode::OK);
+    for (method, path, body) in [
+        (
+            Method::POST,
+            "/api/v3/silicons/si:cos/hooks".to_owned(),
+            Some(json!({"name": "Late"})),
+        ),
+        (
+            Method::POST,
+            format!("/api/v3/silicons/si:cos/hooks/{hook_id}/secret/rotate"),
+            None,
+        ),
+        (
+            Method::POST,
+            format!("/api/v3/silicons/si:cos/hooks/{hook_id}/endpoint/rotate"),
+            None,
+        ),
+        (
+            Method::DELETE,
+            format!("/api/v3/silicons/si:cos/hooks/{hook_id}"),
+            None,
+        ),
+        (
+            Method::PUT,
+            "/api/v3/silicons/si:cos/access/c:bob".to_owned(),
+            Some(json!({"level": "view"})),
+        ),
+        (
+            Method::PUT,
+            "/api/v3/silicons/si:cos/allow-list/c:bob".to_owned(),
+            None,
+        ),
+        (
+            Method::POST,
+            "/api/v3/silicons/si:cos/hooks/accounts".to_owned(),
+            None,
+        ),
+    ] {
+        let (status, response) = api
+            .call(method.clone(), &path, Some(&p.cos), body.as_ref())
+            .await?;
+        assert_eq!(
+            status,
+            StatusCode::UNAUTHORIZED,
+            "{method} {path}: {response}"
+        );
+        assert_eq!(
+            response["error"]["code"], "session_ended",
+            "{method} {path}"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(clippy::too_many_lines, reason = "one table of every route family")]
+async fn every_route_family_refuses_outsiders_and_lets_viewers_only_read() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let p = people(&api);
+    let open = json!({"name": "Open", "signature": {"required": false}});
+    let (_, hook) = api
+        .call(
+            Method::POST,
+            "/api/v3/silicons/si:cos/hooks",
+            Some(&p.cos),
+            Some(&open),
+        )
+        .await?;
+    let hook_id = hook["id"].as_str().unwrap_or_default().to_owned();
+    let key = hook["endpoint_key"].as_str().unwrap_or_default().to_owned();
+    assert_eq!(
+        api.deliver(&format!("/silicon/si:cos/{key}"), &[], b"{}")
+            .await?
+            .0,
+        StatusCode::OK
+    );
+    let event_id: uuid::Uuid = sqlx::query_scalar("SELECT id FROM hook.events")
+        .fetch_one(api.owner.pool())
+        .await?;
+    assert_eq!(
+        grant(&api, &p.alice, "c:bob", "view").await?.0,
+        StatusCode::OK
+    );
+
+    let base = "/api/v3/silicons/si:cos";
+    let reads = [
+        format!("{base}/hooks"),
+        format!("{base}/hooks/{hook_id}"),
+        format!("{base}/hooks/{hook_id}/events"),
+        format!("{base}/hooks/{hook_id}/blocked-requests"),
+        format!("{base}/events"),
+        format!("{base}/events/{event_id}"),
+        format!("{base}/events/{event_id}/publication"),
+        format!("{base}/blocked-requests"),
+        format!("{base}/access"),
+    ];
+    for path in &reads {
+        let (status, body) = api.call(Method::GET, path, Some(&p.carol), None).await?;
+        assert_eq!(
+            (status, body["error"]["code"].clone()),
+            (StatusCode::FORBIDDEN, json!("no_access")),
+            "{path}"
+        );
+        let (status, body) = api.call(Method::GET, path, Some(&p.bob), None).await?;
+        assert_eq!(status, StatusCode::OK, "viewer reads {path}: {body}");
+    }
+    let writes = [
+        (
+            Method::PATCH,
+            format!("{base}/hooks/{hook_id}"),
+            Some(json!({"name": "Renamed"})),
+        ),
+        (
+            Method::PATCH,
+            format!("{base}/hooks"),
+            Some(json!({"hook_ids": [hook_id], "enabled": false})),
+        ),
+        (
+            Method::POST,
+            format!("{base}/hooks"),
+            Some(json!({"name": "New"})),
+        ),
+        (
+            Method::POST,
+            format!("{base}/hooks/{hook_id}/secret/rotate"),
+            None,
+        ),
+        (
+            Method::POST,
+            format!("{base}/hooks/{hook_id}/endpoint/rotate"),
+            None,
+        ),
+        (
+            Method::POST,
+            format!("{base}/hooks/{hook_id}/restore"),
+            None,
+        ),
+        (Method::DELETE, format!("{base}/hooks/{hook_id}"), None),
+        (Method::POST, format!("{base}/hooks/accounts"), None),
+        (
+            Method::PUT,
+            format!("{base}/access/c:carol"),
+            Some(json!({"level": "view"})),
+        ),
+        (Method::GET, format!("{base}/allow-list"), None),
+        (Method::PUT, format!("{base}/allow-list/c:carol"), None),
+        (Method::DELETE, format!("{base}/access/c:alice"), None),
+    ];
+    for (method, path, body) in &writes {
+        for (who, token) in [("outsider", &p.carol), ("viewer", &p.bob)] {
+            let (status, response) = api
+                .call(method.clone(), path, Some(token), body.as_ref())
+                .await?;
+            assert_eq!(
+                status,
+                StatusCode::FORBIDDEN,
+                "{who} {method} {path}: {response}"
+            );
+        }
+    }
+    let (status, hooks) = api
+        .call(
+            Method::GET,
+            &format!("{base}/hooks/{hook_id}"),
+            Some(&p.cos),
+            None,
+        )
+        .await?;
+    assert_eq!(
+        (status, hooks["name"].clone(), hooks["status"].clone()),
+        (StatusCode::OK, json!("Open"), json!("active"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn uuid128_accounts_work_and_retired_tokens_cannot_recreate_accounts() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let carbon = "a750a68a-1bc2-4b3f-888e-0349c9d7289a";
+    let silicon = "b750a68a-1bc2-4b3f-888e-0349c9d7289b";
+    api.accounts.add_carbon(carbon, "c:uuid-carbon");
+    api.accounts
+        .add_silicon(silicon, "si:uuid-silicon", Some((carbon, "c:uuid-carbon")));
+    let token = api.accounts.token(carbon, "carbon", "c:uuid-carbon");
+    let (status, body) = create_hook(&api, silicon, &token, "UUID hook").await?;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    api.accounts.add_carbon("OldUuid1", "c:retired-account");
+    sqlx::query("INSERT INTO hook_private.accounts_uuid128_map(old_uuid,new_uuid,kind,mapping_sha256) VALUES('OldUuid1','c750a68a-1bc2-4b3f-888e-0349c9d7289c','carbon','test')").execute(api.owner.pool()).await?;
+    let old = api
+        .accounts
+        .token("OldUuid1", "carbon", "c:retired-account");
+    let (status, body) = api
+        .call(Method::GET, "/api/v3/auth/status", Some(&old), None)
+        .await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM hook_private.accounts WHERE uuid='OldUuid1'")
+            .fetch_one(api.owner.pool())
+            .await?;
+    assert_eq!(count, 0);
+    Ok(())
+}

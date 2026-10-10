@@ -1,6 +1,7 @@
-//! Adapters for PostgreSQL and Silicon platform services.
+//! Adapters for PostgreSQL, Silicon Accounts and Ting.
 
+pub mod accounts;
 pub mod crypto;
-pub mod iam;
 pub mod postgres;
 pub mod ting;
+pub mod webhook_settings;

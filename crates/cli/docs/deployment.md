@@ -1,25 +1,86 @@
 # Deploy the updated services and docs
 
-## Upgrade order
+## Service configuration
 
-1. Back up the production and shared-test PostgreSQL databases and matching encryption keys.
-2. Run the new `hook-migrate` against both databases. Migrations 10–16 add the durable Ting queue, encrypted publisher credentials, v2 contract, original event generation, Carbon observer bindings and their encrypted current access authority, plus the required-delivery diagnostic.
-3. Reapply `deploy/postgres/grant-runtime.sql` for each database's API and worker roles. The contract function requires explicit execute permission.
-4. Configure [the Honeycomb service integration](testing/honeycomb.md) and [internal Ting service setup](ting-delivery.md), including each org's dedicated publisher and notification type, then deploy the matching Hook API and worker. Validate `/healthz`, `/readyz`, `/api/version` and `/api/contracts`.
-5. Drain and reconcile each legacy destination's unacknowledged events before stopping its receiver, as described below. Then stop legacy Hook daemons with the old executable's `hook daemon stop` and deploy the matching browser gateway/frontend and v2 CLI/client. The enclosing app owns Ting receiving and shared transport; no replacement Hook daemon is started.
-6. Verify an IAM test app_secret, test identity login, provider ingress, local recipient delivery and acknowledgment before production rollout.
+`hook-api` reads these variables (see `.env.example` for every setting):
 
-After migration `0015`, existing Carbon receiving interests remain queued until the enclosing runtime repeats its subscription POST with a current Hook access token. The runtime must renew each active interest after token refresh and receiving reconnects. Hook retains the encrypted access token only and checks that Carbon's current IAM access before every observer publication. It never takes ownership of the Carbon refresh family. Monitor `observer_authority_refresh_required` for missing or expired authority and `observer_authorization_unavailable` for temporary IAM failures; primary Silicon sends continue independently.
+| variable | purpose |
+| --- | --- |
+| `ACCOUNTS_URL` | Silicon Accounts public URL, also the token issuer. Default `https://accounts.teamofsilicons.com`. |
+| `ACCOUNTS_API_URL` | Optional private address of the same Silicon Accounts service. |
+| `HOOK_APP_ID` | Hook's app id at Silicon Accounts (the audience of its access tokens). Default `hook`. |
+| `HOOK_APP_SECRET` | Hook's app secret (`sa_app_...`). Required. Server only. |
+| `HOOK_ACCOUNTS_WEBHOOK_SECRET` | Signing secret of Hook's Silicon Accounts webhook (`POST /webhook`). Required in production. `HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET` holds the old one during a rotation. |
+| `HOOK_ACCOUNTS_TIMEOUT_SECONDS` | Deadline for one call to Silicon Accounts, 1 to 30 seconds. Default 5. |
+| `HOOK_TING_URL` | Ting origin. Unset turns delivery off: Hook still receives, verifies and stores every event, queues nothing, and says so in its logs, `/readyz` and the delivery routes. |
+| `HOOK_TING_APP_ID` | Ting's app id at Silicon Accounts, the receiving app of Hook's proofs. Default `ting`. |
 
-Migration `0016` permits `required_delivery_not_enabled` in outbox diagnostics; it does not rewrite existing send bodies or keys. New primary sends require the recipient's separate automation opt-in. Deploy Ting 0.1.4-compatible services and finish the official scope approvals before relying on scoped testing bootstrap or required delivery.
+Plain `http` is accepted only for loopback hosts and never in production. Hook refuses to
+start when a value is malformed, and names the variable and the reason. Variables from
+earlier versions are no longer read; `hook-api` logs each one it finds together with what
+replaced it.
 
-### Legacy backlog gate
+Hook's sign-in setup at Silicon Accounts needs the webhook pointed at
+`https://<hook backend>/webhook` with the six account events (`account.id_changed`,
+`account.updated`, `account.deleted`, `membership.signed_out`, `membership.access_removed`,
+`silicon.custodian_changed`). Set it with every update, `PUT /v1/apps/hook/webhook` and
+`{"url": "https://<hook backend>/webhook", "events": null}`: setting only the URL keeps
+update picks made earlier, and the recommended picks leave out `custodian_change`. At
+startup `hook-api` reads the webhook settings once and logs either that every event it acts
+on reaches it, or exactly what is missing (an update, the signing secret, a paused
+subscription, another URL).
 
-Migration `0010` queues only new events; it does not copy retained v1 events into Ting. Before switching a destination, keep its old receiver running and inspect its v1 delivery cursor and pending events for every identity, organization and environment it serves. Confirm durable application acceptance before advancing ACKs. Coordinate ingress and the final drain so events cannot arrive unnoticed between verification and shutdown; retain event-ID deduplication across the transition because both transports may carry newer events.
+## Upgrade to Hook 1.0
 
-Do not retire an old receiver while it still has unaccepted events. Reconcile those originals while Hook retains them, or keep that destination on v1 until resolved. Record the backlog/cursor check and accepted event IDs as cutover evidence. History retention is 14 days, and v1's idle sunset still applies; neither migrates or extends an unresolved backlog. The new CLI cannot inspect or stop the removed relay, so preserve the old executable until this gate is complete.
+1. Back up the PostgreSQL database and the matching encryption keys.
+2. Run the new `hook-migrate`. Migration `0019` adds the Silicon Accounts identity columns
+   next to the existing ones, Hook's account cache, grants, allow-lists, observer
+   subscriptions and the identity inventory. It changes no existing value.
+3. Reapply `deploy/postgres/grant-runtime.sql` for the API and worker roles.
+4. Produce the identity mapping (one line per stored `si:`/`c:` id with its Silicon
+   Accounts uuid; `hook_private.identity_links` lists every id Hook holds), review it,
+   and run `hook-migrate link-identities --file mapping.csv --dry-run`, then without
+   `--dry-run`. The report lists ids that are still unmatched and hooks without an owner.
+   Running it again with a corrected file is safe.
+5. Set the variables above and deploy the API and worker. Validate `/healthz`, `/readyz`,
+   `/api/version` and `/api/contracts`, then provider ingress on an existing hook URL.
 
-Read [the existing AWS runbook](../deploy/aws/README.md) for Hook's standalone API, worker, PostgreSQL and gateway infrastructure. A source implementation or docs publication does not itself upgrade those running services. Preserve the previous application image for rollback; schema changes are not reversed by rolling back an image.
+Provider URLs keep working throughout. Until a stored id is linked, its hooks keep
+receiving but cannot be managed. API v1 and v2 answer `410 api_version_sunset`; deploy
+the matching CLI, client and web before switching consumers.
+
+## Where Hook runs
+
+- **API, worker and PostgreSQL**: one ARM64 EC2 host behind Caddy at
+  `https://api.hook.teamofsilicons.com` (also the provider ingress host). Releases
+  are native systemd bundles installed with `deploy/native/install.py`, which takes
+  Hook's Silicon Accounts secrets on the first 1.0 install, backs up before it migrates
+  and rolls back a failed switch ([native releases](../deploy/native/README.md),
+  [the host](../deploy/aws/README.md)).
+- **Web console**: a Next.js app on Vercel at `https://hook.teamofsilicons.com`. Its
+  server signs Carbons in with Silicon Accounts, keeps the session in a sealed cookie
+  and calls the API with the Carbon's access token; the browser never holds a token.
+  Its sign-in setup at Silicon Accounts lists `https://hook.teamofsilicons.com/auth/callback`
+  as a redirect URI.
+- **Docs**: a static Vercel site at `https://docs.hook.teamofsilicons.com` (below).
+
+Building or publishing this repository does not change those running services.
+Rolling back a release does not reverse a migration: keep the backup the installer
+takes before migrating.
+
+## Next.js console deployment
+
+The frontend root is `web/`, Node24 and pnpm10.33.0. Vercel reads `web/vercel.json`;
+the frozen install, typecheck and Next build need no secrets. Runtime values are
+`APP_ID=hook`, `APP_SECRET`, `ACCOUNTS_URL`, optional `ACCOUNTS_API_URL`,
+`APP_API_URL`, `SESSION_SECRET` and `PUBLIC_URL`; see `web/.env.example` and
+[the console guide](../web/README.md). Secrets belong only on the server.
+
+Self-hosting builds `web/Dockerfile` into a non-root Next standalone server on4200.
+Keep HTTPS termination and register the exact production `/auth/callback` at
+Accounts. The previous IAM cookies require a fresh sign-in. Switch the console
+with the matching APIv3 release and retain the preceding Vercel deployment for
+rollback. A frontend rollback cannot reverse database identity migrations.
 
 ## Documentation hosting
 
@@ -33,7 +94,7 @@ npm run check
 vercel deploy --prod
 ```
 
-Configure the Vercel project root as `docs-site`. The `vercel.json` file declares the build and output directory. DNS needs only the `docs.hook` host record; preserve every unrelated domain record. Validate HTTPS, canonical URLs, installer, search and internal links after publication.
+Configure the Vercel project root as `docs-site`. The `vercel.json` file declares the build and output directory. DNS needs only the `docs.hook` host record; preserve every unrelated domain record. Validate HTTPS, canonical URLs, the `/install.sh` entry point, search and internal links after publication. The site publishes the guides in `docs/` except `docs/history/` and `docs/migration/`.
 
 ## Bug-report email
 
@@ -41,8 +102,8 @@ The `bug-report.yml` GitHub workflow sends newly opened issues, including CLI re
 
 ## Space Station export
 
-Apply migration 0008 and the updated worker grants, then supply the dedicated `HOOK_TELEMETRY_TABLE_KEY` securely to the worker. Mount `HOOK_TELEMETRY_SPOOL_DIR` as a persistent private directory. Never put this key in browser environment variables, CLI distributions or docs. Restart the worker after changing its configuration. `HOOK_TELEMETRY=off` stops collection and export. See [telemetry](telemetry.md) for retention, sandbox routing and delivery semantics.
+Apply migration 0008 and the updated worker grants, then supply the dedicated `HOOK_TELEMETRY_TABLE_KEY` securely to the worker. Mount `HOOK_TELEMETRY_SPOOL_DIR` as a persistent private directory. Never put this key in browser environment variables, CLI distributions or docs. Restart the worker after changing its configuration. `HOOK_TELEMETRY=off` stops collection and export. See [telemetry](telemetry.md) for retention and delivery semantics.
 
 ## CLI release artifacts
 
-Use [the six-target release workflow](releases.md) to produce one validated Honeycomb archive. Documentation deployment does not produce or publish CLI binaries.
+The [release workflow](releases.md) builds the CLI for six targets and packs one Silicon Apps archive per target; an author of the `hook` app uploads the Linux ones to Silicon Apps. Documentation deployment does not produce or publish CLI binaries.

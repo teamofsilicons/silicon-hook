@@ -1,63 +1,108 @@
-//! Resource-specific authorization policy over IAM-supplied facts.
+//! Who may do what with one Silicon's hooks.
+//!
+//! Hooks belong to the Silicon they were made for. The Silicon and its
+//! custodian have full control; anyone else needs an explicit grant from one
+//! of them (`view` or `manage`). A custodian acts as itself, never as the
+//! Silicon: what it does is attributed to the custodian.
 
-use super::{ActorKind, AuthorizationContext, OrganizationRole, SiliconId};
+use serde::{Deserialize, Serialize};
+
+use super::{Actor, ActorKind, SiliconRef};
+
+/// Level of an explicit grant on a Silicon's hooks.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, Ord, PartialEq, PartialOrd, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GrantLevel {
+    /// Read hooks, events, blocked requests and delivery status.
+    View,
+    /// Everything `view` allows, plus creating and changing hooks.
+    Manage,
+}
+
+impl GrantLevel {
+    /// `view` or `manage`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::View => "view",
+            Self::Manage => "manage",
+        }
+    }
+
+    /// Parses `view` or `manage`.
+    #[must_use]
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "view" => Some(Self::View),
+            "manage" => Some(Self::Manage),
+            _ => None,
+        }
+    }
+}
+
+/// Why the actor may act on the Silicon's hooks.
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum Access {
+    /// The actor is the Silicon.
+    Own,
+    /// The actor is the Silicon's custodian.
+    Custodian,
+    /// The Silicon or its custodian granted the actor access.
+    Grant(GrantLevel),
+}
+
+impl Access {
+    /// `self`, `custodian`, `manage` or `view`.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Own => "self",
+            Self::Custodian => "custodian",
+            Self::Grant(level) => level.as_str(),
+        }
+    }
+}
 
 /// Hook action being authorized.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum Action {
-    /// List hooks for a Silicon.
+    /// List hooks.
     ListHooks,
     /// Read one hook.
     ReadHook,
+    /// Read verified or blocked request history and publication status.
+    ReadEvents,
     /// Create a hook.
     CreateHook,
-    /// Read event history.
-    ReadEvents,
+    /// Change hook metadata, signing policy or secret.
+    UpdateHook,
+    /// Disable or enable ingress.
+    SetHookEnabled,
     /// Soft-delete a hook.
     DeleteHook,
-    /// Restore a hook.
+    /// Restore a soft-deleted hook.
     RestoreHook,
-    /// Disable or enable ingress for one or more hooks.
-    SetHookEnabled,
-    /// Replace a hook signing secret.
+    /// Replace a signing secret.
     RotateSecret,
-    /// Replace a hook's public endpoint key.
+    /// Replace an endpoint key.
     RotateEndpoint,
-    /// Change hook metadata or signing policy.
-    UpdateHook,
-    /// Register a Hook endpoint as the Silicon's IAM webhook.
-    ConnectIamHook,
-    /// Acknowledge or pull ordered deliveries.
-    ConsumeDeliveries,
-}
-
-impl Action {
-    /// Destructive actions change a Silicon's hooks or credentials and are
-    /// reserved for the Silicon itself, organization owners, and organization
-    /// administrators, as UNDERSTANDING.md prescribes for deletion.
-    const fn is_destructive(self) -> bool {
-        matches!(
-            self,
-            Self::DeleteHook
-                | Self::RestoreHook
-                | Self::SetHookEnabled
-                | Self::RotateSecret
-                | Self::RotateEndpoint
-                | Self::UpdateHook
-                | Self::ConnectIamHook
-        )
-    }
+    /// Prepare the hook that receives the Silicon's own Silicon Accounts events.
+    ConnectAccountsHook,
+    /// Grant or revoke access, and read who has access.
+    ManageAccess,
+    /// Change who may share with the Silicon.
+    ManageAllowList,
+    /// Receive copies of the Silicon's future events (Carbons only).
+    Observe,
 }
 
 /// Outcome of an authorization policy evaluation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum AuthorizationDecision {
-    /// The requested action is allowed.
+    /// The action is allowed.
     Allowed,
-    /// The actor cannot act on the target Silicon.
-    TargetNotVisible,
-    /// The action requires the Silicon itself or an organization owner or admin.
-    InsufficientPrivilege,
+    /// The actor's access does not cover the action; the reason explains what would.
+    Forbidden(&'static str),
 }
 
 impl AuthorizationDecision {
@@ -68,148 +113,190 @@ impl AuthorizationDecision {
     }
 }
 
-/// Evaluates actor- and resource-specific hook authorization.
-///
-/// A Silicon acts only on itself. A Carbon sees the Silicons IAM confirmed
-/// visible for the request. Organization managers may mutate those Silicons,
-/// but a role alone never proves that a target Silicon exists.
-#[must_use]
-pub fn authorize(
-    context: &AuthorizationContext,
-    action: Action,
-    target_silicon: &SiliconId,
-) -> AuthorizationDecision {
-    let is_carbon = context.actor().kind() == ActorKind::Carbon;
-    let owns_target = context.actor().kind() == ActorKind::Silicon
-        && context.actor().id().as_str() == target_silicon.as_str();
-    let is_organization_manager = is_carbon
-        && matches!(
-            context.organization_role(),
-            OrganizationRole::Owner | OrganizationRole::Admin
-        );
-    let can_see_target =
-        owns_target || (is_carbon && context.has_silicon_visibility(target_silicon));
+/// An authenticated actor's established access to one Silicon's hooks.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct AuthorizationContext {
+    actor: Actor,
+    silicon: SiliconRef,
+    access: Access,
+}
 
-    if !can_see_target {
-        return AuthorizationDecision::TargetNotVisible;
+impl AuthorizationContext {
+    /// Constructs a context after the actor's access was established.
+    #[must_use]
+    pub const fn new(actor: Actor, silicon: SiliconRef, access: Access) -> Self {
+        Self {
+            actor,
+            silicon,
+            access,
+        }
     }
-    if !action.is_destructive() || owns_target || is_organization_manager {
-        AuthorizationDecision::Allowed
-    } else {
-        AuthorizationDecision::InsufficientPrivilege
+
+    /// The authenticated actor.
+    #[must_use]
+    pub const fn actor(&self) -> &Actor {
+        &self.actor
+    }
+
+    /// The Silicon whose hooks are being accessed.
+    #[must_use]
+    pub const fn silicon(&self) -> &SiliconRef {
+        &self.silicon
+    }
+
+    /// How the actor has access.
+    #[must_use]
+    pub const fn access(&self) -> Access {
+        self.access
+    }
+}
+
+/// Evaluates whether the actor's access covers an action.
+#[must_use]
+pub fn authorize(context: &AuthorizationContext, action: Action) -> AuthorizationDecision {
+    let access = context.access();
+    let full = matches!(access, Access::Own | Access::Custodian);
+    let manage = full || access == Access::Grant(GrantLevel::Manage);
+    match action {
+        Action::ListHooks | Action::ReadHook | Action::ReadEvents => AuthorizationDecision::Allowed,
+        Action::CreateHook
+        | Action::UpdateHook
+        | Action::SetHookEnabled
+        | Action::DeleteHook
+        | Action::RestoreHook
+        | Action::RotateSecret
+        | Action::RotateEndpoint => {
+            if manage {
+                AuthorizationDecision::Allowed
+            } else {
+                AuthorizationDecision::Forbidden(
+                    "changing hooks needs the Silicon itself, its custodian, or a manage grant; you have view access",
+                )
+            }
+        }
+        Action::ConnectAccountsHook | Action::ManageAccess | Action::ManageAllowList => {
+            if full {
+                AuthorizationDecision::Allowed
+            } else {
+                AuthorizationDecision::Forbidden(
+                    "only the Silicon itself or its custodian can do this",
+                )
+            }
+        }
+        Action::Observe => {
+            if context.actor().kind() != ActorKind::Carbon {
+                AuthorizationDecision::Forbidden(
+                    "only Carbons observe a Silicon's events; the Silicon itself receives them directly",
+                )
+            } else if access == Access::Own {
+                AuthorizationDecision::Forbidden("a Silicon receives its own events directly")
+            } else {
+                AuthorizationDecision::Allowed
+            }
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::{ActorRef, OrganizationId};
-
-    fn silicon(value: &str) -> Result<SiliconId, crate::domain::DomainError> {
-        SiliconId::new(value)
-    }
+    use crate::domain::{AccountUuid, PublicId};
 
     fn context(
         kind: ActorKind,
-        actor_id: &str,
-        role: OrganizationRole,
-        visible: &[SiliconId],
-    ) -> Result<AuthorizationContext, crate::domain::DomainError> {
+        access: Access,
+    ) -> Result<AuthorizationContext, Box<dyn std::error::Error>> {
+        let id = match kind {
+            ActorKind::Carbon => "c:ada",
+            ActorKind::Silicon => "si:scout",
+        };
         Ok(AuthorizationContext::new(
-            OrganizationId::new("org:test")?,
-            ActorRef::try_new(kind, actor_id)?,
-            role,
-            visible.iter().cloned(),
+            Actor::new(
+                AccountUuid::new("b97")?,
+                kind,
+                Some(PublicId::new(id)?),
+                Vec::new(),
+                None,
+            ),
+            SiliconRef::new(AccountUuid::new("8HV")?, Some(PublicId::new("si:cos")?)),
+            access,
         ))
     }
 
-    #[test]
-    fn silicon_can_manage_only_itself() -> Result<(), Box<dyn std::error::Error>> {
-        let own = silicon("si:own")?;
-        let other = silicon("si:other")?;
-        let principal = context(
-            ActorKind::Silicon,
-            own.as_str(),
-            OrganizationRole::Member,
-            std::slice::from_ref(&other),
-        )?;
-
-        assert_eq!(
-            authorize(&principal, Action::DeleteHook, &own),
-            AuthorizationDecision::Allowed
-        );
-        assert_eq!(
-            authorize(&principal, Action::ConnectIamHook, &own),
-            AuthorizationDecision::Allowed
-        );
-        assert_eq!(
-            authorize(&principal, Action::DeleteHook, &other),
-            AuthorizationDecision::TargetNotVisible
-        );
-        assert_eq!(
-            authorize(&principal, Action::ReadEvents, &other),
-            AuthorizationDecision::TargetNotVisible
-        );
-        Ok(())
-    }
+    const WRITES: [Action; 7] = [
+        Action::CreateHook,
+        Action::UpdateHook,
+        Action::SetHookEnabled,
+        Action::DeleteHook,
+        Action::RestoreHook,
+        Action::RotateSecret,
+        Action::RotateEndpoint,
+    ];
+    const OWNER_ONLY: [Action; 3] = [
+        Action::ConnectAccountsHook,
+        Action::ManageAccess,
+        Action::ManageAllowList,
+    ];
 
     #[test]
-    fn visible_carbon_can_read_and_create_but_not_mutate() -> Result<(), Box<dyn std::error::Error>>
-    {
-        let target = silicon("si:target")?;
-        let hidden = silicon("si:hidden")?;
-        let principal = context(
-            ActorKind::Carbon,
-            "carbon-member",
-            OrganizationRole::Member,
-            std::slice::from_ref(&target),
-        )?;
-
-        assert!(authorize(&principal, Action::ReadEvents, &target).is_allowed());
-        assert!(authorize(&principal, Action::CreateHook, &target).is_allowed());
-        assert!(authorize(&principal, Action::ConsumeDeliveries, &target).is_allowed());
-        for action in [
-            Action::DeleteHook,
-            Action::SetHookEnabled,
-            Action::RotateSecret,
-            Action::RotateEndpoint,
-            Action::UpdateHook,
-            Action::RestoreHook,
-            Action::ConnectIamHook,
+    fn the_silicon_and_its_custodian_have_full_control() -> Result<(), Box<dyn std::error::Error>> {
+        for (kind, access) in [
+            (ActorKind::Silicon, Access::Own),
+            (ActorKind::Carbon, Access::Custodian),
         ] {
-            assert_eq!(
-                authorize(&principal, action, &target),
-                AuthorizationDecision::InsufficientPrivilege
-            );
+            let context = context(kind, access)?;
+            for action in WRITES.iter().chain(OWNER_ONLY.iter()) {
+                assert!(authorize(&context, *action).is_allowed(), "{action:?}");
+            }
         }
-        assert_eq!(
-            authorize(&principal, Action::ListHooks, &hidden),
-            AuthorizationDecision::TargetNotVisible
-        );
         Ok(())
     }
 
     #[test]
-    fn owners_and_admins_need_an_authoritative_target_fact()
-    -> Result<(), Box<dyn std::error::Error>> {
-        let target = silicon("si:target")?;
-        for role in [OrganizationRole::Owner, OrganizationRole::Admin] {
-            let unconfirmed = context(ActorKind::Carbon, "carbon-manager", role, &[])?;
-            assert_eq!(
-                authorize(&unconfirmed, Action::CreateHook, &target),
-                AuthorizationDecision::TargetNotVisible
-            );
-            let manager = context(
-                ActorKind::Carbon,
-                "carbon-manager",
-                role,
-                std::slice::from_ref(&target),
-            )?;
-            assert!(authorize(&manager, Action::DeleteHook, &target).is_allowed());
-            assert!(authorize(&manager, Action::RotateSecret, &target).is_allowed());
-            assert!(authorize(&manager, Action::ReadEvents, &target).is_allowed());
-            assert!(authorize(&manager, Action::ConnectIamHook, &target).is_allowed());
+    fn grants_cover_exactly_their_level() -> Result<(), Box<dyn std::error::Error>> {
+        let viewer = context(ActorKind::Carbon, Access::Grant(GrantLevel::View))?;
+        let manager = context(ActorKind::Silicon, Access::Grant(GrantLevel::Manage))?;
+        for action in [Action::ListHooks, Action::ReadHook, Action::ReadEvents] {
+            assert!(authorize(&viewer, action).is_allowed());
+            assert!(authorize(&manager, action).is_allowed());
         }
+        for action in WRITES {
+            assert!(!authorize(&viewer, action).is_allowed(), "{action:?}");
+            assert!(authorize(&manager, action).is_allowed(), "{action:?}");
+        }
+        for action in OWNER_ONLY {
+            assert!(!authorize(&viewer, action).is_allowed());
+            assert!(!authorize(&manager, action).is_allowed());
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn only_carbons_other_than_the_silicon_observe() -> Result<(), Box<dyn std::error::Error>> {
+        assert!(
+            authorize(
+                &context(ActorKind::Carbon, Access::Custodian)?,
+                Action::Observe
+            )
+            .is_allowed()
+        );
+        assert!(
+            authorize(
+                &context(ActorKind::Carbon, Access::Grant(GrantLevel::View))?,
+                Action::Observe
+            )
+            .is_allowed()
+        );
+        assert!(
+            !authorize(&context(ActorKind::Silicon, Access::Own)?, Action::Observe).is_allowed()
+        );
+        assert!(
+            !authorize(
+                &context(ActorKind::Silicon, Access::Grant(GrantLevel::Manage))?,
+                Action::Observe
+            )
+            .is_allowed()
+        );
         Ok(())
     }
 }

@@ -1,5 +1,6 @@
 //! Hook lifecycle use cases: create, read, update, activate, delete, restore,
-//! rotate secret, rotate endpoint, and connecting the Silicon's IAM hook.
+//! rotate secret, rotate endpoint, and preparing the hook that receives the
+//! Silicon's own Silicon Accounts events.
 
 use std::collections::BTreeMap;
 
@@ -11,18 +12,18 @@ use serde::Serialize;
 use sha2::{Digest as _, Sha256};
 
 use super::{
-    ApplicationError, BindIamHookSecretCommand, ConnectIamHookCommand, CreateHookCommand,
-    DeleteHookCommand, HookApplication, HookMutationCommand, HookWithSecret,
-    SetHooksEnabledCommand, SigningInput, UpdateHookCommand,
+    ApplicationError, ConnectAccountsHookCommand, CreateHookCommand, DeleteHookCommand,
+    HookApplication, HookMutationCommand, HookWithSecret, SetHooksEnabledCommand, SigningInput,
+    UpdateHookCommand,
     service::{
-        audit_context, authorize_action, database_time, idempotency_scope, map_store_error,
-        secret_replay_until,
+        actor_ref, audit_context, authorize_action, database_time, idempotency_scope,
+        map_store_error, secret_replay_until,
     },
 };
 use crate::{
     domain::{
-        Action, ActorRef, AuthorizationContext, EndpointKey, Hook, HookDescription, HookId,
-        HookName, HookStatus, HookTimeZone, HookUpdate, NewHook, OrganizationId, SigningPolicy,
+        AccountUuid, Action, ActorRef, AuthorizationContext, EndpointKey, Hook, HookDescription,
+        HookId, HookName, HookStatus, HookTimeZone, HookUpdate, NewHook, SigningPolicy,
         SigningSecret, SiliconId,
         signature::{
             Expression, SecretEncoding, SignatureAlgorithm, SignatureConfig, SignatureEncoding,
@@ -37,18 +38,18 @@ use crate::{
 
 const ENDPOINT_GENERATION_ATTEMPTS: usize = 16;
 const MAX_HOOK_ACTIVATION_BATCH_SIZE: usize = 1_000;
-const IAM_HOOK_NAME: &str = "Silicon IAM";
-const IAM_HOOK_DESCRIPTION: &str = "Silicon IAM events for this Silicon";
-/// IAM signs `{timestamp}.{body}` with HMAC-SHA-256 over the UTF-8 bytes of the
-/// `swhs_` secret and presents `v1=<lowercase hex>` in
-/// `X-Silicon-IAM-Signature`; the timestamp travels in
-/// `X-Silicon-IAM-Timestamp`. The verifier strips the `v1=` label itself.
-const IAM_PAYLOAD_EXPRESSION: &str =
-    r#"concat(request.headers["x-silicon-iam-timestamp"], ".", request.raw_body)"#;
-const IAM_SIGNATURE_EXPRESSION: &str = r#"request.headers["x-silicon-iam-signature"]"#;
+const ACCOUNTS_HOOK_NAME: &str = "Silicon Accounts";
+const ACCOUNTS_HOOK_DESCRIPTION: &str = "Silicon Accounts updates about this Silicon";
+/// Silicon Accounts signs `{timestamp}.{raw body}` with HMAC-SHA-256 keyed by
+/// the whole `whsec_` secret and presents `v1=<lowercase hex>` in
+/// `X-Accounts-Signature`; the timestamp travels in `X-Accounts-Timestamp`.
+/// The verifier strips the `v1=` label itself.
+const ACCOUNTS_PAYLOAD_EXPRESSION: &str =
+    r#"concat(request.headers["x-accounts-timestamp"], ".", request.raw_body)"#;
+const ACCOUNTS_SIGNATURE_EXPRESSION: &str = r#"request.headers["x-accounts-signature"]"#;
 
 impl HookApplication {
-    /// Lists hooks inside an IAM-authorized organization and Silicon scope.
+    /// Lists the hooks of the authorized Silicon.
     ///
     /// # Errors
     ///
@@ -56,23 +57,17 @@ impl HookApplication {
     pub async fn list_hooks(
         &self,
         authorization: &AuthorizationContext,
-        silicon_id: &SiliconId,
         include_deleted: bool,
     ) -> Result<Vec<Hook>, ApplicationError> {
-        authorize_action(authorization, Action::ListHooks, silicon_id)?;
+        authorize_action(authorization, Action::ListHooks)?;
         let retained_at = database_time(self.clock.now())?;
         self.store
-            .list_hooks(
-                authorization.organization_id(),
-                silicon_id,
-                include_deleted,
-                retained_at,
-            )
+            .list_hooks(authorization.silicon().uuid(), include_deleted, retained_at)
             .await
             .map_err(map_store_error)
     }
 
-    /// Gets one hook inside an IAM-authorized tenant scope.
+    /// Gets one hook of the authorized Silicon.
     ///
     /// # Errors
     ///
@@ -80,13 +75,12 @@ impl HookApplication {
     pub async fn get_hook(
         &self,
         authorization: &AuthorizationContext,
-        silicon_id: &SiliconId,
         hook_id: HookId,
     ) -> Result<Hook, ApplicationError> {
-        authorize_action(authorization, Action::ReadHook, silicon_id)?;
+        authorize_action(authorization, Action::ReadHook)?;
         let hook = self
             .store
-            .get_hook(authorization.organization_id(), silicon_id, hook_id)
+            .get_hook(authorization.silicon().uuid(), hook_id)
             .await
             .map_err(map_store_error)?
             .ok_or(ApplicationError::NotFound)?;
@@ -107,11 +101,7 @@ impl HookApplication {
         &self,
         command: CreateHookCommand,
     ) -> Result<HookWithSecret, ApplicationError> {
-        authorize_action(
-            &command.context.authorization,
-            Action::CreateHook,
-            &command.silicon_id,
-        )?;
+        authorize_action(&command.context.authorization, Action::CreateHook)?;
         let signing = command.signing.resolve(&SignatureConfig::default(), true);
         validate_signing_input(&signing)?;
         let request_digest = create_hook_request_digest(
@@ -121,17 +111,16 @@ impl HookApplication {
             &signing,
         )?;
         self.create_hook_inner(CreateHookParts {
-            organization_id: command.context.authorization.organization_id().clone(),
-            silicon_id: command.silicon_id,
+            silicon_uuid: command.context.authorization.silicon().uuid().clone(),
             name: command.name,
             description: command.description,
             time_zone: command.time_zone,
             signing,
-            actor: command.context.authorization.actor().clone(),
+            actor: actor_ref(&command.context.authorization),
             idempotency_key: command.context.idempotency_key,
             request_digest,
             request_id: command.context.request_id,
-            is_iam_default: false,
+            is_accounts_default: false,
         })
         .await
     }
@@ -147,14 +136,11 @@ impl HookApplication {
     /// persistence failure.
     pub async fn update_hook(&self, command: UpdateHookCommand) -> Result<Hook, ApplicationError> {
         let authorization = &command.authorization;
-        authorize_action(authorization, Action::ReadHook, &command.silicon_id)?;
+        authorize_action(authorization, Action::ReadHook)?;
+        let silicon_uuid = authorization.silicon().uuid().clone();
         let existing = self
             .store
-            .get_hook(
-                authorization.organization_id(),
-                &command.silicon_id,
-                command.hook_id,
-            )
+            .get_hook(&silicon_uuid, command.hook_id)
             .await
             .map_err(map_store_error)?
             .ok_or(ApplicationError::NotFound)?;
@@ -169,10 +155,10 @@ impl HookApplication {
             validate_signing_input(signing)?;
         }
         if command.patch.enabled.is_some() {
-            authorize_action(authorization, Action::SetHookEnabled, &command.silicon_id)?;
+            authorize_action(authorization, Action::SetHookEnabled)?;
         }
         if command.patch.changes_metadata() {
-            authorize_action(authorization, Action::UpdateHook, &command.silicon_id)?;
+            authorize_action(authorization, Action::UpdateHook)?;
         }
 
         let signing = signing
@@ -183,8 +169,7 @@ impl HookApplication {
             let mut updated = self
                 .store
                 .set_hooks_enabled(&BatchHookActivation {
-                    organization_id: authorization.organization_id().clone(),
-                    silicon_id: command.silicon_id.clone(),
+                    silicon_uuid: silicon_uuid.clone(),
                     hook_ids: vec![command.hook_id],
                     enabled,
                     audit: audit_context(authorization, command.request_id.clone()),
@@ -203,8 +188,7 @@ impl HookApplication {
         }
         self.store
             .update_hook(UpdateHook {
-                organization_id: authorization.organization_id().clone(),
-                silicon_id: command.silicon_id,
+                silicon_uuid,
                 hook_id: command.hook_id,
                 update: HookUpdate {
                     name: command.patch.name,
@@ -225,33 +209,21 @@ impl HookApplication {
     ///
     /// Returns a semantic authorization, not-found, persistence, or invariant failure.
     pub async fn delete_hook(&self, command: DeleteHookCommand) -> Result<(), ApplicationError> {
-        authorize_action(
-            &command.authorization,
-            Action::ReadHook,
-            &command.silicon_id,
-        )?;
+        authorize_action(&command.authorization, Action::ReadHook)?;
+        let silicon_uuid = command.authorization.silicon().uuid().clone();
         let hook = self
             .store
-            .get_hook(
-                command.authorization.organization_id(),
-                &command.silicon_id,
-                command.hook_id,
-            )
+            .get_hook(&silicon_uuid, command.hook_id)
             .await
             .map_err(map_store_error)?
             .ok_or(ApplicationError::NotFound)?;
-        authorize_action(
-            &command.authorization,
-            Action::DeleteHook,
-            &command.silicon_id,
-        )?;
+        authorize_action(&command.authorization, Action::DeleteHook)?;
         if hook.status() == HookStatus::Deleted {
             return Ok(());
         }
 
         let mutation = HookMutation {
-            organization_id: command.authorization.organization_id().clone(),
-            silicon_id: command.silicon_id,
+            silicon_uuid,
             hook_id: command.hook_id,
             audit: audit_context(&command.authorization, command.request_id),
             occurred_at: database_time(self.clock.now())?,
@@ -275,34 +247,27 @@ impl HookApplication {
         let requested_order = command.hook_ids.clone();
         validate_activation_hook_ids(&mut command.hook_ids)?;
 
+        authorize_action(&command.authorization, Action::SetHookEnabled)?;
+        let silicon_uuid = command.authorization.silicon().uuid().clone();
         let hooks = self
             .store
-            .get_hooks_by_ids(
-                command.authorization.organization_id(),
-                &command.silicon_id,
-                &command.hook_ids,
-            )
+            .get_hooks_by_ids(&silicon_uuid, &command.hook_ids)
             .await
             .map_err(map_store_error)?;
         if hooks.len() != command.hook_ids.len() {
             return Err(ApplicationError::NotFound);
         }
-        for hook in &hooks {
-            if hook.status() == HookStatus::Deleted {
-                return Err(ApplicationError::StateConflict);
-            }
-            authorize_action(
-                &command.authorization,
-                Action::SetHookEnabled,
-                &command.silicon_id,
-            )?;
+        if hooks
+            .iter()
+            .any(|hook| hook.status() == HookStatus::Deleted)
+        {
+            return Err(ApplicationError::StateConflict);
         }
 
         let updated = self
             .store
             .set_hooks_enabled(&BatchHookActivation {
-                organization_id: command.authorization.organization_id().clone(),
-                silicon_id: command.silicon_id,
+                silicon_uuid,
                 hook_ids: command.hook_ids,
                 enabled: command.enabled,
                 audit: audit_context(&command.authorization, command.request_id),
@@ -337,12 +302,7 @@ impl HookApplication {
     ) -> Result<Hook, ApplicationError> {
         let authorization = &command.context.authorization;
         let hook = self
-            .load_for_mutation(
-                authorization,
-                &command.silicon_id,
-                command.hook_id,
-                Action::RestoreHook,
-            )
+            .load_for_mutation(authorization, command.hook_id, Action::RestoreHook)
             .await?;
         let now = database_time(self.clock.now())?;
         if let Some(deleted_at) = hook.deleted_at() {
@@ -356,8 +316,7 @@ impl HookApplication {
         }
 
         let persistence = RestoreHook {
-            organization_id: authorization.organization_id().clone(),
-            silicon_id: command.silicon_id,
+            silicon_uuid: authorization.silicon().uuid().clone(),
             hook_id: command.hook_id,
             idempotency: idempotency_scope(
                 "hook.restore",
@@ -395,12 +354,7 @@ impl HookApplication {
     ) -> Result<HookWithSecret, ApplicationError> {
         let authorization = &command.context.authorization;
         let hook = self
-            .load_for_mutation(
-                authorization,
-                &command.silicon_id,
-                command.hook_id,
-                Action::RotateSecret,
-            )
+            .load_for_mutation(authorization, command.hook_id, Action::RotateSecret)
             .await?;
         if hook.signing().config.algorithm.is_asymmetric() {
             return Err(ApplicationError::ValidationDetailed {
@@ -420,104 +374,68 @@ impl HookApplication {
         .await
     }
 
-    /// Finds the Silicon's IAM hook or creates it, restoring a soft-deleted
-    /// one, so the caller can register its endpoint with IAM.
+    /// Finds the Silicon's "Silicon Accounts" hook or creates it, restoring a
+    /// soft-deleted one, so the Silicon or its custodian can point the
+    /// Silicon's Accounts webhook at it.
     ///
-    /// The hook verifies IAM's own signing convention. Until
-    /// [`Self::bind_iam_hook_secret`] stores the secret IAM issued, a freshly
-    /// created hook carries a placeholder secret that verifies nothing.
+    /// The hook verifies Silicon Accounts' signing convention. A freshly
+    /// created hook carries a generated placeholder secret that verifies
+    /// nothing: Silicon Accounts creates the real `whsec_` secret when the
+    /// webhook is set, and the caller stores it on the hook afterwards
+    /// (bring your own secret).
     ///
     /// # Errors
     ///
     /// Returns an authorization, recovery, idempotency, or persistence failure.
-    pub async fn prepare_iam_hook(
+    pub async fn prepare_accounts_hook(
         &self,
-        command: ConnectIamHookCommand,
+        command: ConnectAccountsHookCommand,
     ) -> Result<Hook, ApplicationError> {
         let authorization = &command.context.authorization;
-        authorize_action(authorization, Action::ConnectIamHook, &command.silicon_id)?;
+        authorize_action(authorization, Action::ConnectAccountsHook)?;
+        let silicon_uuid = authorization.silicon().uuid().clone();
         let existing = self
             .store
-            .find_iam_hook(authorization.organization_id(), &command.silicon_id)
+            .find_accounts_hook(&silicon_uuid)
             .await
             .map_err(map_store_error)?;
         match existing {
             Some(hook) if hook.status() == HookStatus::Deleted => {
                 self.restore_hook(HookMutationCommand {
                     context: command.context,
-                    silicon_id: command.silicon_id,
                     hook_id: hook.id(),
                 })
                 .await
             }
             Some(hook) => Ok(hook),
             None => {
-                let request_digest = connect_iam_request_digest(&command.silicon_id)?;
+                let request_digest = connect_accounts_request_digest(&silicon_uuid)?;
                 let created = self
                     .create_hook_inner(CreateHookParts {
-                        organization_id: authorization.organization_id().clone(),
-                        silicon_id: command.silicon_id,
-                        name: HookName::new(IAM_HOOK_NAME).map_err(|_| {
+                        silicon_uuid,
+                        name: HookName::new(ACCOUNTS_HOOK_NAME).map_err(|_| {
                             ApplicationError::Validation {
-                                field: "iam_hook_name",
+                                field: "accounts_hook_name",
                             }
                         })?,
                         description: HookDescription::optional(Some(
-                            IAM_HOOK_DESCRIPTION.to_owned(),
+                            ACCOUNTS_HOOK_DESCRIPTION.to_owned(),
                         ))
                         .map_err(|_| ApplicationError::Validation {
-                            field: "iam_hook_description",
+                            field: "accounts_hook_description",
                         })?,
                         time_zone: HookTimeZone::default(),
-                        signing: iam_signing_input()?,
-                        actor: authorization.actor().clone(),
+                        signing: accounts_signing_input()?,
+                        actor: actor_ref(authorization),
                         idempotency_key: command.context.idempotency_key,
                         request_digest,
                         request_id: command.context.request_id,
-                        is_iam_default: true,
+                        is_accounts_default: true,
                     })
                     .await?;
                 Ok(created.hook)
             }
         }
-    }
-
-    /// Stores the `swhs_` secret IAM issued when the Hook endpoint was
-    /// registered as the Silicon's webhook.
-    ///
-    /// # Errors
-    ///
-    /// Returns an authorization, lifecycle, idempotency, or persistence failure.
-    pub async fn bind_iam_hook_secret(
-        &self,
-        command: BindIamHookSecretCommand,
-    ) -> Result<Hook, ApplicationError> {
-        let mutation = HookMutationCommand {
-            context: command.context,
-            silicon_id: command.silicon_id,
-            hook_id: command.hook_id,
-        };
-        let hook = self
-            .load_for_mutation(
-                &mutation.context.authorization,
-                &mutation.silicon_id,
-                mutation.hook_id,
-                Action::ConnectIamHook,
-            )
-            .await?;
-        if hook.status() == HookStatus::Deleted {
-            return Err(ApplicationError::StateConflict);
-        }
-        let request_digest = secret_digest(&command.signing_secret);
-        let stored = self
-            .store_rotated_secret(
-                mutation,
-                command.signing_secret,
-                "hook.iam.bind",
-                request_digest,
-            )
-            .await?;
-        Ok(stored.hook)
     }
 
     async fn store_rotated_secret(
@@ -535,8 +453,7 @@ impl HookApplication {
             .map_err(ApplicationError::internal)?;
         let replay_until = secret_replay_until(now)?;
         let persistence = RotateSecret {
-            organization_id: authorization.organization_id().clone(),
-            silicon_id: command.silicon_id,
+            silicon_uuid: authorization.silicon().uuid().clone(),
             hook_id: command.hook_id,
             encrypted_secret: encrypted.clone(),
             idempotency: idempotency_scope(
@@ -578,19 +495,13 @@ impl HookApplication {
         command: HookMutationCommand,
     ) -> Result<Hook, ApplicationError> {
         let authorization = &command.context.authorization;
-        self.load_for_mutation(
-            authorization,
-            &command.silicon_id,
-            command.hook_id,
-            Action::RotateEndpoint,
-        )
-        .await?;
+        self.load_for_mutation(authorization, command.hook_id, Action::RotateEndpoint)
+            .await?;
         let now = database_time(self.clock.now())?;
         for _ in 0..ENDPOINT_GENERATION_ATTEMPTS {
             let replacement = EndpointKey::generate().map_err(ApplicationError::internal)?;
             let persistence = RotateEndpoint {
-                organization_id: authorization.organization_id().clone(),
-                silicon_id: command.silicon_id.clone(),
+                silicon_uuid: authorization.silicon().uuid().clone(),
                 hook_id: command.hook_id,
                 replacement,
                 idempotency: idempotency_scope(
@@ -626,18 +537,17 @@ impl HookApplication {
     async fn load_for_mutation(
         &self,
         authorization: &AuthorizationContext,
-        silicon_id: &SiliconId,
         hook_id: HookId,
         action: Action,
     ) -> Result<Hook, ApplicationError> {
-        authorize_action(authorization, Action::ReadHook, silicon_id)?;
+        authorize_action(authorization, Action::ReadHook)?;
         let hook = self
             .store
-            .get_hook(authorization.organization_id(), silicon_id, hook_id)
+            .get_hook(authorization.silicon().uuid(), hook_id)
             .await
             .map_err(map_store_error)?
             .ok_or(ApplicationError::NotFound)?;
-        authorize_action(authorization, action, silicon_id)?;
+        authorize_action(authorization, action)?;
         Ok(hook)
     }
 
@@ -709,8 +619,8 @@ impl HookApplication {
                 .map_err(ApplicationError::internal)?;
             let hook = Hook::create(NewHook {
                 id: hook_id,
-                organization_id: parts.organization_id.clone(),
-                silicon_id: parts.silicon_id.clone(),
+                silicon_id: SiliconId::from_account_uuid(&parts.silicon_uuid),
+                silicon_uuid: parts.silicon_uuid.clone(),
                 name: parts.name.clone(),
                 description: parts.description.clone(),
                 endpoint_key,
@@ -724,21 +634,20 @@ impl HookApplication {
                 created_at: now,
             });
             let idempotency = IdempotencyScope {
-                operation: if parts.is_iam_default {
-                    "hook.iam.connect"
+                operation: if parts.is_accounts_default {
+                    "hook.accounts.connect"
                 } else {
                     "hook.create"
                 }
                 .to_owned(),
                 actor: parts.actor.clone(),
-                organization_id: parts.organization_id.clone(),
-                target_id: parts.silicon_id.as_str().to_owned(),
+                target_id: parts.silicon_uuid.as_str().to_owned(),
                 key: parts.idempotency_key.clone(),
                 request_digest: parts.request_digest,
             };
             let persistence = CreateHook {
                 hook,
-                is_iam_default: parts.is_iam_default,
+                is_accounts_default: parts.is_accounts_default,
                 idempotency,
                 response: PersistedResponse {
                     status: 201,
@@ -792,14 +701,14 @@ impl HookApplication {
     }
 }
 
-fn iam_signing_input() -> Result<SigningInput, ApplicationError> {
+fn accounts_signing_input() -> Result<SigningInput, ApplicationError> {
     let build = || -> Result<SigningInput, crate::domain::signature::ParseError> {
         Ok(SigningInput {
             required: true,
             config: SignatureConfig {
                 algorithm: SignatureAlgorithm::HmacSha256,
-                payload: Expression::parse(IAM_PAYLOAD_EXPRESSION)?,
-                signature: Expression::parse(IAM_SIGNATURE_EXPRESSION)?,
+                payload: Expression::parse(ACCOUNTS_PAYLOAD_EXPRESSION)?,
+                signature: Expression::parse(ACCOUNTS_SIGNATURE_EXPRESSION)?,
                 signature_encoding: SignatureEncoding::Hex,
                 secret_encoding: crate::domain::signature::SecretEncoding::Utf8,
                 public_key: None,
@@ -856,8 +765,7 @@ fn generate_signing_secret(encoding: SecretEncoding) -> Result<SigningSecret, Ap
 
 #[derive(Clone, Debug)]
 struct CreateHookParts {
-    organization_id: OrganizationId,
-    silicon_id: SiliconId,
+    silicon_uuid: AccountUuid,
     name: HookName,
     description: Option<HookDescription>,
     time_zone: HookTimeZone,
@@ -866,7 +774,7 @@ struct CreateHookParts {
     idempotency_key: String,
     request_digest: [u8; 32],
     request_id: Option<String>,
-    is_iam_default: bool,
+    is_accounts_default: bool,
 }
 
 #[derive(Serialize)]
@@ -881,8 +789,8 @@ struct CanonicalCreateHookRequest<'a> {
 }
 
 #[derive(Serialize)]
-struct CanonicalConnectIamRequest<'a> {
-    silicon_id: &'a str,
+struct CanonicalConnectAccountsRequest<'a> {
+    silicon_uuid: &'a str,
 }
 
 fn create_hook_request_digest(
@@ -904,20 +812,14 @@ fn create_hook_request_digest(
     })
 }
 
-fn connect_iam_request_digest(silicon_id: &SiliconId) -> Result<[u8; 32], ApplicationError> {
-    let canonical = serde_json::to_vec(&CanonicalConnectIamRequest {
-        silicon_id: silicon_id.as_str(),
+fn connect_accounts_request_digest(
+    silicon_uuid: &AccountUuid,
+) -> Result<[u8; 32], ApplicationError> {
+    let canonical = serde_json::to_vec(&CanonicalConnectAccountsRequest {
+        silicon_uuid: silicon_uuid.as_str(),
     })
     .map_err(ApplicationError::internal)?;
     Ok(Sha256::digest(canonical).into())
-}
-
-/// Binds a replay to the exact secret it stored without persisting the secret.
-fn secret_digest(secret: &SigningSecret) -> [u8; 32] {
-    let mut digest = Sha256::new();
-    digest.update(b"silicon-hook/iam-bind/v1\0");
-    digest.update(secret.as_str().as_bytes());
-    digest.finalize().into()
 }
 
 fn canonical_request_digest<T: Serialize>(value: &T) -> Result<[u8; 32], ApplicationError> {
@@ -944,8 +846,8 @@ fn validate_activation_hook_ids(hook_ids: &mut [HookId]) -> Result<(), Applicati
 #[cfg(test)]
 mod tests {
     use super::{
-        SigningInput, create_hook_request_digest, iam_signing_input, validate_activation_hook_ids,
-        validate_signing_input,
+        SigningInput, accounts_signing_input, create_hook_request_digest,
+        validate_activation_hook_ids, validate_signing_input,
     };
     use crate::domain::{
         HookDescription, HookId, HookName, HookTimeZone, SigningSecret,
@@ -1009,7 +911,7 @@ mod tests {
         let mut hex_secret = signing(Some("not-hex"))?;
         hex_secret.config.secret_encoding = crate::domain::signature::SecretEncoding::Hex;
         assert!(validate_signing_input(&hex_secret).is_err());
-        assert!(iam_signing_input().is_ok());
+        assert!(accounts_signing_input().is_ok());
         Ok(())
     }
 

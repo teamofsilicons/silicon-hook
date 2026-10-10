@@ -1,7 +1,29 @@
-node_modules/
-dist/
+# Dependencies
+/node_modules
+
+# Next.js (`.next-<name>/` and its `.next-<name>.tsconfig.json`: a build of its own, see next.config.ts)
+/.next/
+/.next-*/
+/.next-*.tsconfig.json
+/.next-*.tsconfig.json.*.tmp
+/out/
+next-env.d.ts
+*.tsbuildinfo
+
+# Local environment (.env.example is the template)
 .env*
 !.env.example
-.sessions/
-.vercel/
-.vercel
+
+# Misc
+.DS_Store
+*.pem
+npm-debug.log*
+.pnpm-debug.log*
+
+# Browser runs
+/test-results/
+/playwright-report/
+/blob-report/
+
+# Reproducible visual verification artifacts
+/screens/

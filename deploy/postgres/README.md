@@ -24,13 +24,21 @@ requirements:
 | `hook.blocked_requests` | `SELECT, INSERT` | `SELECT, DELETE` for 14-day retention |
 | retired endpoint keys | `SELECT, INSERT` | none |
 | delivery sequences | `SELECT, INSERT, UPDATE` | none |
-| delivery cursors | `SELECT, INSERT, UPDATE` | none |
 | address blocks | `SELECT, INSERT, UPDATE` | `SELECT, DELETE` for stale-block cleanup |
 | management idempotency | `SELECT, INSERT, UPDATE, DELETE` | `SELECT, DELETE` |
 | audit log | `INSERT` | none |
+| accounts, account ids | `SELECT, INSERT, UPDATE` | none |
+| grants, allow-lists | `SELECT, INSERT, UPDATE, DELETE` | none |
+| Accounts webhook dedupe | `SELECT, INSERT` | `SELECT, DELETE` after 30 days |
+| observer subscriptions | `SELECT, INSERT, DELETE` | none |
+| Ting outbox | `SELECT, INSERT`, progress columns only | none |
+| telemetry events | `INSERT` | `SELECT, DELETE`, `UPDATE (exported_at)` |
 
-The API also issues `LISTEN`/`NOTIFY` on the `hook_delivery` channel, which
-needs no table privilege.
+Tables kept from Hook before 1.0 (`hook_control.*` of the test environments,
+publisher credentials, delegated Ting grants, the earlier observer bindings,
+delivery cursors) still hold their data but no runtime role can read them; the
+manifest revokes everything on them. `hook_private.identity_links` is written
+only by the migrator's `link-identities` command.
 
 Reapply this manifest after every migration. New tables receive no runtime
 access by default, forcing each migration review to update this matrix

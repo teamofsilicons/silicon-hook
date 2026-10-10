@@ -25,7 +25,7 @@ impl PostgresStore {
         &self,
         batch_size: u32,
     ) -> Result<MaintenanceResult, StoreError> {
-        let (events, blocked, hooks, idempotency, ip_blocks) = tokio::join!(
+        let (events, blocked, hooks, idempotency, ip_blocks, accounts_events) = tokio::join!(
             Box::pin(self.run_maintenance_task(MaintenanceTask::ExpiredEvents, batch_size)),
             Box::pin(
                 self.run_maintenance_task(MaintenanceTask::ExpiredBlockedRequests, batch_size)
@@ -33,6 +33,7 @@ impl PostgresStore {
             Box::pin(self.run_maintenance_task(MaintenanceTask::ExpiredHooks, batch_size)),
             Box::pin(self.run_maintenance_task(MaintenanceTask::ExpiredIdempotency, batch_size)),
             Box::pin(self.run_maintenance_task(MaintenanceTask::StaleIpBlocks, batch_size)),
+            Box::pin(self.run_maintenance_task(MaintenanceTask::ExpiredAccountsEvents, batch_size)),
         );
 
         Ok(MaintenanceResult {
@@ -41,6 +42,7 @@ impl PostgresStore {
             hooks_purged: hooks?.rows_affected,
             idempotency_rows_purged: idempotency?.rows_affected,
             ip_blocks_purged: ip_blocks?.rows_affected,
+            accounts_events_purged: accounts_events?.rows_affected,
         })
     }
 
@@ -68,6 +70,7 @@ impl PostgresStore {
             MaintenanceTask::ExpiredHooks => PURGE_EXPIRED_HOOKS_SQL,
             MaintenanceTask::ExpiredIdempotency => PURGE_EXPIRED_IDEMPOTENCY_SQL,
             MaintenanceTask::StaleIpBlocks => PURGE_STALE_IP_BLOCKS_SQL,
+            MaintenanceTask::ExpiredAccountsEvents => PURGE_ACCOUNTS_EVENTS_SQL,
         };
         purge(&self.pool, sql, batch_size).await
     }
@@ -155,4 +158,18 @@ const PURGE_STALE_IP_BLOCKS_SQL: &str = "
     )
     DELETE FROM hook_private.ip_blocks AS block USING victims
     WHERE block.hook_id = victims.hook_id AND block.remote_ip = victims.remote_ip
+";
+
+// Accounts retries a delivery for 72 hours and replays keep its event id; a
+// month is ample for deduplication, and every handler is idempotent anyway.
+const PURGE_ACCOUNTS_EVENTS_SQL: &str = "
+    WITH maintenance_clock AS MATERIALIZED (SELECT clock_timestamp() AS now),
+    victims AS (
+        SELECT event_id FROM hook_private.accounts_events, maintenance_clock
+        WHERE received_at < maintenance_clock.now - INTERVAL '30 days'
+        ORDER BY received_at
+        LIMIT $1
+    )
+    DELETE FROM hook_private.accounts_events AS record USING victims
+    WHERE record.event_id = victims.event_id AND $2::bigint IS NOT NULL
 ";

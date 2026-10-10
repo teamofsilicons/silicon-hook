@@ -114,7 +114,8 @@ impl fmt::Debug for CapturedRequest {
 
 impl CapturedRequest {
     /// Remove credential fields after signature verification and before retention.
-    /// Sandboxes must never store IAM root selectors or authentication tokens.
+    /// Never store authentication tokens, nor the selector and test-key headers
+    /// earlier versions used.
     #[must_use]
     pub fn without_credentials(mut self) -> Self {
         fn sensitive(name: &str) -> bool {

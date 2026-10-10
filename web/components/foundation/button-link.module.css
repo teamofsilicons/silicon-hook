@@ -1,0 +1,7 @@
+/* A link wearing Arc's button classes: no underline, its own colours in every state, a quick press. */
+.link { text-decoration: none; transition-property: color, background-color, border-color, opacity, box-shadow, transform; }
+.link:hover { text-decoration: none; }
+.link:active { transform: scale(.97); transition-duration: var(--duration-instant); }
+.content { display: inline-flex; align-items: center; justify-content: center; gap: var(--space-2); white-space: nowrap; }
+.content svg { flex: none; }
+@media (prefers-reduced-motion: reduce) { .link:active { transform: none; } }

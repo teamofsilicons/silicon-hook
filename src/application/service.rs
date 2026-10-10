@@ -7,10 +7,12 @@ use url::Url;
 
 use super::{ApplicationError, Clock};
 use crate::{
+    delivery::adapter::TingAdapter,
     domain::{
-        Action, AuthorizationContext, AuthorizationDecision, EndpointKey, SiliconId, authorize,
+        Action, ActorRef, AuthorizationContext, AuthorizationDecision, EndpointKey, authorize,
     },
     infrastructure::{
+        accounts::AccountsGateway,
         crypto::{CursorCodec, SecretCipher},
         postgres::{
             AuditContext, IdempotencyScope, PostgresStore, SECRET_REPLAY_WINDOW, StoreError,
@@ -26,8 +28,8 @@ pub struct HookApplication {
     pub(super) cursor_codec: Arc<CursorCodec>,
     pub(super) clock: Arc<dyn Clock>,
     pub(super) public_base_url: Url,
-    pub(super) environment: Option<(uuid::Uuid, i64)>,
-    pub(super) delivery_app_id: String,
+    pub(super) accounts: AccountsGateway,
+    pub(super) ting: Option<TingAdapter>,
 }
 
 impl std::fmt::Debug for HookApplication {
@@ -38,34 +40,16 @@ impl std::fmt::Debug for HookApplication {
             .field("secret_cipher", &"[REDACTED]")
             .field("cursor_codec", &"[REDACTED]")
             .field("public_base_url", &self.public_base_url.as_str())
+            .field("accounts", &self.accounts)
+            .field("delivery", &self.ting.is_some())
             .finish_non_exhaustive()
     }
 }
 
-/// Proof that an actor may read one Silicon's delivery stream.
-#[derive(Clone, Debug)]
-pub struct StreamAccess {
-    pub(super) organization_id: crate::domain::OrganizationId,
-    pub(super) silicon_id: SiliconId,
-    pub(super) consumer: crate::domain::ActorRef,
-}
-
-impl StreamAccess {
-    /// Returns the authorized Silicon stream.
-    #[must_use]
-    pub const fn silicon_id(&self) -> &SiliconId {
-        &self.silicon_id
-    }
-
-    /// Returns the consumer whose acknowledgment cursor applies.
-    #[must_use]
-    pub const fn consumer(&self) -> &crate::domain::ActorRef {
-        &self.consumer
-    }
-}
-
 impl HookApplication {
-    /// Composes the application from its durable, cryptographic, and time boundaries.
+    /// Composes the application from its durable, cryptographic, identity and
+    /// time boundaries. Delivery through Ting is off until
+    /// [`Self::with_delivery`] attaches an adapter.
     #[must_use]
     pub fn new(
         store: PostgresStore,
@@ -73,6 +57,7 @@ impl HookApplication {
         cursor_codec: Arc<CursorCodec>,
         clock: Arc<dyn Clock>,
         public_base_url: Url,
+        accounts: AccountsGateway,
     ) -> Self {
         Self {
             store,
@@ -80,112 +65,34 @@ impl HookApplication {
             cursor_codec,
             clock,
             public_base_url,
-            environment: None,
-            delivery_app_id: "hook".to_owned(),
+            accounts,
+            ting: None,
         }
     }
 
-    /// Selects the IAM application that owns outgoing Ting event types.
+    /// Turns on delivery through Ting.
     #[must_use]
-    pub fn with_delivery_application(mut self, app_id: &str) -> Self {
-        app_id.clone_into(&mut self.delivery_app_id);
+    pub fn with_delivery(mut self, ting: TingAdapter) -> Self {
+        self.ting = Some(ting);
         self
     }
 
-    /// Binds this application clone to an isolated test pool and generation.
+    /// The Ting adapter, when delivery is on.
     #[must_use]
-    pub fn for_test_environment(
-        &self,
-        store: PostgresStore,
-        id: uuid::Uuid,
-        generation: i64,
-    ) -> Self {
-        let mut scoped = self.clone();
-        scoped.store = store;
-        scoped.environment = Some((id, generation));
-        scoped
+    pub const fn delivery(&self) -> Option<&TingAdapter> {
+        self.ting.as_ref()
     }
 
-    /// Returns the immutable test selector for request activity accounting.
+    /// The Silicon Accounts gateway.
     #[must_use]
-    pub const fn environment_identity(&self) -> Option<(uuid::Uuid, i64)> {
-        self.environment
-    }
-
-    /// Whether the environment underlying a retained connection is still valid.
-    ///
-    /// # Errors
-    /// Returns database failures instead of allowing stale connections to continue.
-    pub async fn environment_is_available(&self) -> Result<bool, ApplicationError> {
-        sqlx::query_scalar("SELECT hook_private.environment_is_available()")
-            .fetch_one(self.store.pool())
-            .await
-            .map_err(ApplicationError::unavailable)
-    }
-
-    /// Holds a shared lifecycle lock until a test delivery reaches the transport.
-    ///
-    /// # Errors
-    /// Rejects disabled or superseded sessions and storage failures.
-    pub async fn delivery_guard(
-        &self,
-    ) -> Result<Option<sqlx::Transaction<'static, sqlx::Postgres>>, ApplicationError> {
-        let Some((id, expected)) = self.environment else {
-            return Ok(None);
-        };
-        let mut tx = self
-            .store
-            .pool()
-            .begin()
-            .await
-            .map_err(ApplicationError::unavailable)?;
-        let current: Option<(i64, bool)> = sqlx::query_as("SELECT generation,deleted_at IS NULL AND (honeycomb_state IS NULL OR honeycomb_state='ready') FROM hook_control.environments WHERE id=$1 FOR SHARE")
-            .bind(id).fetch_optional(&mut *tx).await.map_err(ApplicationError::unavailable)?;
-        if current != Some((expected, true)) {
-            return Err(ApplicationError::StateConflict);
-        }
-        Ok(Some(tx))
+    pub const fn accounts(&self) -> &AccountsGateway {
+        &self.accounts
     }
 
     /// Exposes the store for readiness without leaking it into handlers.
     #[must_use]
     pub const fn store(&self) -> &PostgresStore {
         &self.store
-    }
-
-    /// Attach the dedicated grant store to this exact data plane.
-    #[must_use]
-    pub fn ting_iam(
-        &self,
-        iam: crate::infrastructure::iam::IamClient,
-    ) -> crate::infrastructure::iam::IamClient {
-        iam.with_ting_grants(self.store.clone(), self.secret_cipher.clone())
-    }
-
-    /// Creates the scoped, exclusively server-owned publishing session manager.
-    #[must_use]
-    pub fn publisher_credentials(
-        &self,
-        iam: crate::infrastructure::iam::IamClient,
-    ) -> crate::delivery::credentials::PublisherCredentials {
-        crate::delivery::credentials::PublisherCredentials::new(
-            self.store.clone(),
-            self.secret_cipher.clone(),
-            iam,
-        )
-    }
-
-    /// Uses the selected store and encryption key to check Carbon publication authority.
-    #[must_use]
-    pub fn observer_authorities(
-        &self,
-        iam: crate::infrastructure::iam::IamClient,
-    ) -> crate::delivery::observer_authority::ObserverAuthorities {
-        crate::delivery::observer_authority::ObserverAuthorities::new(
-            self.store.clone(),
-            self.secret_cipher.clone(),
-            iam,
-        )
     }
 
     /// Builds the canonical public URL of an endpoint.
@@ -196,25 +103,22 @@ impl HookApplication {
     /// path segments.
     pub fn endpoint_url(
         &self,
-        silicon_id: &SiliconId,
+        silicon_segment: &str,
         endpoint_key: &EndpointKey,
     ) -> Result<Url, ApplicationError> {
-        let mut url = endpoint_url(&self.public_base_url, silicon_id, endpoint_key)?;
-        if self.environment.is_some() {
-            url.set_path(&format!("/test{}", url.path()));
-        }
-        Ok(url)
+        endpoint_url(&self.public_base_url, silicon_segment, endpoint_key)
     }
 }
 
-/// Builds `{origin}/silicon/{silicon_id}/{endpoint_key}`.
+/// Builds `{origin}/silicon/{silicon}/{endpoint_key}`, where `silicon` is the
+/// Silicon's current public id (or its uuid when no id is known).
 ///
 /// # Errors
 ///
 /// Returns an internal error if the origin cannot carry path segments.
 pub fn endpoint_url(
     public_base_url: &Url,
-    silicon_id: &SiliconId,
+    silicon_segment: &str,
     endpoint_key: &EndpointKey,
 ) -> Result<Url, ApplicationError> {
     let mut url = public_base_url.clone();
@@ -228,7 +132,7 @@ pub fn endpoint_url(
         })?
         .clear()
         .push("silicon")
-        .push(silicon_id.as_str())
+        .push(silicon_segment)
         .push(endpoint_key.as_str());
     Ok(url)
 }
@@ -236,13 +140,27 @@ pub fn endpoint_url(
 pub(super) fn authorize_action(
     authorization: &AuthorizationContext,
     action: Action,
-    silicon_id: &SiliconId,
 ) -> Result<(), ApplicationError> {
-    match authorize(authorization, action, silicon_id) {
+    match authorize(authorization, action) {
         AuthorizationDecision::Allowed => Ok(()),
-        AuthorizationDecision::TargetNotVisible => Err(ApplicationError::NotFound),
-        AuthorizationDecision::InsufficientPrivilege => Err(ApplicationError::Forbidden),
+        AuthorizationDecision::Forbidden(reason) => Err(ApplicationError::refused(
+            403,
+            "forbidden",
+            format!(
+                "{} cannot do this with {}'s hooks: {reason}.",
+                authorization.actor().display(),
+                authorization.silicon().display()
+            ),
+        )),
     }
+}
+
+/// Attribution for the authenticated actor (keyed by its uuid).
+pub(super) fn actor_ref(authorization: &AuthorizationContext) -> ActorRef {
+    ActorRef::account(
+        authorization.actor().kind(),
+        authorization.actor().uuid().clone(),
+    )
 }
 
 pub(super) fn audit_context(
@@ -250,7 +168,7 @@ pub(super) fn audit_context(
     request_id: Option<String>,
 ) -> AuditContext {
     AuditContext {
-        actor: authorization.actor().clone(),
+        actor: actor_ref(authorization),
         request_id,
     }
 }
@@ -264,8 +182,7 @@ pub(super) fn idempotency_scope(
 ) -> IdempotencyScope {
     IdempotencyScope {
         operation: operation.to_owned(),
-        actor: authorization.actor().clone(),
-        organization_id: authorization.organization_id().clone(),
+        actor: actor_ref(authorization),
         target_id,
         key,
         request_digest,
@@ -308,7 +225,7 @@ fn database_is_unavailable(error: &sqlx::Error) -> bool {
 pub(super) fn map_store_error(error: StoreError) -> ApplicationError {
     match error {
         StoreError::NotFound { .. } => ApplicationError::NotFound,
-        StoreError::StateConflict { .. } | StoreError::IamDefaultExists => {
+        StoreError::StateConflict { .. } | StoreError::DefaultHookExists => {
             ApplicationError::StateConflict
         }
         StoreError::IdempotencyConflict => ApplicationError::IdempotencyConflict,
@@ -334,7 +251,7 @@ mod tests {
     use time::macros::datetime;
 
     use super::{database_is_unavailable, database_time, endpoint_url};
-    use crate::domain::{EndpointKey, SiliconId};
+    use crate::domain::EndpointKey;
 
     #[test]
     fn authoritative_timestamps_match_postgres_precision() -> Result<(), Box<dyn std::error::Error>>
@@ -360,7 +277,7 @@ mod tests {
     fn endpoint_urls_follow_the_public_layout() -> Result<(), Box<dyn std::error::Error>> {
         let url = endpoint_url(
             &url::Url::parse("https://hook.teamofsilicons.com/")?,
-            &SiliconId::new("si:cos")?,
+            "si:cos",
             &EndpointKey::parse("402e2j2u")?,
         )?;
         assert_eq!(
