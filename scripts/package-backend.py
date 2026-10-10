@@ -19,7 +19,7 @@ def main():
     parser.add_argument('--artifacts', type=Path, required=True)
     parser.add_argument('--output', type=Path, default=ROOT / 'dist')
     args = parser.parse_args()
-    spec = importlib.util.spec_from_file_location('package_cli', ROOT / 'scripts/package-cli.py')
+    spec = importlib.util.spec_from_file_location('package_apps', ROOT / 'scripts/package_apps.py')
     verifier = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(verifier)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()

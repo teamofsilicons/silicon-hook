@@ -1,0 +1,15 @@
+# Silicon Apps manifest template for one Hook CLI package.
+#
+# scripts/package-apps.sh renders this file as apps.yaml at the root of each
+# archive: comment lines are dropped, @VERSION@ becomes the CLI version
+# (crates/cli/Cargo.toml), @TARGET@ one Silicon Apps target and @BINARY@
+# bin/hook (bin/hook.exe on Windows). Each archive lists only its own target,
+# so every target uploads and is validated on its own.
+# Reference: https://developers.teamofsilicons.com/docs/apps/reference/manifest
+schema_version: 1
+app_id: hook
+version: @VERSION@
+command: hook
+targets:
+  @TARGET@:
+    binary: @BINARY@
