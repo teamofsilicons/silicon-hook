@@ -54,7 +54,7 @@ const titles = new Map(
     ]),
   ),
 );
-const navigation = ["README.md", "accounts/README.md", "cli/README.md", "client/README.md", "client/relay.md", "ting-delivery.md", "api/README.md", "contracts.md", "configuration.md", "releases.md", "telemetry.md", "deployment.md"];
+const navigation = ["README.md", "accounts/README.md", "cli/README.md", "client/README.md", "client/relay.md", "ting-delivery.md", "api/README.md", "contracts.md", "configuration.md", "releases.md", "deployment.md"];
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 const search = [];

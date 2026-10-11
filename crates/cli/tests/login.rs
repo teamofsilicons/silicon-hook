@@ -368,14 +368,14 @@ async fn a_pre_1_0_sign_in_is_not_carried_over_and_says_so() {
     .await;
     assert_eq!(login.code(), 0, "{}", login.stderr());
     let state = home.state();
-    assert_eq!(
-        state["profiles"]["default"]["telemetry"], false,
-        "the opt-out survived"
-    );
     assert!(
         state["profiles"]["default"]
             .get("previous_version_session")
             .is_none()
+    );
+    assert!(
+        state["profiles"]["default"].get("telemetry").is_none(),
+        "no telemetry setting is kept"
     );
     assert_eq!(
         std::fs::read(home.state_dir().join("state.json")).expect("legacy"),
@@ -468,7 +468,7 @@ async fn a_session_is_only_used_with_the_services_it_signed_in_with() {
 }
 
 #[tokio::test]
-async fn telemetry_is_sent_only_when_signed_in_and_not_turned_off() {
+async fn no_telemetry_is_sent_and_the_old_setting_changes_nothing() {
     let server = start().await;
     let home = Home::new();
     assert_eq!(
@@ -477,39 +477,34 @@ async fn telemetry_is_sent_only_when_signed_in_and_not_turned_off() {
             .code(),
         0
     );
-    let on = support::hook_env(
-        Some(&home.0),
-        &[
-            ("ACCOUNTS_URL", &server.url),
-            ("SILICON_HOOK_URL", &server.url),
-            ("SILICON_HOOK_TELEMETRY", "on"),
-        ],
-        &["list"],
+    let before = home.state();
+    for value in ["off", "on"] {
+        let run = hook(&home, &server, &["config", "set", "telemetry", value], None).await;
+        assert_eq!(run.code(), 0, "{}", run.stderr());
+        assert_eq!(
+            run.stdout().trim(),
+            "Telemetry was removed from Hook; there is nothing to turn on or off."
+        );
+    }
+    let json = hook(
+        &home,
+        &server,
+        &["--json", "config", "set", "telemetry", "off"],
         None,
     )
     .await;
-    assert_eq!(on.code(), 0);
-    let sent = server
-        .stub
-        .hook_requests()
-        .into_iter()
-        .filter(|r| r.path == "/api/v3/telemetry")
-        .collect::<Vec<_>>();
-    assert_eq!(sent.len(), 1);
-    assert_eq!(sent[0].body["operation"], "list");
-    assert_eq!(sent[0].body["source"], "cli");
-    assert!(
-        !sent[0].body.to_string().contains("at-"),
-        "no token in the event"
-    );
+    assert_eq!(json.code(), 0);
+    assert_eq!(json.json()["telemetry"], "removed");
+    assert_eq!(home.state(), before, "the setting is not saved");
     assert_eq!(hook(&home, &server, &["list"], None).await.code(), 0);
-    let after = server
-        .stub
-        .hook_requests()
-        .into_iter()
-        .filter(|r| r.path == "/api/v3/telemetry")
-        .count();
-    assert_eq!(after, 1, "SILICON_HOOK_TELEMETRY=off sends nothing");
+    assert!(
+        server
+            .stub
+            .hook_requests()
+            .iter()
+            .all(|r| !r.path.contains("telemetry")),
+        "nothing is sent to a telemetry endpoint"
+    );
 }
 
 #[tokio::test]
@@ -536,7 +531,6 @@ async fn refreshing_waits_for_the_state_lock_and_then_happens_once() {
                 .env("SILICON_HOME", &home.0)
                 .env("ACCOUNTS_URL", &server.url)
                 .env("SILICON_HOOK_URL", &server.url)
-                .env("SILICON_HOOK_TELEMETRY", "off")
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .spawn()

@@ -24,12 +24,7 @@ async fn signed_in_carbon() -> (Server, Home) {
 }
 
 fn last(server: &Server) -> support::Seen {
-    server
-        .stub
-        .hook_requests()
-        .into_iter()
-        .rfind(|r| r.path != "/api/v3/telemetry")
-        .expect("a request")
+    server.stub.hook_requests().pop().expect("a request")
 }
 
 #[tokio::test]
@@ -266,12 +261,7 @@ async fn connect_accounts_prepares_the_hook_then_stores_the_whsec_secret() {
     .await;
     assert_eq!(run.code(), 0, "{}", run.stderr());
     assert_eq!(run.json()["secret_stored_now"], true);
-    let requests: Vec<_> = server
-        .stub
-        .hook_requests()
-        .into_iter()
-        .filter(|r| r.path != "/api/v3/telemetry")
-        .collect();
+    let requests = server.stub.hook_requests();
     let tail = &requests[requests.len() - 2..];
     assert_eq!(
         (tail[0].method.as_str(), tail[0].path.as_str()),
@@ -331,7 +321,6 @@ async fn docs_topics_are_bundled_and_unknown_topics_list_the_choices() {
         "delivery",
         "contracts",
         "configuration",
-        "telemetry",
         "deployment",
         "releases",
     ] {

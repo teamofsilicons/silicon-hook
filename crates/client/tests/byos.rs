@@ -41,9 +41,8 @@ async fn bring_your_own_secret_on_creation_and_replacement_sends_only_the_secret
         .route("/api/v3/silicons/si:cos/hooks/{id}", patch(record))
         .with_state(calls.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-    let client = Client::new(&format!("http://{}", listener.local_addr()?))?
-        .with_telemetry(false)
-        .with_token("test-token");
+    let client =
+        Client::new(&format!("http://{}", listener.local_addr()?))?.with_token("test-token");
     let server = tokio::spawn(async move { axum::serve(listener, app).await });
     let creation = CreateHook {
         name: "Provider".into(),

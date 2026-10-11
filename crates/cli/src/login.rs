@@ -120,7 +120,7 @@ pub async fn login(cli: &Cli, args: &Login) -> CliResult<()> {
     let profile = store::read(&folder)?.profile(&cli.profile);
     let urls = session::urls(cli, &profile);
     // Validate both URLs before anything is sent.
-    session::hook_client(&urls.hook, profile.telemetry)?;
+    session::hook_client(&urls.hook)?;
     let client = session::sign_in(&urls.accounts)?;
     let (tokens, method) = match slt {
         Some(slt) => (client.exchange_slt(&slt).await?, "slt"),

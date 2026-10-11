@@ -275,7 +275,7 @@ fn state_is_private_atomic_and_round_trips() {
     let (mut locked, notice) = Locked::open_in(folder.clone(), false).expect("open");
     assert!(notice.is_none());
     locked.profile("default").session = Some(session(AccountKind::Silicon));
-    locked.profile("default").telemetry = false;
+    locked.profile("default").silicon = Some("si:scout".into());
     locked.save().expect("save");
     drop(locked);
     #[cfg(unix)]
@@ -292,7 +292,7 @@ fn state_is_private_atomic_and_round_trips() {
     assert!(leftovers.is_empty(), "no temporary files remain");
     let loaded = store::read(&folder).expect("read");
     let profile = loaded.profile("default");
-    assert!(!profile.telemetry);
+    assert_eq!(profile.silicon.as_deref(), Some("si:scout"));
     assert_eq!(profile.session.expect("session").account.uuid, "Sx1");
     std::fs::remove_dir_all(base).ok();
 }
@@ -367,7 +367,6 @@ fn pre_1_0_state_contributes_settings_but_never_credentials() {
     let default = loaded.profile("default");
     assert!(default.previous_version_session && default.session.is_none());
     assert_eq!(default.silicon.as_deref(), Some("si:cos"));
-    assert!(!default.telemetry, "an opt-out survives the upgrade");
     assert_eq!(default.url, None, "the production URL is the default again");
     let lab = loaded.profile("lab");
     assert!(lab.previous_version_session);

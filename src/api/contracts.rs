@@ -1,4 +1,4 @@
-//! Persistent contract governance, independent of optional telemetry systems.
+//! Persistent contract governance.
 use crate::{api::state::ApiState, error::AppError};
 use axum::{Extension, Json};
 use http::{HeaderMap, HeaderValue};

@@ -44,7 +44,6 @@ fn show(cli: &Cli) -> CliResult<()> {
         "accounts_url": urls.accounts,
         "accounts_url_source": urls.accounts_source,
         "silicon": cli.silicon.as_ref().or(profile.silicon.as_ref()),
-        "telemetry": profile.telemetry,
         "signed_in": profile.session.is_some(),
         "signed_in_as": profile.session.as_ref().map(store::Session::who),
     });
@@ -57,23 +56,29 @@ fn show(cli: &Cli) -> CliResult<()> {
     output::print(&value)
 }
 
+/// What `hook config set telemetry <value>` prints. Kept so scripts written
+/// for earlier releases still succeed.
+const TELEMETRY_REMOVED: &str =
+    "Telemetry was removed from Hook; there is nothing to turn on or off.";
+
 fn set(cli: &Cli, key: &str, value: Option<&String>) -> CliResult<()> {
+    if key == "telemetry" {
+        if cli.json {
+            output::print(&json!({"telemetry": "removed", "message": TELEMETRY_REMOVED}))?;
+        } else {
+            println!("{TELEMETRY_REMOVED}");
+        }
+        return Ok(());
+    }
     let value = value.map(|v| v.trim().to_owned());
     match (key, value.as_deref()) {
         ("url", Some(url)) => {
-            session::hook_client(url, false)?;
+            session::hook_client(url)?;
         }
         ("accounts-url", Some(url)) => {
             session::sign_in(url)?;
         }
         ("silicon", Some(silicon)) => session::validate_silicon(silicon)?,
-        ("telemetry", Some("on" | "true" | "off" | "false")) => {}
-        ("telemetry", _) => {
-            return Err(CliError::invalid(
-                "telemetry takes on or off.",
-                "hook config set telemetry off",
-            ));
-        }
         _ => {}
     }
     let (mut locked, _) = Locked::open(false)?;
@@ -105,7 +110,6 @@ fn set(cli: &Cli, key: &str, value: Option<&String>) -> CliResult<()> {
         "url" => profile.url = value.map(|v| v.trim_end_matches('/').to_owned()),
         "accounts-url" => profile.accounts_url = value.map(|v| v.trim_end_matches('/').to_owned()),
         "silicon" => profile.silicon = value,
-        "telemetry" => profile.telemetry = matches!(value.as_deref(), Some("on" | "true")),
         _ => return Err(CliError::invalid(format!("unknown setting {key}"), "")),
     }
     locked.save()?;

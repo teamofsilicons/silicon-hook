@@ -3,9 +3,8 @@
 
 Reads Hook's Silicon Accounts settings from ~/.silicon-hook/accounts.env (owner-only
 KEY=value lines: HOOK_APP_SECRET and HOOK_ACCOUNTS_WEBHOOK_SECRET, optionally
-ACCOUNTS_URL, HOOK_APP_ID, HOOK_TING_URL) and the Space Station table key from
-~/.config/silicon-hook/telemetry.env, saves the silicon-hook:production image and
-prints only the private archive path. Used when (re)building the host with
+ACCOUNTS_URL, HOOK_APP_ID, HOOK_TING_URL), saves the silicon-hook:production
+image and prints only the private archive path. Used when (re)building the host with
 deploy/aws/install.py; releases use the native bundle.
 """
 import json
@@ -42,10 +41,9 @@ stage = Path(tempfile.mkdtemp(prefix='hook-production-'))
 shutil.copy(repo/'deploy/aws/install.py', stage/'install.py')
 shutil.copy(repo/'deploy/aws/backup.sh', stage/'backup.sh')
 shutil.copy(repo/'deploy/postgres/grant-runtime.sql', stage/'grant-runtime.sql')
-shutil.copy(Path.home()/'.config/silicon-hook/telemetry.env', stage/'telemetry.env')
 subprocess.run(['docker', 'save', '-o', str(stage/'images.tar'), 'silicon-hook:production'], check=True)
 archive = stage/'release.tar.gz'
 with tarfile.open(archive, 'w:gz') as out:
-    for name in ['accounts.json', 'install.py', 'backup.sh', 'grant-runtime.sql', 'telemetry.env', 'images.tar']:
+    for name in ['accounts.json', 'install.py', 'backup.sh', 'grant-runtime.sql', 'images.tar']:
         out.add(stage/name, arcname=name)
 print(archive)

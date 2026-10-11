@@ -146,8 +146,7 @@ impl Fixture {
         let router = Router::new().fallback(handle).with_state(state.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let client = Client::new(&format!("http://{}", listener.local_addr()?))?
-            .with_token("hook-recipient-token")
-            .with_telemetry(false);
+            .with_token("hook-recipient-token");
         let server = tokio::spawn(async move {
             axum::serve(listener, router).await.expect("fixture server");
         });

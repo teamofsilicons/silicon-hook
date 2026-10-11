@@ -93,7 +93,7 @@ instead of sending the token somewhere else. Use another `--profile` to keep a
 second sign-in in the same home.
 
 Sign-ins made by Hook before 1.0 are not carried over. The CLI keeps their
-settings (URL, default Silicon, telemetry choice), leaves the old `state.json`
+settings (URL, default Silicon), leaves the old `state.json`
 untouched, and reports `previous_version_session` until you sign in again.
 
 ## Who can do what

@@ -26,7 +26,7 @@ pub fn accounts(cli: &Cli) -> Value {
         .map(|loaded| loaded.profile(&cli.profile))
         .unwrap_or_default();
     let urls = session::urls(cli, &profile);
-    if let Err(error) = session::hook_client(&urls.hook, false) {
+    if let Err(error) = session::hook_client(&urls.hook) {
         warnings.push(error.message.clone());
     }
     if let Err(error) = session::sign_in(&urls.accounts) {

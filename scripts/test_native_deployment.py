@@ -18,11 +18,9 @@ spec.loader.exec_module(install)
 class NativeDeployment(unittest.TestCase):
     def test_runtime_translation_preserves_opaque_credentials(self):
         values = {'HOOK_DATABASE_URL': 'postgres://user:secret@127.0.0.1/hook_prod?sslrootcert=/run/hook-db/ca.crt',
-                  'HOOK_TELEMETRY_SPOOL_DIR': '/var/lib/hook-telemetry',
                   'HOOK_APP_SECRET': 'opaque:/run/hook-db/ca.crt'}
         converted = install.native_settings(values)
         self.assertIn('/opt/silicon-hook/db-tls/ca.crt', converted['HOOK_DATABASE_URL'])
-        self.assertEqual(converted['HOOK_TELEMETRY_SPOOL_DIR'], '/opt/silicon-hook/telemetry-spool')
         self.assertEqual(converted['HOOK_APP_SECRET'], values['HOOK_APP_SECRET'])
         environment = install.pg_environment(converted['HOOK_DATABASE_URL'].replace('secret', 's%40ecret'))
         self.assertEqual(environment['PGPASSWORD'], 's@ecret')
@@ -39,7 +37,8 @@ class NativeDeployment(unittest.TestCase):
                     'HOOK_TEST_DATABASE_URL': 'postgres://api@127.0.0.1/hook_test',
                     'HOOK_TING_BASE_URL': 'https://ting.example/'},
             'worker': {**common, 'HOOK_DATABASE_URL': 'postgres://worker@127.0.0.1/hook_prod',
-                       'HOOK_TELEMETRY_TABLE_KEY': 'table-key'},
+                       'HOOK_TELEMETRY': 'on', 'HOOK_TELEMETRY_TABLE_KEY': 'table-key',
+                       'HOOK_TELEMETRY_SPOOL_DIR': '/opt/silicon-hook/telemetry-spool'},
             'migration': {**common, 'HOOK_MIGRATOR_DATABASE_URL': 'postgres://postgres@127.0.0.1/hook_prod',
                           'HOOK_TEST_MIGRATOR_DATABASE_URL': 'postgres://postgres@127.0.0.1/hook_test'},
         }
@@ -49,11 +48,14 @@ class NativeDeployment(unittest.TestCase):
         self.assertEqual(planned['api'], {
             'HOOK_ENVIRONMENT': 'production', 'HOOK_DATABASE_URL': 'postgres://api@127.0.0.1/hook_prod',
             'ACCOUNTS_URL': 'https://accounts.teamofsilicons.com', **accounts})
-        self.assertEqual(planned['worker'], {'HOOK_ENVIRONMENT': 'production', 'HOOK_TELEMETRY_TABLE_KEY': 'table-key',
+        self.assertEqual(planned['worker'], {'HOOK_ENVIRONMENT': 'production',
                                              'HOOK_DATABASE_URL': 'postgres://worker@127.0.0.1/hook_prod'})
         self.assertEqual(set(planned['migration']), {'HOOK_ENVIRONMENT', 'HOOK_MIGRATOR_DATABASE_URL'})
         report = install.changes(values, planned)
         self.assertIn('HOOK_TING_BASE_URL', report['api']['removed'])
+        # Hook records no telemetry: its 1.0.0 settings leave the worker.
+        self.assertTrue({'HOOK_TELEMETRY', 'HOOK_TELEMETRY_TABLE_KEY', 'HOOK_TELEMETRY_SPOOL_DIR'}
+                        <= set(report['worker']['removed']))
         self.assertNotIn('HOOK_TING_URL', planned['api'])
         self.assertEqual(report['api']['added'], ['ACCOUNTS_URL', 'HOOK_ACCOUNTS_WEBHOOK_SECRET', 'HOOK_APP_SECRET'])
         self.assertNotIn('sa_app_0123456789abcdef', json.dumps(report))

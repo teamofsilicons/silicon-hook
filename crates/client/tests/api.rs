@@ -29,6 +29,7 @@ struct Seen {
     authorization: Option<String>,
     idempotency_key: Option<String>,
     pinned: Option<String>,
+    telemetry: Option<String>,
     body: Value,
 }
 
@@ -56,6 +57,7 @@ async fn handle(State(stub): State<Arc<Stub>>, request: Request<Body>) -> Respon
     let authorization = header("authorization");
     let idempotency_key = header("idempotency-key");
     let pinned = header("silicon-hook-api-version");
+    let telemetry = header("x-hook-telemetry");
     let bytes = to_bytes(request.into_body(), 1 << 20)
         .await
         .unwrap_or_default();
@@ -72,6 +74,7 @@ async fn handle(State(stub): State<Arc<Stub>>, request: Request<Body>) -> Respon
         authorization,
         idempotency_key,
         pinned,
+        telemetry,
         body,
     });
     let key = format!("{method} {path}");
@@ -108,8 +111,7 @@ impl Fixture {
         *stub.version.lock().unwrap() = "v3".into();
         let router = Router::new().fallback(handle).with_state(stub.clone());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
-        let base =
-            Client::new(&format!("http://{}", listener.local_addr()?))?.with_telemetry(false);
+        let base = Client::new(&format!("http://{}", listener.local_addr()?))?;
         let server = tokio::spawn(async move {
             axum::serve(listener, router).await.expect("stub server");
         });
@@ -226,6 +228,12 @@ async fn hooks_and_history_use_the_v3_paths_with_bearer_and_idempotency() -> Tes
     let page = client.blocked_requests("si:cos", None, 10, None).await?;
     assert_eq!(page.next_cursor.as_deref(), Some("c2"));
     client.delete_hook("si:cos", HOOK_ID.parse()?, &key).await?;
+    // Kept for source compatibility; Hook records no telemetry, so these send nothing.
+    #[allow(deprecated)]
+    client
+        .with_telemetry(true)
+        .emit_telemetry("cli", "command", "succeeded", "list", 1, 1)
+        .await;
     let seen = fixture.take();
     let summary: Vec<_> = seen
         .iter()
@@ -265,6 +273,7 @@ async fn hooks_and_history_use_the_v3_paths_with_bearer_and_idempotency() -> Tes
     for s in &seen {
         assert_eq!(s.authorization.as_deref(), Some("Bearer at-silicon"));
         assert_eq!(s.pinned.as_deref(), Some("v3"));
+        assert_eq!(s.telemetry.as_deref(), Some("off"));
     }
     assert_eq!(seen[1].idempotency_key.as_deref(), Some("retry-key-0001"));
     assert_eq!(seen[5].idempotency_key.as_deref(), Some("retry-key-0001"));

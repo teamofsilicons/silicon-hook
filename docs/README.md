@@ -63,5 +63,4 @@ Packages: [client](https://crates.io/crates/silicon-hook-client),
 through your authenticated GitHub CLI.
 
 Hook 1.0 serves API v3 and signs in with Silicon Accounts; deploy the 1.0 backend
-before upgrading clients ([deployment](deployment.md)). Telemetry goes to Hook's
-private outbox and its Space Station table; see [telemetry](telemetry.md).
+before upgrading clients ([deployment](deployment.md)). Hook records no telemetry.

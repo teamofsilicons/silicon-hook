@@ -64,7 +64,7 @@ answers carry a `Deprecation` timestamp and a link to this policy. v1 and v2 are
 sunset in Hook 1.0.
 
 State survives restarts in PostgreSQL. No request content, credential, address or
-account is collected; this is contract governance, not telemetry.
+account is collected. Hook records no telemetry.
 
 `GET /api/contracts` lists each major's `status`, deprecation and sunset Unix
 timestamps and `delivery_transport`. It does not expose request counters.

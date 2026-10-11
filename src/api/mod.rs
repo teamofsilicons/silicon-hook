@@ -12,7 +12,6 @@ mod routes;
 mod scope;
 mod state;
 mod subscriptions;
-mod telemetry_events;
 mod version;
 
 use std::{net::SocketAddr, sync::Arc};

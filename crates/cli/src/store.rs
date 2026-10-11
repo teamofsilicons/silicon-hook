@@ -8,9 +8,9 @@
 //! refresh tokens and treats a spent one presented again as theft.
 //!
 //! Hook before 1.0 kept IAM sign-ins in `state.json`. That file is never read
-//! for credentials and never changed; its non-secret settings (url, silicon,
-//! telemetry) are carried over once, and profiles that were signed in are told
-//! to sign in again.
+//! for credentials and never changed; its non-secret settings (url, silicon)
+//! are carried over once, and profiles that were signed in are told to sign in
+//! again.
 
 use std::{
     collections::BTreeMap,
@@ -52,7 +52,7 @@ fn schema() -> u32 {
     1
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, Serialize, Deserialize)]
 pub struct Profile {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
@@ -60,31 +60,12 @@ pub struct Profile {
     pub accounts_url: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub silicon: Option<String>,
-    #[serde(default = "yes")]
-    pub telemetry: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub session: Option<Session>,
     /// This profile was signed in with Hook before 1.0 (IAM); that sign-in
     /// was not carried over.
     #[serde(default, skip_serializing_if = "is_false")]
     pub previous_version_session: bool,
-}
-
-impl Default for Profile {
-    fn default() -> Self {
-        Self {
-            url: None,
-            accounts_url: None,
-            silicon: None,
-            telemetry: true,
-            session: None,
-            previous_version_session: false,
-        }
-    }
-}
-
-fn yes() -> bool {
-    true
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]

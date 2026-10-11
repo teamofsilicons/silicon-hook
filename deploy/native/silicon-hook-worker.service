@@ -25,7 +25,6 @@ RestrictSUIDSGID=true
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 CapabilityBoundingSet=
 LockPersonality=true
-ReadWritePaths=/opt/silicon-hook/telemetry-spool
 
 [Install]
 WantedBy=multi-user.target

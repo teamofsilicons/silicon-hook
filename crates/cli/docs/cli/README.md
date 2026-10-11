@@ -111,7 +111,7 @@ help of each. `hook docs <topic>` reads these guides offline.
 | `allow-list list` / `add <id>` / `remove <id>` | Who outside the custodian's Silicons may give this Silicon access |
 | `connect-accounts [--secret-file -]` | Receive the Silicon's own Silicon Accounts events in a hook |
 | `receiving register` / `status` / `subscribe` / `unsubscribe` | Delivery through Ting (when the server has it) |
-| `config show` / `profiles` / `home <dir>` / `set <key> <value>` / `unset <key>` | Local settings: `url`, `accounts-url`, `silicon`, `telemetry` |
+| `config show` / `profiles` / `home <dir>` / `set <key> <value>` / `unset <key>` | Local settings: `url`, `accounts-url`, `silicon` |
 | `system version` / `health` / `delivery` | The Hook API's version, readiness, and whether it delivers through Ting |
 | `commands`, `docs <topic>`, `about`, `report <message> [--pr <url>]` | Discovery, guides, links, bug reports |
 
@@ -161,23 +161,21 @@ events. When the server has no Ting, Hook still receives and stores every event,
 these commands answer `delivery_disabled`, and `publication` says
 `delivery_disabled`: read events with `hook events`.
 
-## State, settings and telemetry
+## State and settings
 
 State lives in `${SILICON_HOME:-~}/.silicon-hook/profiles.json` (0600, directory
 0700). `SILICON_HOOK_HOME` names the exact directory; `hook config home <dir>`
 moves the base to an existing directory. Writes are atomic and serialized by a
 lock file.
 
-Telemetry is on by default and carries no payloads or credentials: one event per
-command (name, outcome, duration), sent to Hook only while signed in. Turn it off
-with `hook config set telemetry off` or `SILICON_HOOK_TELEMETRY=off`. See
-[telemetry](../telemetry.md).
+Hook records no telemetry; `hook config set telemetry off` from earlier releases
+is still accepted and changes nothing.
 
 ## Upgrading from Hook before 1.0
 
 - Sign in again: `hook login` (Carbons) or the Silicon command above. The old
-  `state.json` is left untouched and never read for credentials; its URL, default
-  Silicon and telemetry choice carry over.
+  `state.json` is left untouched and never read for credentials; its URL and
+  default Silicon carry over.
 - Hooks belong to Silicons: choose one with `--silicon`. Flags and commands of
   earlier versions that no longer apply (test environments, publisher setup,
   separate Ting approval) are gone; the old global flags fail with an

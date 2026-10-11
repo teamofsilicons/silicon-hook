@@ -386,8 +386,6 @@ def service_env(config, secrets, ting):
         "HOOK_ACCOUNTS_WEBHOOK_PREVIOUS_SECRET": "",
         "HOOK_TING_URL": f"http://127.0.0.1:{config.ting_port}/" if ting else "",
         "HOOK_TING_APP_ID": config.ting_receiver if ting else "",
-        "HOOK_TELEMETRY": "off",
-        "HOOK_TELEMETRY_TABLE_KEY": "",
     })
     return process_env
 
@@ -398,8 +396,6 @@ def worker_env(config):
         "HOOK_LOG_FILTER": "silicon_hook=info",
         "HOOK_DATABASE_URL": config.database_url(config.worker_role, config.database),
         "HOOK_SHUTDOWN_TIMEOUT_SECONDS": "5",
-        "HOOK_TELEMETRY": "off",
-        "HOOK_TELEMETRY_TABLE_KEY": "",
     })
     return process_env
 

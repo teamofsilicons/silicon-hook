@@ -32,13 +32,15 @@ requirements:
 | Accounts webhook dedupe | `SELECT, INSERT` | `SELECT, DELETE` after 30 days |
 | observer subscriptions | `SELECT, INSERT, DELETE` | none |
 | Ting outbox | `SELECT, INSERT`, progress columns only | none |
-| telemetry events | `INSERT` | `SELECT, DELETE`, `UPDATE (exported_at)` |
+| telemetry events (unused) | `INSERT` | `SELECT, DELETE`, `UPDATE (exported_at)` |
 
 Tables kept from Hook before 1.0 (`hook_control.*` of the test environments,
 publisher credentials, delegated Ting grants, the earlier observer bindings,
 delivery cursors) still hold their data but no runtime role can read them; the
 manifest revokes everything on them. `hook_private.identity_links` is written
-only by the migrator's `link-identities` command.
+only by the migrator's `link-identities` command. Hook records no telemetry:
+since 1.1.0 no process uses `hook_private.telemetry_events`, and its grants stay
+only so a 1.0.0 build still passes readiness after a rollback.
 
 Reapply this manifest after every migration. New tables receive no runtime
 access by default, forcing each migration review to update this matrix

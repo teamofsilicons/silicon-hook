@@ -47,9 +47,10 @@ The installer reads the existing private configuration, backs up the databases
 and configuration to the encrypted private bucket, creates the unprivileged
 `silicon-hook` account and installs an immutable release under
 `/opt/silicon-hook/releases/<revision>`; `/opt/silicon-hook/current` selects the
-active one. Root-owned environment files live under `/etc/silicon-hook`. Only the
-worker can write the telemetry spool. Both services have systemd filesystem,
-privilege and capability restrictions and restart on failure.
+active one. Root-owned environment files live under `/etc/silicon-hook`. Both
+services have systemd filesystem, privilege and capability restrictions and
+restart on failure. Hook records no telemetry; the installer drops the telemetry
+settings of 1.0.0 (`HOOK_TELEMETRY*`) from every process.
 
 With both writers stopped it takes a second, quiesced backup, applies the
 embedded migrations to `hook_prod` and reapplies the exact runtime grants, then

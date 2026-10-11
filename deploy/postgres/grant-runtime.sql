@@ -123,6 +123,9 @@ REVOKE ALL PRIVILEGES ON FUNCTION hook_private.reject_row_mutation() FROM PUBLIC
 GRANT EXECUTE ON FUNCTION hook_private.environment_id(), hook_private.environment_is_available()
     TO :"api_role", :"worker_role";
 
+-- Hook records no telemetry: since 1.1.0 no process reads or writes
+-- hook_private.telemetry_events (migration 0008). These grants stay only so a
+-- 1.0.0 build still passes its readiness check after a rollback.
 GRANT INSERT ON hook_private.telemetry_events TO :"api_role", :"worker_role";
 GRANT SELECT, DELETE ON hook_private.telemetry_events TO :"worker_role";
 GRANT UPDATE (exported_at) ON hook_private.telemetry_events TO :"worker_role";

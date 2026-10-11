@@ -12,7 +12,6 @@ import json
 import os
 from pathlib import Path
 import secrets
-import shlex
 import subprocess
 import time
 
@@ -102,21 +101,9 @@ common = {
 }
 # Only hook-api talks to Silicon Accounts; the worker and the migrator never get its secrets.
 api_accounts = {'ACCOUNTS_URL': 'https://accounts.teamofsilicons.com', 'HOOK_APP_ID': 'hook', **accounts}
-telemetry = {}
-for line in (root/'telemetry.env').read_text().splitlines():
-    if line.strip() and not line.lstrip().startswith('#'):
-        key, value = line.split('=', 1)
-        if key == 'HOOK_TELEMETRY_TABLE_KEY':
-            telemetry[key] = shlex.split(value)[0]
-if not telemetry.get('HOOK_TELEMETRY_TABLE_KEY'):
-    raise RuntimeError('Missing dedicated Hook telemetry table credential')
-spool = root/'telemetry-spool'
-spool.mkdir(exist_ok=True)
-os.chown(spool, 10001, 10001)
-spool.chmod(0o700)
 for role in ['api', 'worker']:
-    export = {**telemetry, 'HOOK_TELEMETRY_SPOOL_DIR': '/var/lib/hook-telemetry'} if role == 'worker' else api_accounts
-    envfile(role + '.env', {**common, **export, 'HOOK_DATABASE_URL': db(role, 'hook_prod')})
+    extra = api_accounts if role == 'api' else {}
+    envfile(role + '.env', {**common, **extra, 'HOOK_DATABASE_URL': db(role, 'hook_prod')})
 envfile('migration.env', {**common, 'HOOK_MIGRATOR_DATABASE_URL': db('postgres', 'hook_prod')})
 run('docker', 'run', '--rm', '--network', 'host', '--env-file', str(root/'migration.env'),
     '-v', f'{tls}:/run/hook-db:ro', '--entrypoint', '/usr/local/bin/hook-migrate', 'silicon-hook:production')
@@ -133,7 +120,6 @@ for role in ['api', 'worker']:
         '--read-only', '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges',
         '--log-opt', 'max-size=10m', '--log-opt', 'max-file=3',
         '--env-file', str(root/(role+'.env')), '-v', f'{tls}:/run/hook-db:ro',
-        *(['-v', f'{spool}:/var/lib/hook-telemetry'] if role == 'worker' else []),
         '--entrypoint', '/usr/local/bin/hook-'+role, 'silicon-hook:production')
 
 # The browser gateway of Hook before 1.0 is retired: the web console is a
