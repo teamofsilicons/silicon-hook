@@ -409,18 +409,7 @@ Since all IAM apps can both be used as is, and also built on top of... its imp t
 
 # Telemetry
 
-All IAM apps use Space Station [https://spacestation.teamofsilicons.com/docs] for telemetry. Telemetry is opted-in by default but can be opted out from settings if the user wants.
-
-Space Station is also a rust package which can be used from within the backend, or daemon, or cli to send telemetry.
-
-Record as many things as you think might be useful to diagnose or follow traces later.
-
-Since space station is just an event store, make sure to include all the source, step, progress, etc information inside each event. some of the system information is automatically added to the metadata so you need not add that.
-
-push context-rich, self-contained events.
-
-Space Station also support web, for web it has 2 possible pathways: analytics & events. Most of the Analytics is self captured and you can define a seperate event store from the web. Its possible that both web analytics and web events go to separate tables.
-
+Hook records no telemetry.
 
 # Configurability
 
