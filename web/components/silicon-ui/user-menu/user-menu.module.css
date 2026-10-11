@@ -1,7 +1,7 @@
 .root { position: relative; display: inline-flex; flex: none; vertical-align: middle; }
 
 /* The trigger anchors the menu, so it answers hover and press with color, never with scale. */
-.trigger { --presence-surface: var(--user-menu-surface, var(--surface)); position: relative; display: inline-flex; height: 40px; flex: none; align-items: center; gap: var(--space-related); margin: 0; padding: 4px; border: 0; border-radius: var(--radius-full); corner-shape: round; background: transparent; color: var(--foreground); font: inherit; font-family: var(--font-body); font-size: var(--text-sm); letter-spacing: var(--tracking-body); cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background-color var(--duration-fast) var(--ease-standard); }
+.trigger { --presence-surface: var(--user-menu-surface, var(--surface)); position: relative; display: inline-flex; height: 40px; flex: none; align-items: center; gap: var(--space-related); margin: 0; padding: 4px; border: 0; border-radius: 14px; corner-shape: squircle; background: transparent; color: var(--foreground); font: inherit; font-family: var(--font-body); font-size: var(--text-sm); letter-spacing: var(--tracking-body); cursor: pointer; -webkit-tap-highlight-color: transparent; transition: background-color var(--duration-fast) var(--ease-standard); }
 .trigger[data-name] { padding-right: 10px; }
 @media (hover: hover) and (pointer: fine) { .trigger:hover { --presence-surface: var(--surface-muted); background: var(--surface-muted); } }
 .trigger[data-state="open"] { --presence-surface: var(--surface-muted); background: var(--surface-muted); }
@@ -18,7 +18,7 @@
 .face { position: relative; display: inline-grid; width: var(--face-size); height: var(--face-size); flex: none; }
 .face[data-size="sm"] { --face-size: 32px; --dot-size: 11px; }
 .face[data-size="md"] { --face-size: 34px; --dot-size: 10px; }
-.portrait { display: block; width: 100%; height: 100%; border-radius: var(--radius-full); corner-shape: round; background: var(--surface-muted); object-fit: cover; object-position: 50% 15%; outline: 1px solid color-mix(in oklab, var(--foreground) 9%, transparent); outline-offset: -1px; user-select: none; }
+.portrait { display: block; width: 100%; height: 100%; border-radius: 30%; corner-shape: squircle; background: var(--surface-muted); object-fit: cover; object-position: 50% 15%; outline: 1px solid color-mix(in oklab, var(--foreground) 9%, transparent); outline-offset: -1px; user-select: none; }
 .initials { display: grid; place-items: center; color: var(--text-secondary); font-size: calc(var(--face-size) * .36); font-weight: 500; line-height: 1; }
 .face .dot { position: absolute; right: -1px; bottom: -1px; box-shadow: 0 0 0 2px var(--presence-surface, var(--surface)); }
 

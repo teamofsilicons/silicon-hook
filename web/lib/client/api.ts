@@ -10,7 +10,6 @@
  * many calls at once never race to refresh it. A 401 means the sign-in ended (the proxy cleared it): the keeper sends
  * the Carbon to /sign-in, which explains and signs them in again. Framework-free: React Query hooks and plain code use it.
  */
-import { telemetryEnabled } from "../hook/preferences";
 import { ApiError, errorFromResponse, networkError } from "../errors";
 import { ensureFreshSession, markSignedOut } from "./session";
 
@@ -68,7 +67,7 @@ async function readBody(response: Response): Promise<unknown> {
 export async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
   if (!path.startsWith("/") || path.startsWith("//")) throw new ApiError({ status: 0, code: "client_error", message: `The page asked for "${path}", which is not a path of the service.`, hint: "Pass the service's own path, starting with /." });
   const method = options.method ?? (options.body !== undefined || options.raw !== undefined ? "POST" : "GET");
-  const headers: Record<string, string> = { Accept: "application/json", "x-hook-telemetry": telemetryEnabled() ? "on" : "off", ...options.headers };
+  const headers: Record<string, string> = { Accept: "application/json", ...options.headers };
   let body: BodyInit | undefined;
   if (options.raw !== undefined) {
     body = options.raw;

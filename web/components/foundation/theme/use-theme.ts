@@ -6,7 +6,7 @@ import { changeTheme, currentTheme, setThemePreference, subscribeTheme, themePre
 export type { Theme, ThemePreference } from "@/lib/theme";
 
 const serverTheme = (): Theme => "light";
-const serverPreference = (): ThemePreference => "system";
+const serverPreference = (): ThemePreference => "light";
 
 /**
  * The current theme and preference, and ways to change them. The first render (server and hydration) reads "light" /

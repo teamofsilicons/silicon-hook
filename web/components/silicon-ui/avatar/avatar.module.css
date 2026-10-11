@@ -5,7 +5,8 @@
   place-items: center;
   overflow: visible;
   border: 1px solid var(--border);
-  border-radius: var(--radius-full); corner-shape: round;
+  /* Local edit (2026-10-12): profile photos are squircles here, like every other rounded surface. */
+  border-radius: 30%; corner-shape: squircle;
   background: var(--surface-muted);
   color: var(--foreground);
   font-size: var(--text-xs);

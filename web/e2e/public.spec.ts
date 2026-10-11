@@ -32,20 +32,14 @@ test("the landing page says what the app is, how to install it and how to sign i
   const html = await response!.text();
   expect(html).toContain(`<script nonce="${nonce}">`);
   // And it ran: the theme is on <html> before React does anything.
-  await expect(page.locator("html")).toHaveAttribute("data-theme", /^(light|dark)$/);
+  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
 });
 
-test("the theme switch works without a flash and is remembered", async ({ page }) => {
-  await page.emulateMedia({ colorScheme: "light" });
+test("the site is light only: no theme switch, and a dark device still gets the light site", async ({ page }) => {
+  await page.emulateMedia({ colorScheme: "dark" });
   await page.goto("/");
   await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
-  await page.getByRole("button", { name: "Dark", exact: true }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await page.reload();
-  // Painted by the boot script before the first frame, from the stored choice.
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "dark");
-  await page.getByRole("button", { name: "System", exact: true }).click();
-  await expect(page.locator("html")).toHaveAttribute("data-theme", "light");
+  await expect(page.getByRole("button", { name: /^(Dark|Light|System)$|Switch to (dark|light)/ })).toHaveCount(0);
 });
 
 test("the public files answer for crawlers and Silicons", async ({ request }) => {

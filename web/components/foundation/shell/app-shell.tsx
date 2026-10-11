@@ -11,18 +11,15 @@
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { ViewTransition, useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
-import { BookOpen, CircleUserRound, LogOut, Menu, Monitor, Moon, Search, Sun } from "lucide-react";
+import { BookOpen, CircleUserRound, LogOut, Menu, Search } from "lucide-react";
 import { Drawer, DrawerContent } from "@/components/silicon-ui/drawer/drawer";
-import { ThemeSwitch } from "@/components/silicon-ui/theme-switch/theme-switch";
 import { BRAND_NAME, Wordmark } from "@/components/foundation/brand/app-mark";
-import { useTheme } from "@/components/foundation/theme/use-theme";
 import type { SessionAccount } from "@/lib/account";
 import { appConfig } from "@/lib/app.config";
 import { useSignOut } from "@/lib/client/session";
 import { openCommandPalette, toggleCommandPalette, useRegisterCommands } from "@/lib/commands";
 import { navigationType, navItemFor } from "@/lib/navigation";
 import { notifyError } from "@/lib/notify";
-import { changeTheme } from "@/lib/theme";
 import { AccountMenu } from "./account-menu";
 import { CommandMenu } from "./command-menu";
 import { NavList, OutsideLinks } from "./nav-list";
@@ -47,7 +44,6 @@ export interface AppShellProps {
 export function AppShell({ account, accountsUrl, children }: AppShellProps) {
   const pathname = usePathname();
   const router = useRouter();
-  const { theme, change } = useTheme();
   const { signOut } = useSignOut();
   const isApple = useSyncExternalStore(subscribeNothing, detectApple, () => false);
   const [menuOpen, setMenuOpen] = useState(false);
@@ -82,9 +78,6 @@ export function AppShell({ account, accountsUrl, children }: AppShellProps) {
     }),
     { id: "go.docs", label: `${appConfig.name} docs`, description: "Opens in a new tab", group: "Go to", icon: <BookOpen size={16} strokeWidth={1.75} />, keywords: ["docs", "help", "guide"], run: () => void window.open(appConfig.links.docs, "_blank", "noopener") },
     { id: "go.account", label: "Your account", description: "Silicon Accounts, in a new tab", group: "Go to", icon: <CircleUserRound size={16} strokeWidth={1.75} />, keywords: ["account", "profile", "photo"], run: () => void window.open(accountsUrl, "_blank", "noopener") },
-    { id: "theme.light", label: "Use the light theme", group: "Appearance", icon: <Sun size={16} strokeWidth={1.75} />, keywords: ["theme", "light"], run: () => changeTheme("light", null) },
-    { id: "theme.dark", label: "Use the dark theme", group: "Appearance", icon: <Moon size={16} strokeWidth={1.75} />, keywords: ["theme", "dark", "night"], run: () => changeTheme("dark", null) },
-    { id: "theme.system", label: "Match the device theme", group: "Appearance", icon: <Monitor size={16} strokeWidth={1.75} />, keywords: ["theme", "system", "auto"], run: () => changeTheme("system", null) },
     { id: "account.signout", label: "Sign out", description: `Sign this browser out of ${appConfig.name}`, group: "Account", icon: <LogOut size={16} strokeWidth={1.75} />, keywords: ["logout", "log out", "sign out"], run: () => void signOut().catch(failure => notifyError(failure, "Could not sign out")) },
   ], [router, accountsUrl, signOut]);
 
@@ -130,9 +123,6 @@ export function AppShell({ account, accountsUrl, children }: AppShellProps) {
               <span className={styles.searchLabel}>Search and jump</span>
               <kbd data-sq="surface">{isApple ? "⌘ K" : "Ctrl K"}</kbd>
             </button>
-            <span className={styles.tool}>
-              <ThemeSwitch theme={theme} variant="eclipse" iconOnly onThemeChange={(next, _variant, trigger) => change(next, trigger)} />
-            </span>
             <AccountMenu account={account} accountsUrl={accountsUrl} isApple={isApple} />
           </div>
         </header>

@@ -25,7 +25,6 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-size: var(--text-base);
-  transition: background-color var(--duration-standard) var(--ease-standard), color var(--duration-standard) var(--ease-standard);
 }
 
 h1, h2, h3, h4, h5, h6, p, figure, blockquote, dl, dd { margin: 0; }
@@ -53,7 +52,7 @@ code, kbd, samp, pre { font-family: var(--font-mono); font-size: .92em; letter-s
 strong, b { font-weight: 500; }
 hr { height: 1px; margin: 0; border: 0; background: var(--border); }
 
-::selection { background: color-mix(in oklab, var(--accent) 24%, transparent); color: inherit; }
+::selection { background: var(--foreground); color: var(--background); }
 
 /* Thin scrollbars that disappear into the surface. */
 * { scrollbar-width: thin; scrollbar-color: color-mix(in oklab, var(--foreground) 22%, transparent) transparent; }
@@ -71,7 +70,10 @@ hr { height: 1px; margin: 0; border: 0; background: var(--border); }
   border: 0;
 }
 .mono { font-family: var(--font-mono); letter-spacing: 0; font-variant-ligatures: none; }
-.serif, .display { font-family: var(--font-display); font-weight: 600; letter-spacing: var(--tracking-display); }
+.serif { font-family: var(--font-serif); font-weight: 400; letter-spacing: -.005em; }
+.display { font-family: var(--font-display); font-weight: 500; letter-spacing: var(--tracking-display); }
+/* Small labels, dates and ids in the pixel face, as on Silicon Writings. */
+.pixel { font-family: var(--font-pixel); letter-spacing: 0; }
 .tabular { font-variant-numeric: tabular-nums; }
 .muted { color: var(--text-muted); }
 .secondary { color: var(--text-secondary); }
@@ -105,14 +107,12 @@ hr { height: 1px; margin: 0; border: 0; background: var(--border); }
  * Page changes inside the workspace (components/foundation/shell): React's <ViewTransition> tags the leaving page and
  * the arriving one with a class per direction along the navigation (page-forward / page-back) or page-fade. The
  * sidebar and the top bar are their own layer that never moves, so only the page slides.
- * The theme change is Arc's eclipse (lib/theme.ts): the next appearance crosses the page as a disc from the switch.
  * ------------------------------------------------------------------------------------------------------------------ */
 ::view-transition { pointer-events: none; }
 
 /* Each still layer needs a name of its own (two elements with one name abort the transition). */
 [data-vt="sidebar"] { view-transition-name: kit-sidebar; }
 [data-vt="topbar"] { view-transition-name: kit-topbar; }
-:root[data-transition="eclipse"] :is([data-vt="sidebar"], [data-vt="topbar"]) { view-transition-name: none; }
 ::view-transition-group(kit-sidebar), ::view-transition-group(kit-topbar) { z-index: 100; animation: none; }
 ::view-transition-old(kit-sidebar), ::view-transition-old(kit-topbar) { display: none; }
 ::view-transition-new(kit-sidebar), ::view-transition-new(kit-topbar) { animation: none; }
@@ -127,15 +127,12 @@ hr { height: 1px; margin: 0; border: 0; background: var(--border); }
 @keyframes page-in { from { opacity: 0; transform: translateX(calc(var(--page-dir, 0) * 18px)); filter: blur(3px); } }
 
 ::view-transition-old(root), ::view-transition-new(root) { mix-blend-mode: normal; }
-:root[data-transition="eclipse"]::view-transition-old(root) { animation: none; }
-:root[data-transition="eclipse"]::view-transition-new(root) { animation: eclipse-sweep var(--eclipse-duration, 720ms) var(--ease-in-out) both; }
-@keyframes eclipse-sweep {
-  from { clip-path: circle(var(--eclipse-r) at var(--eclipse-x0) var(--eclipse-y0)); }
-  to { clip-path: circle(var(--eclipse-r) at var(--eclipse-x1) var(--eclipse-y1)); }
-}
 
 @media (prefers-reduced-motion: reduce) {
   body { transition: none; }
   .skip-link { transition: none; }
   ::view-transition-group(*), ::view-transition-old(*), ::view-transition-new(*) { animation: none !important; }
 }
+
+/* What only a browser without script needs; hidden once the boot script marks <html data-js>. */
+:root[data-js] [data-nojs-only] { display: none !important; }

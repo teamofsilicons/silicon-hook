@@ -11,6 +11,7 @@
  * through /auth/refresh, which can. Errors are ApiError with the service's own code, message and hint; a 401 sends the
  * Carbon to /sign-in?reason=session_ended (the page explains, nothing loops).
  */
+import { appConfig } from "@/lib/app.config";
 import "server-only";
 import { cookies, headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
@@ -84,7 +85,8 @@ export async function apiFetch<T>(path: string, init: ApiFetchInit = {}): Promis
 
   const env = serverEnv();
   const method = init.method ?? (init.body === undefined ? "GET" : "POST");
-  const outgoing: Record<string, string> = { Accept: "application/json", ...clientHeaders({ headers: await headers() }), ...init.headers, Authorization: `Bearer ${live.at}` };
+  const optOut = appConfig.api?.telemetryOptOut;
+  const outgoing: Record<string, string> = { Accept: "application/json", ...clientHeaders({ headers: await headers() }), ...init.headers, ...(optOut ? { [optOut]: "off" } : {}), Authorization: `Bearer ${live.at}` };
   if (init.body !== undefined) outgoing["Content-Type"] = "application/json";
   const url = `${env.appApiUrl}${path}${queryString(init.query)}`;
   let response: Response;

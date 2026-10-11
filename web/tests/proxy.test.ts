@@ -6,6 +6,7 @@ import assert from "node:assert/strict";
 import { afterEach, beforeEach, test } from "node:test";
 import { NextRequest } from "next/server";
 import { GET, POST } from "../app/api/[...path]/route";
+import { appConfig } from "../lib/app.config";
 import { forwardRequestHeaders, relayResponseHeaders, upstreamPath } from "../lib/server/forward";
 import { sealSession, type StoredSession } from "../lib/server/session";
 import { forgetRefreshes } from "../lib/server/tokens";
@@ -31,6 +32,8 @@ test("forwarded: what describes the request; never cookies, the browser's Author
   assert.deepEqual(Object.fromEntries(out), {
     accept: "application/json", "accept-language": "en", authorization: "Bearer eyJ.token.sig", "content-length": "12", "content-type": "application/json", "idempotency-key": "k1",
     "if-none-match": '"v1"', "user-agent": "Browser/1", "x-forwarded-for": "203.0.113.9", "x-request-id": "r1",
+    // The site records no telemetry: the service's opt-out header always goes as "off".
+    ...(appConfig.api?.telemetryOptOut ? { [appConfig.api.telemetryOptOut]: "off" } : {}),
   });
   const extra = forwardRequestHeaders(incoming, "t", {}, ["X-Custom", "cookie", "authorization"]);
   assert.equal(extra.get("x-custom"), "no", "appConfig.api.forwardHeaders adds names");

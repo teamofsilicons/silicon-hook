@@ -49,6 +49,8 @@ export function forwardRequestHeaders(incoming: Headers, token: string, client: 
     if (value !== null) out.set(name, value);
   }
   for (const [name, value] of Object.entries(client)) out.set(name, value);
+  const optOut = appConfig.api?.telemetryOptOut;
+  if (optOut) out.set(optOut.toLowerCase(), "off");
   out.set("authorization", `Bearer ${token}`);
   return out;
 }
