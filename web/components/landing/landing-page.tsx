@@ -24,10 +24,10 @@ function Points({ features }: { features: Feature[] }) {
   );
 }
 
-/** The headline's own line breaks ("\n" in the config) stay where the app put them. */
+/** The headline's own line breaks ("\n" in the config) stay where the app put them, on screens wide enough for them. */
 function Lines({ text }: { text: string }) {
   const lines = text.split(/\s*\n\s*/);
-  return <>{lines.map((line, index) => <Fragment key={index}>{index ? <br /> : null}{line}</Fragment>)}</>;
+  return <>{lines.map((line, index) => <Fragment key={index}>{index ? <>{" "}<br className={styles.break} /></> : null}{line}</Fragment>)}</>;
 }
 
 export function LandingPage({ signedIn }: { signedIn: boolean }) {

@@ -9,6 +9,9 @@
 .hero { display: grid; gap: 20px; }
 .kicker { margin: 0; color: var(--text-muted); font-family: var(--font-pixel); font-size: .8125rem; letter-spacing: .03em; text-transform: uppercase; }
 .title { margin: 0; color: var(--accent-ink); font-family: var(--font-serif); font-size: clamp(2.375rem, 1.6rem + 3.4vw, 3.5rem); font-weight: 400; letter-spacing: -.01em; line-height: 1.2; text-wrap: balance; }
+.title .break { display: inline; }
+/* On a phone the headline wraps where it must, not where a wide screen would break it. */
+@media (max-width: 520px) { .title .break { display: none; } }
 .lede { max-width: 54ch; margin: 0; color: var(--text-secondary); font-size: 1.125rem; line-height: 1.6; text-wrap: pretty; }
 .actions { display: flex; flex-wrap: wrap; align-items: center; gap: 12px; margin-top: 12px; }
 .note { margin: 0; color: var(--text-muted); font-size: var(--text-sm); line-height: 1.6; }
