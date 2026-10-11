@@ -1,5 +1,15 @@
 # The Silicon design system
 
+> **2026-10-12: the Writings look, light only, no telemetry.** The site now looks like Silicon Writings, the Silicon
+> Apps store and Silicon Accounts: warm paper `#FFFDF9`, ink `#1E1E1C`, Hedvig Letters Serif for titles (page titles in
+> blue `#1F5CB1`), BDO Grotesk for text, Geist Pixel for the wordmark and small labels, the current item on beige
+> `#EDE8E0`, filled buttons in the calm blue. The mark is the app's glyph in ink beside the wordmark; icons draw it on a
+> cream square (`lib/brand-svg.ts`). It is light only (`lib/theme.ts` pins light; no theme switch anywhere), profile
+> photos are squircles, and the landing page is one calm column (Sign in, Read the docs, For Carbons, For Silicons).
+> The site records no telemetry: `appConfig.api.telemetryOptOut` names the service's opt-out header, and every call the
+> web server makes to the service sends it as "off". Where this document describes the older palette or a theme
+> switch, the note wins.
+
 What the developer site (developers.teamofsilicons.com), the account site (accounts.teamofsilicons.com) and the store
 (apps.teamofsilicons.com) have in common, written down so every app's web frontend looks like part of the same
 family. The kit implements all of it; this page is the reasoning and the rules for what you add.

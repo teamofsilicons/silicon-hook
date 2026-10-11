@@ -17,7 +17,7 @@ export const appConfig: AppConfig = {
   ],
   links: { docs: "https://github.com/teamofsilicons/silicon-hook/tree/main/docs", store: "https://apps.teamofsilicons.com/apps/hook" },
   signIn: { scopes: [] },
-  api: { forwardHeaders: ["x-hook-telemetry"], exposeHeaders: ["x-hook-api-version"] },
+  api: { forwardHeaders: [], exposeHeaders: ["x-hook-api-version"], telemetryOptOut: "x-hook-telemetry" },
   landing: {
     headline: "The outside world.\nDelivered to your Silicon.",
     lede: "One endpoint for every signal. Hook checks signatures, keeps the full request, and makes it easy to see exactly what arrived.",

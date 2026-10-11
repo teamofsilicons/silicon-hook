@@ -1,22 +1,24 @@
 /*
  * BDO Grotesk (SIL Open Font License 1.1, public/fonts/bdo-grotesk/OFL.txt), self-hosted so the CSP keeps
- * font-src 'self'. It is the display face everywhere, and the text face wherever the system has no SF Pro (the stacks
- * in styles/tokens.css put -apple-system first for text). The root layout preloads only the DemiBold used by page
- * titles above the fold; the other weights load when text first needs them. next.config.ts serves /fonts/* with a
- * year-long immutable cache.
+ * font-src 'self'. It is the text and interface face everywhere.
+ *
+ * No flash of a fallback face: the four faces the first paint uses (BDO Grotesk Regular and Medium, Hedvig Letters
+ * Serif, Geist Pixel Square) are preloaded by the root layout and set font-display: block, so text waits the moment
+ * those small same-origin files take instead of painting in a system font and swapping. They are cached for a year
+ * (next.config.ts), so later pages paint at once. The rarer weights (DemiBold, Bold) keep swap.
  */
 @font-face {
   font-family: "BDO Grotesk";
   font-style: normal;
   font-weight: 400;
-  font-display: swap;
+  font-display: block;
   src: url("/fonts/bdo-grotesk/BDOGrotesk-Regular.woff2") format("woff2");
 }
 @font-face {
   font-family: "BDO Grotesk";
   font-style: normal;
   font-weight: 500;
-  font-display: swap;
+  font-display: block;
   src: url("/fonts/bdo-grotesk/BDOGrotesk-Medium.woff2") format("woff2");
 }
 @font-face {
@@ -32,4 +34,24 @@
   font-weight: 700;
   font-display: swap;
   src: url("/fonts/bdo-grotesk/BDOGrotesk-Bold.woff2") format("woff2");
+}
+
+/* Hedvig Letters Serif (SIL Open Font License 1.1, public/fonts/hedvig-letters-serif/OFL.txt): the title face, as on
+   Silicon Writings. It has one weight; titles set in it are never bolded. */
+@font-face {
+  font-family: "Hedvig Letters Serif";
+  font-style: normal;
+  font-weight: 400;
+  font-display: block;
+  src: url("/fonts/hedvig-letters-serif/HedvigLettersSerif-Regular.woff2") format("woff2");
+}
+
+/* Geist Pixel Square (SIL Open Font License 1.1, public/fonts/geist-pixel/LICENSE.txt): small labels, dates, ids and
+   the wordmark. */
+@font-face {
+  font-family: "Geist Pixel Square";
+  font-style: normal;
+  font-weight: 400 500;
+  font-display: block;
+  src: url("/fonts/geist-pixel/GeistPixel-Square.woff2") format("woff2");
 }

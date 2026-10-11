@@ -1,11 +1,12 @@
 /**
- * The app's mark: its glyph (lib/app.config.ts `mark`, lucide-style paths on a 24 by 24 grid) drawn white on a squircle
- * of the app's colour (`--app-accent`, brand blue without one), as every Silicon site draws its own. Plain SVG,
- * server-rendered, shared by the landing page, the sign-in page and the signed-in shell.
+ * The app's mark: its glyph (lib/app.config.ts `mark`, lucide-style paths on a 24 by 24 grid) in ink, beside the name in
+ * the pixel face, as Silicon Writings, Silicon Apps and Silicon Accounts draw theirs. The icons (app/icon.tsx,
+ * app/apple-icon.tsx) and the Open Graph image draw the same glyph in #181818 on a cream square (lib/brand-svg.ts).
+ * Plain SVG, server-rendered, shared by the landing page, the sign-in page and the signed-in shell.
  *
- *   <AppMark />                 28 px, the bars' size
- *   <AppMark size={44} />       the sign-in card
- *   <Wordmark />                the mark and the app's name
+ *   <AppMark />                 the bare glyph at 22 px
+ *   <AppMark size={40} />       larger
+ *   <Wordmark />                the glyph and the app's name
  */
 import type { CSSProperties } from "react";
 import { appConfig } from "@/lib/app.config";
@@ -19,11 +20,11 @@ export function AppGlyph({ size = 18, strokeWidth = 2 }: { size?: number; stroke
   );
 }
 
-export function AppMark({ size = 28, className }: { size?: number; className?: string }) {
-  const style = { "--mark-size": `${size}px`, "--sq-r": `${Math.round(size * 0.32)}px` } as CSSProperties;
+export function AppMark({ size = 22, className }: { size?: number; className?: string }) {
+  const style = { "--mark-size": `${size}px` } as CSSProperties;
   return (
-    <span data-sq="clip" className={[styles.mark, className].filter(Boolean).join(" ")} style={style} aria-hidden="true">
-      <AppGlyph size={Math.round(size * 0.6)} strokeWidth={size >= 40 ? 1.75 : 2} />
+    <span className={[styles.mark, className].filter(Boolean).join(" ")} style={style} aria-hidden="true">
+      <AppGlyph size={size} strokeWidth={size >= 36 ? 1.75 : 2} />
     </span>
   );
 }
@@ -31,14 +32,12 @@ export function AppMark({ size = 28, className }: { size?: number; className?: s
 /** The wordmark's words ("Silicon Remind"): a link that shows the wordmark is named with them first (WCAG 2.5.3). */
 export const BRAND_NAME = appConfig.brandPrefix ? `${appConfig.brandPrefix} ${appConfig.name}` : appConfig.name;
 
-/** The mark and the app's name ("Silicon" and the name, muted, when the config has a brandPrefix), as the bars show it. */
-export function Wordmark({ size = 28, className }: { size?: number; className?: string }) {
+/** The glyph and the app's name in the pixel face ("Silicon Remind"), as the bars show it. */
+export function Wordmark({ size = 22, className }: { size?: number; className?: string }) {
   return (
     <span className={[styles.wordmark, className].filter(Boolean).join(" ")}>
       <AppMark size={size} />
-      <span className={styles.name}>
-        {appConfig.brandPrefix ? <>{appConfig.brandPrefix} <span className={styles.muted}>{appConfig.name}</span></> : appConfig.name}
-      </span>
+      <span className={styles.name}>{BRAND_NAME}</span>
     </span>
   );
 }

@@ -1,6 +1,6 @@
 /**
  * The root layout: <html> and <body>, the Silicon look (Arc's foundation, BDO Grotesk, the tokens, squircles, the base),
- * the no-flash theme boot script (inline, with the request's CSP nonce from proxy.ts), the app's colour and the
+ * the light-only boot script (inline, with the request's CSP nonce from proxy.ts), the app's colour and the
  * metadata every page shares. It ships no client code of its own: the public pages stay server-rendered HTML with a
  * few small islands, and the signed-in workspace mounts its providers in app/(workspace)/layout.tsx. Every page renders
  * per request (the nonce changes each time).
@@ -37,10 +37,8 @@ export const viewport: Viewport = {
   width: "device-width",
   initialScale: 1,
   viewportFit: "cover",
-  themeColor: [
-    { media: "(prefers-color-scheme: light)", color: "#F7F8FA" },
-    { media: "(prefers-color-scheme: dark)", color: "#02040A" },
-  ],
+  themeColor: "#FFFDF9",
+  colorScheme: "light",
 };
 
 export default async function RootLayout({ children }: { children: ReactNode }) {
@@ -50,8 +48,11 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
     <html lang="en" style={accent} suppressHydrationWarning>
       <head>
         <script nonce={nonce} dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
-        {/* Page titles are set in DemiBold: the one weight worth fetching before first paint. */}
-        <link rel="preload" href="/fonts/bdo-grotesk/BDOGrotesk-DemiBold.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        {/* Every face the first paint uses, fetched with the page so text never paints in a fallback first (styles/fonts.css). */}
+        <link rel="preload" href="/fonts/bdo-grotesk/BDOGrotesk-Regular.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/bdo-grotesk/BDOGrotesk-Medium.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/hedvig-letters-serif/HedvigLettersSerif-Regular.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
+        <link rel="preload" href="/fonts/geist-pixel/GeistPixel-Square.woff2" as="font" type="font/woff2" crossOrigin="anonymous" />
       </head>
       <body>{children}</body>
     </html>

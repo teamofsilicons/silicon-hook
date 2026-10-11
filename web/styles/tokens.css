@@ -1,21 +1,17 @@
 /*
- * The application palette, layered onto the official Silicon UI foundation (imported first). One look, two
- * modes (light and dark, or the system's), applied to <html data-theme> and to any subtree that sets data-theme itself
- * (a preview can show the other mode). Floating layers (menus, dialogs) portal to <body> and follow the page.
+ * The Silicon look, mapped onto Silicon UI's semantic tokens (components/silicon-ui/foundation.css, imported first): the
+ * look of Silicon Writings (writings.teamofsilicons.com), teamofsilicons.com and the Silicon Apps store. Warm paper,
+ * near-black ink, one calm blue, Hedvig Letters Serif for titles, BDO Grotesk for everything you read and press, and
+ * Geist Pixel Square for small labels.
  *
- * Brand: background #F7F8FA and text #292929 in light, background #02040A and text #F7F8FA in dark, brand blue #1F5FB8
- * for primary buttons and fills in both. Surfaces, borders and muted text are cool neutrals derived from those.
+ * The site is light only: lib/theme.ts pins <html data-theme="light">. The dark block below is kept for any subtree that
+ * sets data-theme="dark" itself; it is the same paper at night, a warm near-black (#151412), never a cool navy.
  *
- * Contrast (WCAG 2.2, measured): every text token clears 4.5:1 on --background, --surface, --surface-raised,
- * --surface-muted and --accent-subtle (over the page or a surface) in its mode. Lowest pairs: light --warning 4.8:1 and
- * --text-muted #5C6370 4.9:1 on the accent tint over the page, --accent-ink #1F5FB8 5.4:1 on --surface-muted; dark
- * --text-muted #9BA4B4 6.4:1 and --accent-ink #7DAEF4 7.1:1 on --surface-muted. Two additions to Arc's set exist
- * because of that:
- *   --accent-ink   accent-coloured text. Brand blue as text on #02040A is 3.3:1, so dark mode uses a lighter ink.
- *                  Fills and indicators keep --accent (dark --accent is text-safe too, 6.4:1 on --surface-muted).
- *   --primary*     filled primary buttons stay brand blue with light text in both modes (white 6.2:1 light, #F7F8FA
- *                  5.8:1 dark). Arc's own primary button is the inverted foreground; our local edit of
- *                  button.module.css paints it with these.
+ * Contrast (WCAG 2.2): every text token clears 4.5:1 on --background, --surface and --surface-muted in its mode. The
+ * lowest pairs are light --text-muted #6B675F (5.0:1 on --surface-muted) and dark --text-muted #9A958A (5.6:1).
+ * --text-faint is for decoration only (rules, separators), never for text.
+ *   --accent-ink   accent-coloured text. #1F5CB1 on the dark page is 2.9:1, so dark uses a lighter blue.
+ *   --primary*     the filled button: the calm blue under white text (6.4:1) in light, paper on ink in dark.
  */
 :root {
   /* Application layout compatibility. Registry components use Silicon UI's semantic scale. */
@@ -28,138 +24,145 @@
 
 :root, [data-theme="light"] {
   color-scheme: light;
-  --brand-blue: #1F5FB8;
-  --brand-light: #F7F8FA;
-  --brand-ink: #292929;
-  --brand-night: #02040A;
 
-  --background: #F7F8FA;
+  --background: #FFFDF9;
   --surface: #FFFFFF;
   --surface-raised: #FFFFFF;
-  --surface-muted: #EEF0F4;
-  --foreground: #292929;
-  --text-secondary: #4C5260;
-  --text-muted: #5C6370;
-  --border: #E2E5EB;
-  --border-subtle: #EBEDF1;
-  --border-strong: #CBD0D8;
+  --surface-muted: #F6F2EA;
+  /* The beige of the nav pill's current item and of quiet fills (Writings' #EDE8E0). */
+  --surface-pressed: #EDE8E0;
+  --foreground: #1E1E1C;
+  --text-secondary: #57544D;
+  --text-muted: #6B675F;
+  --text-faint: #A29D92;
+  --border: #E7E3D8;
+  --border-subtle: #EFEBE2;
+  --border-strong: #D6D0C1;
 
-  --accent: #1F5FB8;
-  --accent-strong: #174C96;
-  --accent-subtle: rgb(31 95 184 / .1);
+  --accent: #1F5CB1;
+  --accent-strong: #184A94;
+  --accent-subtle: rgb(31 92 177 / .09);
   --accent-foreground: #FFFFFF;
-  --accent-ink: #1F5FB8;
+  --accent-ink: #1F5CB1;
 
-  --primary: #1F5FB8;
-  --primary-hover: #1B55A6;
-  --primary-pressed: #184C93;
+  --primary: #1F5CB1;
+  --primary-hover: #1A4F99;
+  --primary-pressed: #164383;
   --primary-foreground: #FFFFFF;
 
-  --control-on: #1F5FB8;
+  --control-on: #1F5CB1;
   --control-glyph: #FFFFFF;
-  --control-track: #DDE1E8;
-  --control-track-hover: #D1D6DF;
+  --control-track: #E5E0D5;
+  --control-track-hover: #DAD4C7;
   --control-thumb: #FFFFFF;
   --control-thumb-on: #FFFFFF;
-  --control-thumb-shadow: 0 0 0 .5px rgb(16 24 40 / .08), 0 1px 2px rgb(16 24 40 / .16), 0 2px 6px rgb(16 24 40 / .07);
+  --control-thumb-shadow: 0 0 0 .5px rgb(30 30 28 / .08), 0 1px 2px rgb(30 30 28 / .14), 0 2px 6px rgb(30 30 28 / .06);
   --control-fill: var(--control-on);
   --control-on-subtle: color-mix(in oklab, var(--control-on) 10%, transparent);
   --focus-ring: transparent;
 
-  --success: #18703F;
-  --warning: #93560A;
+  --success: #2B7148;
+  --warning: #8F560D;
   --danger: #B42318;
+  /* Stars and the rating bars: an ochre that sits on paper. */
+  --star: #B7791F;
 
-  /* Cool, soft shadows. Only floating layers and lifted cards use them. */
-  --shadow-resting: 0 1px 2px rgb(16 24 40 / .05);
-  --shadow-raised: 0 6px 18px rgb(16 24 40 / .07), 0 1px 3px rgb(16 24 40 / .04);
-  --shadow-floating: 0 20px 48px rgb(16 24 40 / .12), 0 3px 10px rgb(16 24 40 / .05);
+  /* Warm, faint shadows, as on teamofsilicons.com. Only floating layers and the nav pill use them. */
+  --shadow-resting: 0 1px 2px rgb(30 30 28 / .04);
+  --shadow-raised: 0 6px 18px rgb(30 30 28 / .06), 0 1px 3px rgb(30 30 28 / .04);
+  --shadow-floating: 0 20px 48px rgb(30 30 28 / .1), 0 3px 10px rgb(30 30 28 / .05);
 
-  --series-1: #1F5FB8; --series-2: #7A4FC4; --series-3: #B86E0F; --series-4: #17806B;
+  --series-1: #1F5CB1; --series-2: #7A4FC4; --series-3: #B7791F; --series-4: #2B7148;
 
-  /* Type. SF Pro is the system face on Apple devices (its licence does not allow serving it), so text asks for the
-     system first; BDO Grotesk (styles/fonts.css) is the display face and the text face everywhere else. */
-  --font-display: "BDO Grotesk", -apple-system, BlinkMacSystemFont, "SF Pro Display", system-ui, sans-serif;
-  --font-body: -apple-system, BlinkMacSystemFont, "SF Pro Text", "BDO Grotesk", system-ui, sans-serif;
-  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, Menlo, Consolas, monospace;
-  /* Kept for older styles: the display face (the site has no serif). */
-  --font-serif: var(--font-display);
-  --tracking-display: -.025em;
+  /* Type. BDO Grotesk is the text and interface face, Hedvig Letters Serif the title face (one weight: never bold it),
+     Geist Pixel Square the face of small labels, dates and ids. All three are self-hosted (styles/fonts.css). */
+  --font-body: "BDO Grotesk", ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  --font-display: var(--font-body);
+  --font-serif: "Hedvig Letters Serif", "Iowan Old Style", Georgia, serif;
+  --font-pixel: "Geist Pixel Square", ui-monospace, "SF Mono", Menlo, monospace;
+  --font-mono: ui-monospace, "SF Mono", SFMono-Regular, "JetBrains Mono", Menlo, Consolas, monospace;
+  --tracking-display: -.01em;
+  --tracking-body: 0;
 
   /* Squircle tuning: corner-shape radius multiplier (matches Figma's 60 % corner smoothing). See styles/squircle.css. */
   --sq-k: 1.6;
 
-  /* Dot grid and grain, used sparingly (landing art, branded previews). */
-  --grain-opacity: .06;
-  --dot-color: rgb(41 41 41 / .1);
-  --overlay: rgb(2 4 10 / .34);
-  /* The soft brand wash behind heroes. */
-  --wash: radial-gradient(70% 60% at 50% 0%, rgb(31 95 184 / .09), transparent 70%);
+  /* No dot grids or glows: paper is flat. Kept as tokens so older rules resolve to nothing. */
+  --grain-opacity: 0;
+  --dot-color: transparent;
+  --overlay: rgb(30 30 28 / .28);
+  --wash: none;
 
-  /* Page chrome. The kit has no floating dock (the account site's --dock-height is 0 here); the clearance keeps the
-     last content of a page clear of the bottom edge and a floating save bar's resting place. */
+  /* Page chrome. No floating dock here (the account site's --dock-height is 0); the clearance keeps the last content of
+     a page clear of the bottom edge and a floating save bar's resting place. */
   --page-max: 1240px;
-  --page-narrow: 720px;
+  --page-narrow: 700px;
   --gutter: clamp(16px, 4vw, 32px);
   --dock-height: 0px;
   --dock-clearance: calc(64px + env(safe-area-inset-bottom, 0px));
   /* The signed-in workspace (components/foundation/shell): a sidebar beside a sticky top bar. */
   --sidebar-width: 248px;
   --topbar-height: 64px;
-  /* The app's own colour (lib/app.config.ts accent), set on <html> by the root layout. It tints the app's mark and the
-     landing page's wash only: actions stay brand blue. Without one, the mark is brand blue like every Silicon site's. */
-  --app-accent: var(--app-accent-light, var(--primary));
+  /* The app's mark is drawn in ink, as every redesigned Silicon site draws its own (lib/app.config.ts accent is unused). */
+  --app-accent: var(--foreground);
 }
 
 :root[data-theme="dark"], [data-theme="dark"] {
   color-scheme: dark;
-  --background: #02040A;
-  --surface: #0B0F18;
-  --surface-raised: #121826;
-  --surface-muted: #1A2130;
-  --foreground: #F7F8FA;
-  --text-secondary: #C2C8D3;
-  --text-muted: #9BA4B4;
-  --border: #1F2635;
-  --border-subtle: #161C28;
-  --border-strong: #2F394B;
+  --background: #151412;
+  --surface: #1B1A17;
+  --surface-raised: #22201D;
+  --surface-muted: #24221E;
+  --surface-pressed: #2E2B26;
+  --foreground: #EDE9E0;
+  --text-secondary: #C3BEB3;
+  --text-muted: #9A958A;
+  --text-faint: #5E5A52;
+  --border: #2E2B26;
+  --border-subtle: #24221E;
+  --border-strong: #423E36;
 
-  --accent: #6AA0EE;
-  --accent-strong: #A8C8F8;
-  --accent-subtle: rgb(31 95 184 / .24);
-  --accent-foreground: #02040A;
-  --accent-ink: #7DAEF4;
+  --accent: #86AEEA;
+  --accent-strong: #B4CDF4;
+  --accent-subtle: rgb(134 174 234 / .13);
+  --accent-foreground: #151412;
+  --accent-ink: #8FB5EE;
 
-  --primary: #1F5FB8;
-  --primary-hover: #2766C2;
-  --primary-pressed: #1B55A6;
-  --primary-foreground: #F7F8FA;
+  --primary: #EDE9E0;
+  --primary-hover: #FFFDF9;
+  --primary-pressed: #D9D4C9;
+  --primary-foreground: #151412;
 
-  --control-on: #2C6AC6;
-  --control-glyph: #FFFFFF;
-  --control-track: #2A3243;
-  --control-track-hover: #333C4F;
-  --control-thumb: #EEF0F4;
-  --control-thumb-on: #FFFFFF;
+  --control-on: #86AEEA;
+  --control-glyph: #151412;
+  --control-track: #3A362F;
+  --control-track-hover: #45403A;
+  --control-thumb: #EDE9E0;
+  --control-thumb-on: #151412;
   --control-thumb-shadow: 0 0 0 .5px rgb(0 0 0 / .3), 0 1px 2px rgb(0 0 0 / .35), 0 2px 6px rgb(0 0 0 / .2);
   --control-fill: var(--control-on);
   --control-on-subtle: color-mix(in oklab, var(--control-on) 16%, transparent);
   --focus-ring: transparent;
 
-  --success: #4CC38A;
-  --warning: #E9B24F;
-  --danger: #FF8A80;
+  --success: #7FC79A;
+  --warning: #E3B55A;
+  --danger: #F4968C;
+  --star: #E3B55A;
 
-  --shadow-resting: 0 1px 2px rgb(0 0 0 / .4);
-  --shadow-raised: 0 8px 22px rgb(0 0 0 / .45);
-  --shadow-floating: 0 22px 55px rgb(0 0 0 / .6), 0 3px 10px rgb(0 0 0 / .3);
+  --shadow-resting: 0 1px 2px rgb(0 0 0 / .3);
+  --shadow-raised: 0 8px 22px rgb(0 0 0 / .35);
+  --shadow-floating: 0 22px 55px rgb(0 0 0 / .5), 0 3px 10px rgb(0 0 0 / .25);
 
-  --series-1: #6AA0EE; --series-2: #B58BE0; --series-3: #E9B24F; --series-4: #4CC3A6;
+  --series-1: #86AEEA; --series-2: #B99AE6; --series-3: #E3B55A; --series-4: #7FC79A;
 
-  --app-accent: var(--app-accent-dark, var(--primary));
+  --overlay: rgb(0 0 0 / .5);
+}
 
-  --grain-opacity: .08;
-  --dot-color: rgb(247 248 250 / .09);
-  --overlay: rgb(2 4 10 / .62);
-  --wash: radial-gradient(70% 60% at 50% 0%, rgb(31 95 184 / .22), transparent 70%);
+/* Existing application layouts use this numeric spacing scale. Silicon UI components use semantic tokens. Panels are
+   quiet and only a little rounded, as on Writings. */
+:root {
+  --space-1: var(--space-tight); --space-2: var(--space-related); --space-3: var(--space-group);
+  --space-4: var(--space-inset); --space-5: var(--space-comfort); --space-6: 1.5rem;
+  --space-8: 2rem; --space-10: 2.5rem; --space-12: 3rem; --space-16: 4rem; --space-20: 5rem; --space-24: 6rem;
+  --radius-panel: 14px; --radius-surface: 18px; --radius-pill: 9999px;
 }

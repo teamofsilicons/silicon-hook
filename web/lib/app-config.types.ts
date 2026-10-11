@@ -77,6 +77,10 @@ export interface AppConfig {
     forCarbons: FeatureCopy[];
     forSilicons: FeatureCopy[];
   };
-  /** The API proxy: extra headers to pass to the service and back (lower case). */
-  api?: { forwardHeaders?: string[]; exposeHeaders?: string[] };
+  /**
+   * The API proxy: extra headers to pass to the service and back (lower case). `telemetryOptOut` names the service's
+   * telemetry opt-out header: the site records no telemetry, so every call the web server makes to the service (the
+   * /api proxy and apiFetch) sends it as "off", whatever the browser sent.
+   */
+  api?: { forwardHeaders?: string[]; exposeHeaders?: string[]; telemetryOptOut?: string };
 }
