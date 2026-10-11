@@ -71,15 +71,13 @@ pub fn sign_in(accounts_url: &str) -> CliResult<SignIn> {
     })
 }
 
-pub fn hook_client(url: &str, telemetry: bool) -> CliResult<Client> {
-    Client::new(url)
-        .map(|client| client.with_telemetry(telemetry))
-        .map_err(|error| {
-            CliError::invalid(
-                error.to_string(),
-                "Set SILICON_HOOK_URL (or --url, or `hook config set url`) to the Hook API origin.",
-            )
-        })
+pub fn hook_client(url: &str) -> CliResult<Client> {
+    Client::new(url).map_err(|error| {
+        CliError::invalid(
+            error.to_string(),
+            "Set SILICON_HOOK_URL (or --url, or `hook config set url`) to the Hook API origin.",
+        )
+    })
 }
 
 /// Why a saved session cannot be used with the URLs in effect.
@@ -326,8 +324,7 @@ async fn end_uncertain(
 /// A Hook client for the profile's session, refreshed if needed.
 pub async fn signed_in_client(cli: &Cli, force: bool) -> CliResult<(Client, Session, Profile)> {
     let (session, profile) = fresh_session(cli, force).await?;
-    let client =
-        hook_client(&session.url, profile.telemetry)?.with_token(session.access_token.expose());
+    let client = hook_client(&session.url)?.with_token(session.access_token.expose());
     Ok((client, session, profile))
 }
 

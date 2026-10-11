@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Silicon Hook API
-  version: 1.0.0
+  version: 1.1.0
   summary: Signed webhook endpoints for Silicons, with verified history and optional delivery through Ting.
   description: |
     Silicon Hook gives each Silicon signed webhook endpoints at
@@ -171,30 +171,6 @@ paths:
                 "$ref": "#/components/schemas/VersionInfo"
         '408':
           "$ref": "#/components/responses/RequestTimeout"
-  "/api/v3/telemetry":
-    post:
-      tags: [System]
-      operationId: ingestTelemetry
-      summary: Record one anonymous diagnostic event from an official client
-      requestBody:
-        required: true
-        content:
-          application/json:
-            schema:
-              "$ref": "#/components/schemas/TelemetryEvent"
-      responses:
-        '202':
-          description: Accepted.
-        '204':
-          description: Telemetry is off on this Hook; nothing was recorded.
-        '400':
-          "$ref": "#/components/responses/BadRequest"
-        '401':
-          "$ref": "#/components/responses/Unauthorized"
-        '413':
-          "$ref": "#/components/responses/PayloadTooLarge"
-        '422':
-          "$ref": "#/components/responses/UnprocessableEntity"
   "/api/v3/auth/accounts":
     get:
       tags: [Sign-in]
@@ -1730,25 +1706,6 @@ components:
         compatibility_matrix:
           type: string
           format: uri
-    TelemetryEvent:
-      type: object
-      additionalProperties: false
-      required: [event_id, trace_id, source, step, outcome, version]
-      properties:
-        event_id: {type: string, format: uuid}
-        trace_id: {type: string, format: uuid}
-        source: {type: string, enum: [cli, daemon, client, web]}
-        step: {type: string, enum: [command, connect, subscribe, deliver, ack, refresh, update, page_view, interaction, error]}
-        outcome: {type: string, enum: [started, succeeded, failed, retrying, skipped]}
-        version: {type: string, minLength: 1, maxLength: 32, pattern: '^[0-9.]+$'}
-        operation:
-          type: string
-          enum: [login, logout, whoami, refresh, webhook, unhook, hooks, events, blocked, deliveries, env, config, daemon, docs, commands, system, report, about, overview, live, testing, connections, relay, create, set-secret, list, show, update, delete, restore, enable, disable, rotate, listen, accounts, silicons, access, allow-list, connect-accounts, event, publication, receiving]
-        duration_ms: {type: integer, minimum: 0}
-        progress: {type: integer, minimum: 0, maximum: 4294967295}
-        status: {type: integer, minimum: 0, maximum: 65535}
-        os: {type: string, enum: [linux, macos, windows, freebsd, openbsd, netbsd, android, ios, unknown]}
-        arch: {type: string, enum: [x86_64, aarch64, x86, arm, riscv64, wasm32, unknown]}
     HookStatus:
       type: string
       description: Disabled is reversible and retained; deleted is the separate 45-day

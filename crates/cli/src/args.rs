@@ -1,4 +1,4 @@
-use clap::{Args, Parser, Subcommand};
+use clap::{Args, Parser, Subcommand, builder::PossibleValue};
 use uuid::Uuid;
 
 const AFTER_HELP: &str = "\
@@ -208,9 +208,9 @@ pub enum Command {
         #[command(subcommand)]
         action: Receiving,
     },
-    /// Read or change local settings: URLs, default Silicon, telemetry, home directory.
+    /// Read or change local settings: URLs, default Silicon, home directory.
     #[command(
-        after_help = "Examples:\n  hook config show\n  hook config set silicon si:scout\n  hook config set url http://127.0.0.1:4201 && hook config set accounts-url http://localhost:9590\n  hook config set telemetry off\n  hook --profile lab login                      a second sign-in in the same home"
+        after_help = "Examples:\n  hook config show\n  hook config set silicon si:scout\n  hook config set url http://127.0.0.1:4201 && hook config set accounts-url http://localhost:9590\n  hook --profile lab login                      a second sign-in in the same home"
     )]
     Config {
         #[command(subcommand)]
@@ -223,7 +223,7 @@ pub enum Command {
     },
     /// List every command path; --json adds each command's full help. No sign-in needed.
     Commands,
-    /// Read the bundled guides offline: overview, signin, cli, client, receiving, signatures, delivery, contracts, configuration, telemetry, deployment, releases.
+    /// Read the bundled guides offline: overview, signin, cli, client, receiving, signatures, delivery, contracts, configuration, deployment, releases.
     Docs {
         #[arg(default_value = "overview")]
         topic: String,
@@ -365,9 +365,16 @@ pub enum Config {
     Profiles,
     /// Keep state under `<location>/.silicon-hook` from now on (the directory must exist).
     Home { location: String },
-    /// Set url, accounts-url, silicon or telemetry (on|off) for the profile.
+    /// Set url, accounts-url or silicon for the profile.
     Set {
-        #[arg(value_parser = ["url", "accounts-url", "silicon", "telemetry"])]
+        // `telemetry` is still accepted (hidden) so scripts that turned it off
+        // keep working; Hook records no telemetry, so it changes nothing.
+        #[arg(value_parser = [
+            PossibleValue::new("url"),
+            PossibleValue::new("accounts-url"),
+            PossibleValue::new("silicon"),
+            PossibleValue::new("telemetry").hide(true),
+        ])]
         key: String,
         value: String,
     },

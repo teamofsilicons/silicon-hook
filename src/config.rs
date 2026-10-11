@@ -606,8 +606,8 @@ impl AccountsSettings {
     }
 }
 
-/// Variables from the Silicon IAM, Honeycomb and test-environment era that are
-/// no longer read, with what replaced them.
+/// Variables from the Silicon IAM, Honeycomb and test-environment era, and the
+/// removed telemetry settings, that are no longer read, with what replaced them.
 const OBSOLETE_VARIABLES: &[(&str, &str)] = &[
     ("HOOK_IAM_BASE_URL", "ACCOUNTS_URL"),
     (
@@ -654,6 +654,15 @@ const OBSOLETE_VARIABLES: &[(&str, &str)] = &[
     (
         "HOOK_TEST_TELEMETRY_KEYS",
         "nothing (test environments were removed)",
+    ),
+    ("HOOK_TELEMETRY", "nothing (Hook records no telemetry)"),
+    (
+        "HOOK_TELEMETRY_TABLE_KEY",
+        "nothing (Hook records no telemetry)",
+    ),
+    (
+        "HOOK_TELEMETRY_SPOOL_DIR",
+        "nothing (Hook records no telemetry)",
     ),
     (
         "HOOK_HONEYCOMB_SERVICE_TOKEN",
@@ -1403,6 +1412,24 @@ mod tests {
                     .starts_with("HOOK_IAM_BASE_URL is no longer read; use ACCOUNTS_URL"))
         );
         assert!(settings.ting.base_url.is_none());
+        Ok(())
+    }
+
+    #[test]
+    fn removed_telemetry_variables_are_reported_not_used() -> Result<(), SettingsError> {
+        let mut environment = valid_api_environment("production");
+        environment.0.insert("HOOK_TELEMETRY", "on".to_owned());
+        environment
+            .0
+            .insert("HOOK_TELEMETRY_TABLE_KEY", "table-key".to_owned());
+        let settings = ApiSettings::load(&environment)?;
+        assert_eq!(settings.obsolete_variables.len(), 2);
+        assert!(
+            settings
+                .obsolete_variables
+                .iter()
+                .all(|line| line.ends_with("use nothing (Hook records no telemetry)"))
+        );
         Ok(())
     }
 

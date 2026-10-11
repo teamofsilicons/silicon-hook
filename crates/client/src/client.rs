@@ -15,6 +15,10 @@ pub const DEFAULT_URL: &str = "https://api.hook.teamofsilicons.com";
 /// The API major this client speaks.
 pub const API_VERSION: &str = "v3";
 
+/// Hook records no telemetry. Every request still says `X-Hook-Telemetry: off`
+/// so a Hook server older than 1.1.0 records nothing about it either.
+const TELEMETRY_OPT_OUT: (&str, &str) = ("x-hook-telemetry", "off");
+
 /// Stable identifier for one logical mutation. Reuse it when retrying the same
 /// change after an uncertain outcome; Hook then answers with the first result.
 #[derive(Clone, Debug)]
@@ -64,7 +68,6 @@ pub struct Client {
     pub(crate) http: reqwest::Client,
     pub(crate) token: Option<Secret>,
     negotiated: Arc<OnceCell<()>>,
-    pub(crate) telemetry: bool,
     pub(crate) trace_id: Uuid,
 }
 
@@ -101,7 +104,6 @@ impl Client {
             http,
             token: None,
             negotiated: Arc::default(),
-            telemetry: true,
             trace_id: Uuid::now_v7(),
         })
     }
@@ -123,13 +125,12 @@ impl Client {
         client
     }
 
-    /// Controls optional diagnostics (default on). `SILICON_HOOK_TELEMETRY=off`
-    /// always wins.
+    /// Does nothing: Hook records no telemetry. Kept so code written for
+    /// earlier releases still compiles.
+    #[deprecated(since = "1.1.0", note = "Hook records no telemetry; remove this call")]
     #[must_use]
-    pub fn with_telemetry(&self, enabled: bool) -> Self {
-        let mut client = self.clone();
-        client.telemetry = enabled;
-        client
+    pub fn with_telemetry(&self, _enabled: bool) -> Self {
+        self.clone()
     }
 
     /// The Hook origin.
@@ -144,38 +145,18 @@ impl Client {
         self.token.is_some()
     }
 
-    pub(crate) fn telemetry_enabled(&self) -> bool {
-        self.telemetry
-            && std::env::var("SILICON_HOOK_TELEMETRY").map_or(true, |v| {
-                !matches!(v.to_ascii_lowercase().as_str(), "off" | "false" | "0")
-            })
-    }
-
-    /// Sends one best-effort diagnostic event (no payloads, no credentials,
-    /// never user input). Only documented names are accepted by Hook; nothing
-    /// is sent without a token or with telemetry off. Waits at most 500 ms.
+    /// Does nothing and sends nothing: Hook records no telemetry. Kept so code
+    /// written for earlier releases still compiles.
+    #[deprecated(since = "1.1.0", note = "Hook records no telemetry; remove this call")]
     pub async fn emit_telemetry(
         &self,
-        source: &str,
-        step: &str,
-        outcome: &str,
-        operation: &str,
-        duration_ms: u64,
-        progress: u32,
+        _source: &str,
+        _step: &str,
+        _outcome: &str,
+        _operation: &str,
+        _duration_ms: u64,
+        _progress: u32,
     ) {
-        if !self.telemetry_enabled() || self.token.is_none() {
-            return;
-        }
-        let event = serde_json::json!({
-            "event_id": Uuid::now_v7(), "trace_id": self.trace_id, "source": source,
-            "step": step, "outcome": outcome, "operation": operation,
-            "duration_ms": duration_ms, "progress": progress,
-            "version": env!("CARGO_PKG_VERSION"),
-            "os": std::env::consts::OS, "arch": std::env::consts::ARCH,
-        });
-        if let Ok(request) = self.request(Method::POST, &["telemetry"], &[], Some(&event), None) {
-            let _ = request.timeout(Duration::from_millis(500)).send().await;
-        }
     }
 
     /// Checks that the server is Silicon Hook and serves API v3. Runs once per
@@ -190,7 +171,7 @@ impl Client {
                     .http
                     .get(self.url(&["api", "version"])?)
                     .header("silicon-hook-supported-api-versions", API_VERSION)
-                    .header("x-hook-telemetry", self.telemetry_header())
+                    .header(TELEMETRY_OPT_OUT.0, TELEMETRY_OPT_OUT.1)
                     .send()
                     .await?;
                 let data: serde_json::Value = self.decode(response).await?;
@@ -325,14 +306,6 @@ impl Client {
         Ok(())
     }
 
-    fn telemetry_header(&self) -> &'static str {
-        if self.telemetry_enabled() {
-            "on"
-        } else {
-            "off"
-        }
-    }
-
     fn request<B: Serialize + ?Sized>(
         &self,
         method: Method,
@@ -349,7 +322,7 @@ impl Client {
             .query(query)
             .header("silicon-hook-api-version", API_VERSION)
             .header("x-request-id", self.trace_id.to_string())
-            .header("x-hook-telemetry", self.telemetry_header());
+            .header(TELEMETRY_OPT_OUT.0, TELEMETRY_OPT_OUT.1);
         if let Some(token) = &self.token {
             request = request.bearer_auth(token.expose());
         }

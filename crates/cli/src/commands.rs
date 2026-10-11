@@ -450,7 +450,7 @@ async fn system(cli: &Cli) -> CliResult<()> {
         .map(|loaded| loaded.profile(&cli.profile))
         .unwrap_or_default();
     let urls = session::urls(cli, &profile);
-    let client = session::hook_client(&urls.hook, profile.telemetry)?;
+    let client = session::hook_client(&urls.hook)?;
     let value = match &cli.command {
         Command::System {
             action: System::Version,

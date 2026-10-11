@@ -15,7 +15,7 @@ for database in "${databases[@]}"; do
   docker exec hook-postgres pg_dump -U postgres -Fc "$database" > "$backup_dir/$database.dump"
 done
 config_files=(credentials.json db-tls)
-for optional in accounts.json accounts.env iam.json telemetry.env; do
+for optional in accounts.json accounts.env iam.json; do
   if [ -f "/opt/silicon-hook/$optional" ]; then config_files+=("$optional"); fi
 done
 tar -czf "$backup_dir/config.tar.gz" -C /opt/silicon-hook "${config_files[@]}"

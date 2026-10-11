@@ -93,7 +93,7 @@ hook.update_hook("si:scout", created.hook.id, &UpdateHook {
 first call the client checks `/api/version`: the server must be `silicon-hook`
 serving API `v3`, and every request then pins `Silicon-Hook-API-Version: v3`.
 
-`with_token` and `with_telemetry` return new, immutable clients. Every `silicon`
+`with_token` returns a new, immutable client. Every `silicon`
 argument accepts the Silicon's current `si:` id or its uuid; responses show
 accounts as `{uuid, id}` (and `kind` for `created_by`, grants and the like).
 
@@ -105,7 +105,9 @@ accounts as `{uuid, id}` (and `kind` for `created_by`, grants and the like).
 | Silicon Accounts updates | `connect_accounts_hook` |
 | History | `events`, `blocked_requests`, `event` |
 | Delivery through Ting | `delivery_status`, `register_recipient`, `receiving_subscription`, `subscribe`, `unsubscribe`, `publication`, `delivery_context`, `resolve_notification`, `hydrate_notification` |
-| Diagnostics | `emit_telemetry` (opt-out with `with_telemetry(false)` or `SILICON_HOOK_TELEMETRY=off`) |
+
+Hook records no telemetry; the deprecated `with_telemetry` and `emit_telemetry`
+do nothing.
 
 Mutations take a `Mutation`: one idempotency key per logical change. Reuse the
 same `Mutation` when retrying after an uncertain result, and Hook answers with

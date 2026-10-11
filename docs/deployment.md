@@ -100,9 +100,9 @@ Configure the Vercel project root as `docs-site`. The `vercel.json` file declare
 
 The `bug-report.yml` GitHub workflow sends newly opened issues, including CLI reports and their optional PR links, through Postmark. Configure repository secret `POSTMARK_SERVER_TOKEN` and verify `hook@teamofsilicons.com` as a sender. Repository variable `POSTMARK_FROM_EMAIL` can override that sender. Recipients match the project requirements: `saketdev12@gmail.com`, `shubhastro2@gmails.com`, and `bugs@teamofsilicons.com`. The second address intentionally preserves the spelling in the requirements. The workflow reads report text as data and never interpolates it into shell code. It sends no local logs or Hook credentials. See the [Postmark email API](https://postmarkapp.com/developer/api/email-api) for sender and server-token setup.
 
-## Space Station export
+## Telemetry
 
-Apply migration 0008 and the updated worker grants, then supply the dedicated `HOOK_TELEMETRY_TABLE_KEY` securely to the worker. Mount `HOOK_TELEMETRY_SPOOL_DIR` as a persistent private directory. Never put this key in browser environment variables, CLI distributions or docs. Restart the worker after changing its configuration. `HOOK_TELEMETRY=off` stops collection and export. See [telemetry](telemetry.md) for retention and delivery semantics.
+Hook records no telemetry.
 
 ## CLI release artifacts
 

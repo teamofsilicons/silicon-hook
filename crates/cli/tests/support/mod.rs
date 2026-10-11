@@ -298,7 +298,6 @@ async fn hook_api(State(stub): State<Arc<Stub>>, request: Request<Body>) -> Resp
     };
     match method.as_str() {
         "GET" if path == "/api/v3/auth/status" => Json(json!({"authenticated": true, "app_id": "hook", "uuid": account.0, "id": account.1, "kind": account.2})).into_response(),
-        "POST" if path == "/api/v3/telemetry" => StatusCode::ACCEPTED.into_response(),
         "GET" if path == "/api/v3/silicons" => Json(json!({"items": [{"silicon": silicon_ref(), "access": if account.2 == "carbon" {"custodian"} else {"self"}, "custodian": CARBON.0}]})).into_response(),
         "GET" if path == "/api/v3/delivery" => Json(json!({"enabled": false, "reason": "Delivery through Ting is turned off on this Hook (HOOK_TING_URL is not set)."})).into_response(),
         "POST" if path == "/api/v3/delivery/recipient" => hook_error(StatusCode::CONFLICT, "delivery_disabled", "Delivery through Ting is turned off on this Hook."),
@@ -407,6 +406,7 @@ impl Home {
                 .as_secs(),
         )
         .expect("i64");
+        // A 1.0.0 CLI also wrote "telemetry"; it must still load.
         self.write_state(
             &json!({"schema": 1, "profiles": {"default": {"telemetry": true, "session": {
                 "app_id": "hook", "accounts_url": server.url, "url": server.url,
@@ -467,11 +467,7 @@ pub async fn hook_env(
     stdin: Option<&str>,
 ) -> Run {
     let mut command = tokio::process::Command::new(env!("CARGO_BIN_EXE_hook"));
-    command
-        .args(args)
-        .env_clear()
-        .env("PATH", "/usr/bin:/bin")
-        .env("SILICON_HOOK_TELEMETRY", "off");
+    command.args(args).env_clear().env("PATH", "/usr/bin:/bin");
     if let Some(home) = home {
         command
             .env("HOME", home)

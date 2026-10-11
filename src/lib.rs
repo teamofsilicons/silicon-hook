@@ -17,9 +17,9 @@ pub mod delivery;
 pub mod domain;
 pub mod error;
 pub mod infrastructure;
+pub mod logging;
 pub mod request_context;
 pub mod shutdown;
-pub mod telemetry;
 pub mod worker;
 
 #[cfg(test)]

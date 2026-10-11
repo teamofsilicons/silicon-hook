@@ -1,4 +1,4 @@
-//! Per-request dependency scoping, contract admission and request telemetry.
+//! Per-request dependency scoping and contract admission.
 
 use axum::{
     extract::{Request, State},
@@ -9,8 +9,8 @@ use http::HeaderMap;
 
 use super::state::ApiState;
 
-/// Makes the API state available to handlers, admits versioned requests
-/// against the persisted contract lifecycle and records request telemetry.
+/// Makes the API state available to handlers and admits versioned requests
+/// against the persisted contract lifecycle.
 pub(super) async fn scope(
     State(state): State<ApiState>,
     mut request: Request,
@@ -25,10 +25,8 @@ pub(super) async fn scope(
         } else {
             HeaderMap::new()
         };
-    let telemetry = super::telemetry_events::RequestEvent::start(&state, &request);
     request.extensions_mut().insert(state);
     let mut response = next.run(request).await;
     response.headers_mut().extend(contract_headers);
-    telemetry.finish(response.status());
     response
 }

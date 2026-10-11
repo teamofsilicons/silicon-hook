@@ -94,10 +94,6 @@ fn versioned_router(prefix: &str, settings: &ServerSettings) -> Router<ApiState>
     let route = |suffix: &str| format!("{prefix}{suffix}");
     let system = Router::new()
         .route(&route("/version"), get(handlers::version))
-        .route(
-            &route("/telemetry"),
-            post(super::telemetry_events::ingest).layer(DefaultBodyLimit::max(8192)),
-        )
         // Sign-in discovery works before any bearer exists.
         .route(&route("/auth/accounts"), get(accounts::sign_in_information))
         .route(&route("/auth/status"), get(accounts::status));

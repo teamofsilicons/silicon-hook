@@ -19,7 +19,7 @@ handed to Silicon Apps.
 ## Versions
 
 The service (`silicon-hook`), the client (`silicon-hook-client`) and the CLI
-(`silicon-hook-cli`) share one version, `1.0.0` today. A release tag is
+(`silicon-hook-cli`) share one version, `1.1.0` today. A release tag is
 `v<version>` and must equal `crates/cli/Cargo.toml`; the package manifest takes
 its version from the same file, so the three never disagree. Breaking API changes
 also need a new API major ([contracts](contracts.md)).
@@ -58,7 +58,7 @@ To package a build yourself:
 
 ```sh
 cargo build --locked --release -p silicon-hook-cli
-scripts/package-apps.sh 1.0.0 macos-aarch64 target/release/hook
+scripts/package-apps.sh 1.1.0 macos-aarch64 target/release/hook
 ```
 
 It needs Python 3.9 or newer and `silicon-apps` 0.2
@@ -80,10 +80,10 @@ An author of the `hook` app uploads after review, from a signed-in
 `silicon-apps`:
 
 ```sh
-silicon-apps upload hook --target linux-x86_64 hook-1.0.0-linux-x86_64.tar.gz
-silicon-apps upload hook --target linux-aarch64 hook-1.0.0-linux-aarch64.tar.gz
-silicon-apps release hook --version 1.0.0 --package PACKAGE_ID --package PACKAGE_ID
-silicon-apps promote hook DEVELOPMENT_RELEASE_ID --version 1.0.0
+silicon-apps upload hook --target linux-x86_64 hook-1.1.0-linux-x86_64.tar.gz
+silicon-apps upload hook --target linux-aarch64 hook-1.1.0-linux-aarch64.tar.gz
+silicon-apps release hook --version 1.1.0 --package PACKAGE_ID --package PACKAGE_ID
+silicon-apps promote hook DEVELOPMENT_RELEASE_ID --version 1.1.0
 ```
 
 A new release starts in the development channel (`hook>dev`); promoting it makes
@@ -114,7 +114,18 @@ ignored by git.
 
 ## Release notes
 
-### 1.0.0 (not yet released)
+### 1.1.0 (not yet released)
+
+- Hook records no telemetry. The service, worker, CLI and client no longer
+  collect, store or send diagnostic events, and `POST /api/v3/telemetry` is gone.
+- `hook config set telemetry on|off` is still accepted and changes nothing.
+  The client's `with_telemetry` and `emit_telemetry` are deprecated and do
+  nothing; every request says `X-Hook-Telemetry: off` to older servers.
+- Deployments need no telemetry settings: `HOOK_TELEMETRY`,
+  `HOOK_TELEMETRY_TABLE_KEY` and `HOOK_TELEMETRY_SPOOL_DIR` are no longer read.
+  No migration.
+
+### 1.0.0
 
 - Carbons and Silicons sign in with Silicon Accounts: `hook login` (device code)
   or `silicon-accounts login --app hook -q | hook login --slt-stdin`.

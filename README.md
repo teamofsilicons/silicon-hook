@@ -114,8 +114,8 @@ One Rust modular monolith with independently scalable processes:
   and Hook's Silicon Accounts webhook (`POST /webhook`), and publishes committed
   records through Ting when delivery is on.
 - `hook-worker` purges 14-day logs, expired 45-day deletions, stale address
-  blocks and expired idempotency records in bounded, fair batches, and exports
-  telemetry.
+  blocks and expired idempotency records in bounded, fair batches. Hook records
+  no telemetry.
 - `hook-migrate` is the only process that applies PostgreSQL migrations; its
   `link-identities` command links identities stored before 1.0 to Silicon
   Accounts uuids.

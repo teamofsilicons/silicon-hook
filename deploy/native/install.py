@@ -40,9 +40,10 @@ ACCOUNTS_KEYS = frozenset({
 })
 API_REQUIRED = ('HOOK_APP_SECRET', 'HOOK_ACCOUNTS_WEBHOOK_SECRET')
 # Settings of Hook before 1.0 (previous sign-in, test environments, lifecycle
-# callbacks, the v1 WebSocket). HOOK_TING_BASE_URL is not carried over to
+# callbacks, the v1 WebSocket), and the telemetry settings of 1.0 (Hook records
+# no telemetry since 1.1). HOOK_TING_BASE_URL is not carried over to
 # HOOK_TING_URL: delivery through Ting stays off until it is set on purpose.
-RETIRED_PREFIXES = ('HOOK_IAM_', 'HOOK_TEST_', 'HOOK_HONEYCOMB_', 'HOOK_REALTIME_')
+RETIRED_PREFIXES = ('HOOK_IAM_', 'HOOK_TEST_', 'HOOK_HONEYCOMB_', 'HOOK_REALTIME_', 'HOOK_TELEMETRY')
 RETIRED_KEYS = frozenset({'HOOK_ALLOW_LOCAL_AUTH', 'HOOK_TING_BASE_URL', 'HOOK_PROVIDER_CONNECT_TIMEOUT_MS'})
 RETIRED_DATABASE_KEYS = ('HOOK_TEST_MIGRATOR_DATABASE_URL',)
 
@@ -62,8 +63,6 @@ def native_settings(values):
     for key, value in values.items():
         if key.endswith('DATABASE_URL'):
             converted[key] = value.replace('/run/hook-db/ca.crt', str(ROOT / 'db-tls/ca.crt'))
-    if converted.get('HOOK_TELEMETRY_SPOOL_DIR') == '/var/lib/hook-telemetry':
-        converted['HOOK_TELEMETRY_SPOOL_DIR'] = str(ROOT / 'telemetry-spool')
     return converted
 
 
@@ -242,7 +241,7 @@ def main():
     (backup / 'rollback.json').write_text(json.dumps({'previous_release': str(previous) if previous else None, 'legacy': legacy}))
     run('aws', 's3', 'cp', str(backup) + '/', 's3://' + args.backup_bucket + '/backups/native/' + stamp + '/',
         '--recursive', '--sse', 'AES256', '--only-show-errors')
-    # The existing container UID owns the retained telemetry spool.
+    # The service account keeps UID 10001, the UID the earlier containers ran as.
     try:
         if pwd.getpwuid(10001).pw_name != 'silicon-hook':
             raise ValueError('UID 10001 belongs to another host user')

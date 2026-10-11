@@ -83,10 +83,6 @@ fn import_legacy(folder: &Path) -> State {
             url: text("url").filter(|url| url.trim_end_matches('/') != LEGACY_DEFAULT_URL),
             accounts_url: None,
             silicon: text("silicon"),
-            telemetry: old
-                .get("telemetry")
-                .and_then(Value::as_bool)
-                .unwrap_or(true),
             session: None,
             previous_version_session: signed_in,
         };

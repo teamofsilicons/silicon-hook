@@ -10,7 +10,7 @@ use silicon_hook::{
         self,
         identity_links::{IdentityMapping, link_identities, parse_mapping},
     },
-    telemetry,
+    logging,
 };
 
 const HELP: &str = "\
@@ -50,7 +50,7 @@ async fn main() -> anyhow::Result<()> {
 
 async fn migrate() -> anyhow::Result<()> {
     let settings = MigrationSettings::from_env()?;
-    telemetry::init(&settings.process)?;
+    logging::init(&settings.process)?;
     let pool = postgres::connect(&settings.database, "hook-migrate").await?;
     postgres::migrate(&pool).await?;
     pool.close().await;
@@ -82,7 +82,7 @@ async fn link(args: &[String]) -> anyhow::Result<()> {
     let mapping = parse_mapping(&bytes).map_err(|errors| anyhow::anyhow!("{errors}"))?;
     verify_mapping_accounts(&mapping).await?;
     let settings = MigrationSettings::from_env()?;
-    telemetry::init(&settings.process)?;
+    logging::init(&settings.process)?;
     let pool = postgres::connect(&settings.database, "hook-migrate-link").await?;
     let report = link_identities(&pool, &mapping, dry_run)
         .await

@@ -266,7 +266,6 @@ async fn run() -> Result<(), ()> {
     }
     let client = Client::new(&config.hook_url)
         .map_err(|_| ())?
-        .with_telemetry(false)
         .with_token(config.hook_token);
     let receiver = Receiver::new(
         DeliveryContext {

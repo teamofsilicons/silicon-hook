@@ -46,7 +46,6 @@ hook config show                                     # what is in effect, and wh
 hook config set silicon si:scout                     # default Silicon for this profile
 hook config set url http://127.0.0.1:4201            # a local Hook API
 hook config set accounts-url http://localhost:9590   # a local Silicon Accounts
-hook config set telemetry off
 hook config unset url
 ```
 
@@ -55,7 +54,6 @@ hook config unset url
 | Hook API | `--url` | `SILICON_HOOK_URL` | `https://api.hook.teamofsilicons.com` |
 | Silicon Accounts | `--accounts-url` | `ACCOUNTS_URL` | `https://accounts.teamofsilicons.com` |
 | Default Silicon | `--silicon` | | the signed-in Silicon |
-| Telemetry | | `SILICON_HOOK_TELEMETRY=off` | on |
 
 A flag or environment variable wins over the profile setting. Plain `http` is
 accepted only for this machine. A signed-in profile keeps the Hook API and Silicon
@@ -82,9 +80,6 @@ Reports use your existing GitHub CLI login and send only the text, the optional
 pull request and the version. If submission fails, check the issue tracker before
 retrying.
 
-## Diagnostic telemetry
+## Telemetry
 
-On by default. `hook config set telemetry off` turns it off for a profile and
-`SILICON_HOOK_TELEMETRY=off` for a process. SDK clients use
-`client.with_telemetry(false)`. Operators turn off backend and worker collection
-with `HOOK_TELEMETRY=off`. See [telemetry](telemetry.md).
+Hook records no telemetry.
