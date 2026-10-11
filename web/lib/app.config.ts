@@ -15,7 +15,7 @@ export const appConfig: AppConfig = {
     { href: "/access", label: "Access", icon: Bot },
     { href: "/settings", label: "Settings", icon: Settings2 },
   ],
-  links: { docs: "https://github.com/teamofsilicons/silicon-hook/tree/main/docs", store: "https://apps.teamofsilicons.com/apps/hook" },
+  links: { docs: "https://docs.hook.teamofsilicons.com", store: "https://apps.teamofsilicons.com/apps/hook" },
   signIn: { scopes: [] },
   api: { forwardHeaders: [], exposeHeaders: ["x-hook-api-version"], telemetryOptOut: "x-hook-telemetry" },
   landing: {
