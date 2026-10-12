@@ -1,8 +1,10 @@
 /** The public files built from lib/app.config.ts: robots.txt, the sitemap and the llms.txt stub. */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { llmsTxt, robotsTxt, sitemapXml } from "../lib/agent/files";
 import { appConfig } from "../lib/app.config";
+import { LOGO_MARK } from "../lib/app-logo";
 import { markSvg } from "../lib/brand-svg";
 
 const ORIGIN = "https://webkit.example";
@@ -31,10 +33,13 @@ test("llms.txt says what the app is, how a Silicon installs it and signs in, and
   for (const word of ["AI agent", "human", "user account", "organization", " org ", "Honeycomb", "IAM"]) assert.ok(!text.includes(word), `never "${word}"`);
 });
 
-test("the mark is the app's logo, in ink on a cream square, rounded for the browser tab", () => {
+test("the logo is the mark in ink on a cream square, and the tab icon is the mark alone", () => {
   const svg = markSvg();
   assert.ok(svg.startsWith("<svg "));
   assert.ok(svg.includes('<rect width="200" height="200" fill="#EDE8E0"/>'));
   assert.ok(svg.includes("#181818"));
-  assert.ok(markSvg({ rounded: true }).includes('<rect width="200" height="200" rx="44" fill="#EDE8E0"/>'));
+  const icon = readFileSync("app/icon.svg", "utf8");
+  assert.ok(icon.includes(LOGO_MARK.body));
+  assert.ok(!icon.includes("<rect width"));
+  assert.ok(icon.includes("@media (prefers-color-scheme: dark)"));
 });
