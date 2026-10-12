@@ -1,7 +1,7 @@
 /**
- * The app's mark: its glyph (lib/app.config.ts `mark`, lucide-style paths on a 24 by 24 grid) in ink, beside the name in
- * the pixel face, as Silicon Writings, Silicon Apps and Silicon Accounts draw theirs. The icons (app/icon.tsx,
- * app/apple-icon.tsx) and the Open Graph image draw the same glyph in #181818 on a cream square (lib/brand-svg.ts).
+ * The app's mark: the mark of its logo (lib/app-logo.ts `LOGO_MARK`) in ink, beside the name in the pixel face, as
+ * Silicon Writings, Silicon Apps and Silicon Accounts draw theirs. The icons (app/icon.tsx, app/apple-icon.tsx) and the
+ * Open Graph image draw the whole logo, the mark in #181818 on a cream square (lib/brand-svg.ts).
  * Plain SVG, server-rendered, shared by the landing page, the sign-in page and the signed-in shell.
  *
  *   <AppMark />                 the bare glyph at 22 px
@@ -10,13 +10,13 @@
  */
 import type { CSSProperties } from "react";
 import { appConfig } from "@/lib/app.config";
+import { LOGO_MARK } from "@/lib/app-logo";
 import styles from "./app-mark.module.css";
 
-export function AppGlyph({ size = 18, strokeWidth = 2 }: { size?: number; strokeWidth?: number }) {
+/** The mark alone, in the text colour. `strokeWidth` is kept for callers; the logo's own weights are drawn as they are. */
+export function AppGlyph({ size = 18 }: { size?: number; strokeWidth?: number }) {
   return (
-    <svg viewBox="0 0 24 24" width={size} height={size} fill="none" stroke="currentColor" strokeWidth={strokeWidth} strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" focusable="false">
-      {appConfig.mark.paths.map(d => <path key={d} d={d} />)}
-    </svg>
+    <svg viewBox={LOGO_MARK.viewBox} width={size} height={size} aria-hidden="true" focusable="false" dangerouslySetInnerHTML={{ __html: LOGO_MARK.body }} />
   );
 }
 
