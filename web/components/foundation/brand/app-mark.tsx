@@ -1,7 +1,8 @@
 /**
  * The app's mark: the mark of its logo (lib/app-logo.ts `LOGO_MARK`) in ink, beside the name in the pixel face, as
- * Silicon Writings, Silicon Apps and Silicon Accounts draw theirs. The icons (app/icon.tsx, app/apple-icon.tsx) and the
- * Open Graph image draw the whole logo, the mark in #181818 on a cream square (lib/brand-svg.ts).
+ * Silicon Writings, Silicon Apps and Silicon Accounts draw theirs. The browser-tab icon (app/icon.svg) is the same mark
+ * alone; the home-screen icon (app/apple-icon.tsx) and the Open Graph image draw the whole logo, the mark in #181818 on a
+ * cream square (lib/brand-svg.ts).
  * Plain SVG, server-rendered, shared by the landing page, the sign-in page and the signed-in shell.
  *
  *   <AppMark />                 the bare glyph at 22 px
