@@ -1,7 +1,7 @@
 /**
  * "Give me a session whose access token is good for a while": the one decision proxy.ts (page loads), /auth/refresh (the
  * browser's session keeper) and /api/* make before using a session, each with its own lead time (REFRESH_AHEAD).
- * Refreshing goes through the single-flight refresh in tokens.ts.
+ * Every lookup resolves durable state; refreshing uses a saved random operation key in tokens.ts.
  */
 import { REFRESH_AHEAD, type StoredSession } from "./session";
 import { refreshSession, signInEnded } from "./tokens";
@@ -16,12 +16,11 @@ export type Freshness =
 
 export async function freshSession(session: StoredSession | null, ahead: keyof typeof REFRESH_AHEAD, headers: Record<string, string>, now = Date.now()): Promise<Freshness> {
   if (!session) return { kind: "signed_out", message: "This browser is not signed in (no session, or it ended).", clear: false };
-  if (session.ae - now > REFRESH_AHEAD[ahead]) return { kind: "fresh", session, rotated: false };
-  const result = await refreshSession(session, headers);
-  if (result.ok) return { kind: "fresh", session: result.session, rotated: true };
+  const result = await refreshSession(session, headers, REFRESH_AHEAD[ahead]);
+  if (result.ok) return { kind: "fresh", session: result.session, rotated: result.session.rt !== session.rt || result.session.sid !== session.sid };
   if (result.error === "accounts_unreachable") return { kind: "unavailable", status: 502, code: "accounts_unreachable", message: result.description };
   if (signInEnded(result)) return { kind: "signed_out", message: `Your sign-in ended: ${result.description}`, clear: true };
   // A token that is still valid keeps working while Silicon Accounts has a moment.
-  if (session.ae > now + 5_000) return { kind: "fresh", session, rotated: false };
+  if (result.error !== "session_storage_unavailable" && session.ae > now + 5_000) return { kind: "fresh", session, rotated: false };
   return { kind: "unavailable", status: 503, code: "refresh_failed", message: `Refreshing the sign-in failed: ${result.description}` };
 }

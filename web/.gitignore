@@ -27,3 +27,5 @@ npm-debug.log*
 
 # Reproducible visual verification artifacts
 /screens/
+
+.dev/

@@ -1,20 +1,23 @@
-/**
- * GET /auth/session: whether this browser is signed in, who as, and when the access token expires, answered from the
- * sealed cookie alone (no call to Silicon Accounts, never a token). The browser's session keeper reads `expires_at` to
- * refresh ahead of time; a signed-out visit gets a plain `{"signed_in": false}` instead of a 401.
- */
+/** The session keeper reads durable state, so old cookies and late responses cannot revive a signed-out session. */
 import type { NextRequest } from "next/server";
 import { EnvError } from "@/lib/server/env";
+import { freshSession } from "@/lib/server/fresh";
 import { json, misconfigured } from "@/lib/server/responses";
-import { readSession } from "@/lib/server/session";
+import { clearSession, clientHeaders, errorBody, readSession, writeSession } from "@/lib/server/session";
 
 export const dynamic = "force-dynamic";
-
-export function GET(request: NextRequest) {
+export async function GET(request: NextRequest) {
   try {
-    const session = readSession(request);
-    if (!session) return json(200, { signed_in: false });
-    return json(200, { signed_in: true, account: session.acct, expires_at: new Date(session.ae).toISOString() });
+    const state = await freshSession(readSession(request), "api", clientHeaders(request));
+    if (state.kind === "unavailable") return json(state.status, errorBody(state.code, state.message));
+    if (state.kind === "signed_out") {
+      const response = json(200, { signed_in: false });
+      if (state.clear) clearSession(response);
+      return response;
+    }
+    const response = json(200, { signed_in: true, account: state.session.acct, expires_at: new Date(state.session.ae).toISOString() });
+    if (state.rotated) writeSession(response, state.session);
+    return response;
   } catch (error) {
     if (error instanceof EnvError) return misconfigured(error);
     throw error;

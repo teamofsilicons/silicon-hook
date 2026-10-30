@@ -17,6 +17,7 @@ import { cookies, headers } from "next/headers";
 import { notFound, redirect } from "next/navigation";
 import { ApiError, errorFromResponse, networkError, type ApiErrorInit } from "../errors";
 import { serverEnv } from "./env";
+import { freshSession } from "./fresh";
 import { clientHeaders, safeReturnPath, sessionCookieName, sessionFromCookie, type SessionAccount, type StoredSession } from "./session";
 
 /** What a page may know about the session: never the tokens. */
@@ -34,7 +35,9 @@ async function currentPath(): Promise<string> {
 
 async function storedSession(): Promise<StoredSession | null> {
   const store = await cookies();
-  return sessionFromCookie(store.get(sessionCookieName())?.value);
+  const state = await freshSession(sessionFromCookie(store.get(sessionCookieName())?.value), "api", clientHeaders({ headers: await headers() }));
+  if (state.kind === "unavailable") throw new ApiError({ status: state.status, code: state.code, message: state.message });
+  return state.kind === "fresh" ? state.session : null;
 }
 
 const toPublic = (session: StoredSession): PublicSession => ({ account: session.acct, expiresAt: session.ae, scope: session.scope });

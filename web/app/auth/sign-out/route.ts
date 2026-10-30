@@ -24,7 +24,11 @@ export async function POST(request: NextRequest) {
   const problem = sameOriginProblem(request);
   if (problem) return json(403, errorBody("cross_site_request", problem, "Sign out from this site's own account menu."));
   const session = readSession(request);
-  if (session) await revokeSession(session, clientHeaders(request));
+  try {
+    if (session) await revokeSession(session, clientHeaders(request));
+  } catch {
+    return json(503, errorBody("sign_out_unavailable", "Sign-out could not be saved. Please retry shortly."));
+  }
   const wantsPage = (request.headers.get("accept") ?? "").includes("text/html") && request.headers.get("sec-fetch-mode") === "navigate";
   const response = wantsPage ? redirectTo(new URL("/sign-in?signed_out=1", env.publicUrl)) : new NextResponse(null, { status: 204, headers: { "Cache-Control": "no-store" } });
   clearSession(response);

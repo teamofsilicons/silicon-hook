@@ -1,3 +1,18 @@
+import { setRefreshStoreForTests, type Entry, type RefreshStore } from "../lib/server/refresh-store";
+
+export function memoryRefreshStore(): RefreshStore {
+  const rows = new Map<string, Entry<unknown>>();
+  return {
+    async read<T>(key: string) { return structuredClone(rows.get(key) ?? null) as Entry<T> | null; },
+    async write<T>(key: string, previous: number | null, value: T) {
+      const row = rows.get(key);
+      if (previous === null ? !!row : row?.version !== previous) return false;
+      rows.set(key, structuredClone({ version: (previous ?? -1) + 1, value }));
+      return true;
+    },
+  };
+}
+
 /** A complete, valid environment for the unit tests (nothing here reaches a real service: fetch is replaced per test). */
 export const SECRET = "test-session-secret-test-session-secret-0001";
 
@@ -17,6 +32,7 @@ export function applyTestEnv(overrides: Record<string, string | undefined> = {})
   const env = process.env as Record<string, string | undefined>;
   for (const key of ["APP_ID", "APP_SECRET", "ACCOUNTS_URL", "ACCOUNTS_API_URL", "APP_API_URL", "SESSION_SECRET", "PUBLIC_URL", "EXTRA_IMG_ORIGINS", "EXTRA_ORIGINS"]) delete env[key];
   Object.assign(env, TEST_ENV);
+  setRefreshStoreForTests(memoryRefreshStore());
   for (const [key, value] of Object.entries(overrides)) {
     if (value === undefined) delete env[key];
     else env[key] = value;

@@ -2,11 +2,8 @@
  * The browser's view of its session (who is signed in, and when the access token expires: never a token) and the
  * session keeper that refreshes it ahead of time.
  *
- * Why the browser coordinates refreshing: refresh tokens rotate on every use, and two refreshes with the same one end
- * the whole sign-in. The server refreshes single-flight per process, but serverless instances share nothing. So the
- * keeper asks POST /auth/refresh once, 5 minutes before expiry, one tab at a time (navigator.locks), tells the other tabs
- * (BroadcastChannel), and makes API calls wait for it when the token is about to run out (ensureFreshSession). Page
- * loads refresh at 2 minutes and the API proxy only at 30 seconds, so in practice one refresh happens at a time.
+ * The server persists each random refresh operation and the current session across processes. The keeper's tab
+ * lock reduces duplicate work; durable server state provides correctness after retries, restarts and late cookies.
  */
 import { useCallback, useState, useSyncExternalStore } from "react";
 import { appConfig } from "../app.config";
@@ -92,7 +89,12 @@ export function refreshSessionNow(): Promise<SessionView> {
       schedule(RETRY_MS);
       return state;
     }
-    set(viewOf((await response.json().catch(() => ({}))) as SessionAnswer), true);
+    const body = await response.json().catch(() => null) as SessionAnswer | null;
+    if (!body || body.signed_in !== true || !body.account || !body.expires_at || !Number.isFinite(Date.parse(body.expires_at))) {
+      schedule(RETRY_MS);
+      return state;
+    }
+    set(viewOf(body), true);
     return state;
   }).finally(() => {
     refreshing = null;

@@ -22,6 +22,8 @@ export type { AccountKind, SessionAccount } from "../account";
 /** What the session cookie holds (sealed). */
 export interface StoredSession {
   v: 1;
+  /** Durable server session identity; absent on cookies issued before recovery support. */
+  sid?: string;
   /** Access token (an EdDSA JWT, aud = this app, 30 minutes). */
   at: string;
   /** Refresh token (sar_…, rotates on every use). */

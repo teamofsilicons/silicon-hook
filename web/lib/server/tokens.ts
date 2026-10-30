@@ -1,13 +1,7 @@
-/**
- * Calls to the Silicon Accounts token endpoints with this app's credentials (HTTP Basic app_id:app_secret, server side
- * only): the code exchange at the end of a sign-in, refreshing, and revoking on sign-out.
- *
- * Refresh tokens rotate on every use, and presenting a used one revokes the whole sign-in (Accounts treats it as theft).
- * So refreshing is single-flight per refresh token in this process, and the answer is remembered for a minute: requests
- * the browser sent with the old cookie before the new one arrived get the same new tokens instead of presenting the
- * used refresh token again. Across server instances nothing is shared; see README.md (Refresh) for how the kit keeps
- * concurrent refreshes rare (the browser's session keeper refreshes ahead, one tab at a time).
- */
+/** Accounts refreshes use a durable random operation key shared by every server and retry. */
+import { randomUUID } from "node:crypto";
+import { createSession, endSession, locateSession } from "./refresh-state";
+import { refreshStore } from "./refresh-store";
 import { basicAuth, callbackUrl, serverEnv } from "./env";
 import { accountFrom, type StoredSession } from "./session";
 
@@ -20,6 +14,7 @@ interface TokenBody {
   access_token?: string;
   refresh_token?: string;
   expires_in?: number;
+  access_token_expires_at?: string;
   refresh_token_expires_at?: string;
   scope?: string;
   account?: unknown;
@@ -57,14 +52,17 @@ async function tokenCall(form: Record<string, string>, headers: Record<string, s
     return { ok: false, status: 502, error: "token_failed", description: "The token endpoint answered without the account the tokens belong to." };
   }
   const now = Date.now();
+  const accessEnds = body.access_token_expires_at ? Date.parse(body.access_token_expires_at) : now + (body.expires_in ?? 1800) * 1000;
+  if (!Number.isFinite(accessEnds)) return { ok: false, status: 502, error: "token_failed", description: "Accounts returned an invalid access-token expiry." };
   const refreshEnds = body.refresh_token_expires_at ? Date.parse(body.refresh_token_expires_at) : NaN;
   return {
     ok: true,
     session: {
       v: 1,
+      ...(previous?.sid ? { sid: previous.sid } : {}),
       at: body.access_token,
       rt: body.refresh_token,
-      ae: now + Math.max(60, body.expires_in ?? 1800) * 1000,
+      ae: accessEnds,
       re: Number.isFinite(refreshEnds) ? refreshEnds : previous?.re ?? now + NINE_HUNDRED_DAYS,
       scope: body.scope ?? previous?.scope ?? "profile",
       acct: account,
@@ -73,47 +71,70 @@ async function tokenCall(form: Record<string, string>, headers: Record<string, s
 }
 
 /** Exchanges the code from /auth/callback (PKCE: the verifier proves this server started the sign-in). */
-export function exchangeCode(code: string, verifier: string, headers: Record<string, string>): Promise<TokenResult> {
-  return tokenCall({ grant_type: "authorization_code", code, redirect_uri: callbackUrl(), code_verifier: verifier }, headers);
+export async function exchangeCode(code: string, verifier: string, headers: Record<string, string>): Promise<TokenResult> {
+  try {
+    await refreshStore();
+    const result = await tokenCall({ grant_type: "authorization_code", code, redirect_uri: callbackUrl(), code_verifier: verifier }, headers);
+    return result.ok ? { ok: true, session: await createSession(result.session) } : result;
+  } catch (error) {
+    console.error("Browser session storage failed", error instanceof Error ? error.name : "UnknownError");
+    return storageUnavailable();
+  }
 }
 
-interface RefreshMemo {
-  promise: Promise<TokenResult>;
-  /** Until when a finished refresh is handed to requests that still carry the old refresh token. */
-  until: number;
+function storageUnavailable(): TokenResult {
+  return { ok: false, status: 503, error: "session_storage_unavailable", description: "Your sign-in could not be read or saved. Please retry shortly; your session has not been cleared." };
 }
+const ended = (): TokenResult => ({ ok: false, status: 400, error: "invalid_grant", description: "This sign-in has ended." });
+const pending = (): TokenResult => ({ ok: false, status: 503, error: "refresh_in_progress", description: "Your sign-in is being refreshed. Please retry shortly." });
 
-/** One refresh per refresh token per process (on globalThis: every route handler bundle and proxy.ts share it). */
-const shared = globalThis as typeof globalThis & { __siliconWebKitRefreshes?: Map<string, RefreshMemo> };
-const memos: Map<string, RefreshMemo> = (shared.__siliconWebKitRefreshes ??= new Map<string, RefreshMemo>());
-
-/** How long a finished refresh is remembered for requests still carrying the old refresh token. */
-export const REFRESH_MEMO_MS = 60_000;
-
-/** Rotates the refresh token (single-flight; see the module comment). */
-export function refreshSession(session: StoredSession, headers: Record<string, string>): Promise<TokenResult> {
-  const now = Date.now();
-  for (const [key, memo] of memos) if (memo.until < now) memos.delete(key);
-  const existing = memos.get(session.rt);
-  if (existing) return existing.promise;
-  const promise = tokenCall({ grant_type: "refresh_token", refresh_token: session.rt }, headers, session);
-  const memo: RefreshMemo = { promise, until: now + 2 * REFRESH_MEMO_MS };
-  memos.set(session.rt, memo);
-  void promise.then(result => {
-    // A failure is not remembered for long: a network blip must not end the session for a minute.
-    memo.until = result.ok ? Date.now() + REFRESH_MEMO_MS : Date.now() + 2_000;
-  });
-  return promise;
+/** Resolves the current server session, rotating only when necessary. Cookie tokens are never authoritative. */
+export async function refreshSession(session: StoredSession, headers: Record<string, string>, ahead = 30_000): Promise<TokenResult> {
+  try {
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const { store, key, entry } = await locateSession(session);
+      const current = entry.value;
+      if (current.revoked || current.session.re <= Date.now()) return ended();
+      if (!current.operation && current.session.ae > Date.now() + ahead) return { ok: true, session: current.session };
+      if (!current.operation) {
+        // Persist BEFORE sending: a crash, timeout, second process or second tab reuses this random key.
+        if (!await store.write(key, entry.version, { ...current, operation: { key: randomUUID(), token: current.session.rt } }, current.session.re)) continue;
+        continue;
+      }
+      if (current.operation.token !== current.session.rt) return storageUnavailable();
+      const result = await tokenCall({ grant_type: "refresh_token", refresh_token: current.session.rt }, { ...headers, "Idempotency-Key": current.operation.key }, current.session);
+      if (!result.ok) {
+        // A winner may have committed while this request was waiting, or sign-out may have won.
+        const latest = await store.read<typeof current>(key);
+        if (!latest || latest.version !== entry.version) continue;
+        if (["refresh_in_progress", "refresh_superseded"].includes(result.error)) {
+          await new Promise(resolve => setTimeout(resolve, 1_000));
+          continue;
+        }
+        return result; // 409, transport errors, app configuration errors and 5xx never clear the session.
+      }
+      // Save even an already-expired recovered access token: its successor refresh token is still needed.
+      // CAS loses to sign-out or a newer rotation; neither can be overwritten by a late response.
+      await store.write(key, entry.version, { session: result.session }, result.session.re);
+      // Read again even after success: every caller gets the current generation, never its stale reply.
+    }
+    return pending();
+  } catch (error) {
+    console.error("Browser session storage failed", error instanceof Error ? error.name : "UnknownError");
+    return storageUnavailable();
+  }
 }
 
 /** Codes from the token endpoint that mean the sign-in is over (sign in again), as opposed to a passing failure. */
 export function signInEnded(result: Extract<TokenResult, { ok: false }>): boolean {
-  return result.error === "invalid_grant" || result.error === "invalid_client" || result.error === "unauthorized_client";
+  return result.error === "invalid_grant";
 }
 
 /** Ends the sign-in at Silicon Accounts (best effort: the cookie is cleared either way). RFC 7009: 200 whatever happened. */
-export async function revokeSession(session: Pick<StoredSession, "rt">, headers: Record<string, string>): Promise<boolean> {
+export async function revokeSession(session: Pick<StoredSession, "rt"> & Partial<StoredSession>, headers: Record<string, string>): Promise<boolean> {
   const env = serverEnv();
+  // A failed durable sign-out must be retried; clearing only the cookie lets an in-flight response restore it.
+  if (session.acct && session.re) await endSession(session as StoredSession);
   try {
     const response = await fetch(`${env.accountsApiUrl}/v1/oauth/revoke`, {
       method: "POST",
@@ -122,15 +143,12 @@ export async function revokeSession(session: Pick<StoredSession, "rt">, headers:
       cache: "no-store",
       signal: AbortSignal.timeout(10_000),
     });
-    const body = (await response.json().catch(() => null)) as { revoked?: unknown } | null;
-    return response.ok && body?.revoked === true;
+    return response.ok;
   } catch {
     // The cookie goes anyway; the refresh token then simply expires unused.
     return false;
   }
 }
 
-/** Forgets every remembered refresh (tests). */
-export function forgetRefreshes(): void {
-  memos.clear();
-}
+/** Compatibility for callers that previously reset the process-local cache. State is now durable. */
+export function forgetRefreshes(): void {}

@@ -109,11 +109,11 @@ test("signing out revokes the refresh token and clears the cookie; only from thi
 });
 
 test("the session view never shows a token, and the keeper's refresh only acts inside its lead time", async () => {
-  const view = await sessionRoute(new NextRequest("http://127.0.0.1:4260/auth/session", { headers: { cookie: `webkit_session=${sealSession(session())}` } })).json();
+  const view = await (await sessionRoute(new NextRequest("http://127.0.0.1:4260/auth/session", { headers: { cookie: `webkit_session=${sealSession(session())}` } }))).json();
   assert.equal(view.signed_in, true);
   assert.equal(view.account.id, "c:ada");
   assert.ok(!JSON.stringify(view).includes("sar_") && !JSON.stringify(view).includes("eyJ"));
-  assert.deepEqual(await sessionRoute(new NextRequest("http://127.0.0.1:4260/auth/session")).json(), { signed_in: false });
+  assert.deepEqual(await (await sessionRoute(new NextRequest("http://127.0.0.1:4260/auth/session"))).json(), { signed_in: false });
 
   const mock = mockFetch(() => json(200, tokenBody(8)));
   restore = mock.restore;
@@ -121,7 +121,7 @@ test("the session view never shows a token, and the keeper's refresh only acts i
   const early = await refresh(new NextRequest("http://127.0.0.1:4260/auth/refresh", { method: "POST", headers: headers(session()) }));
   assert.equal(early.status, 200);
   assert.equal(mock.calls.length, 0, "20 minutes left: nothing to do");
-  assert.equal(early.headers.get("set-cookie"), null);
+  assert.ok(early.headers.get("set-cookie"), "adopts the legacy cookie with a durable session id");
   const due = await refresh(new NextRequest("http://127.0.0.1:4260/auth/refresh", { method: "POST", headers: headers(session({ ae: Date.now() + 4 * 60_000, rt: "sar_due" })) }));
   assert.equal(due.status, 200);
   assert.equal(mock.calls.length, 1);

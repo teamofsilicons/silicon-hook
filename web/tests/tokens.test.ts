@@ -56,43 +56,41 @@ test("a refused exchange keeps the RFC 6749 error, and an unreachable Accounts s
   }
 });
 
-test("concurrent refreshes of one sign-in make one request, and late requests get the same answer", async () => {
-  let served = 0;
+test("concurrent refreshes share one operation, and late requests read the saved answer", async () => {
   const mock = mockFetch(async () => {
-    served += 1;
     await delay(40);
-    return json(200, tokenBody(served));
+    return json(200, tokenBody(1));
   });
   restore = mock.restore;
   const old = session();
   const results = await Promise.all([1, 2, 3, 4, 5].map(() => refreshSession(old, {})));
-  assert.equal(mock.calls.length, 1, "one request for five callers");
+  assert.equal(mock.calls.length, 5);
+  assert.equal(new Set(mock.calls.map(c => new Headers(c.init.headers).get("Idempotency-Key"))).size, 1);
   assert.deepEqual(form(mock.calls[0]!.init), { grant_type: "refresh_token", refresh_token: "sar_old" });
   assert.equal((mock.calls[0]!.init.headers as Record<string, string>).Authorization, BASIC);
   const tokens = new Set(results.map(result => (result.ok ? result.session.rt : "failed")));
   assert.deepEqual([...tokens], ["sar_refresh_1"]);
   // A request that still carried the old cookie a moment later gets the same new tokens: the used one is never sent again.
   const late = await refreshSession(old, {});
-  assert.equal(mock.calls.length, 1);
+  assert.equal(mock.calls.length, 5);
   assert.equal(late.ok && late.session.rt, "sar_refresh_1");
   // The next sign-in (another refresh token) refreshes on its own.
   await refreshSession(session({ rt: "sar_other" }), {});
-  assert.equal(mock.calls.length, 2);
+  assert.equal(mock.calls.length, 6);
 });
 
-test("a failed refresh is remembered only briefly, so a network blip does not end the session for a minute", async () => {
+test("a failed refresh retries the same saved operation immediately", async () => {
   let fail = true;
   const mock = mockFetch(() => (fail ? Promise.reject(new TypeError("socket hang up")) : json(200, tokenBody(7))));
   restore = mock.restore;
   const first = await refreshSession(session(), {});
   assert.equal(first.ok, false);
   const second = await refreshSession(session(), {});
-  assert.equal(mock.calls.length, 1, "the failure is shared for a moment");
+  assert.equal(mock.calls.length, 2);
   assert.equal(second.ok, false);
   fail = false;
-  await delay(2_100);
   const third = await refreshSession(session(), {});
-  assert.equal(mock.calls.length, 2);
+  assert.equal(mock.calls.length, 3);
   assert.equal(third.ok && third.session.rt, "sar_refresh_7");
 });
 
@@ -116,7 +114,8 @@ test("freshSession refreshes only inside the lead time, and tells an ended sign-
   const mock = mockFetch(() => answer());
   restore = mock.restore;
   const plenty = session({ ae: Date.now() + 20 * 60_000 });
-  assert.deepEqual(await freshSession(plenty, "page", {}), { kind: "fresh", session: plenty, rotated: false });
+  const adopted = await freshSession(plenty, "page", {});
+  assert.ok(adopted.kind === "fresh" && adopted.session.at === plenty.at && adopted.session.sid && adopted.rotated);
   assert.equal(mock.calls.length, 0);
   const keeper = await freshSession(session({ ae: Date.now() + 4 * 60_000, rt: "sar_k" }), "keeper", {});
   assert.equal(keeper.kind === "fresh" && keeper.rotated, true);
