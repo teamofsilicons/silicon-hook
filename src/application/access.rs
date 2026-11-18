@@ -166,11 +166,17 @@ impl HookApplication {
                     .map(|exp| exp - ACCESS_TOKEN_LIFETIME)
             })
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        self.require_active_token(token).await?;
         let cached = self.store.account(&uuid).await.map_err(map_store_error)?;
-        if cached
-            .as_ref()
-            .is_some_and(|account| account.deleted_at.is_some())
-        {
+        let record = match cached {
+            Some(record) if record.public_id == id || id.is_none() => record,
+            _ => self
+                .store
+                .observe_token_account(&uuid, kind, id.as_ref(), issued_at)
+                .await
+                .map_err(map_store_error)?,
+        };
+        if record.deleted_at.is_some() {
             return Err(refused(
                 401,
                 "account_deleted",
@@ -179,7 +185,7 @@ impl HookApplication {
         }
         // A JWT has whole-second precision. In the sign-out second, live
         // introspection distinguishes a new sign-in from one that just ended.
-        if let Some(at) = cached.as_ref().and_then(|account| account.revoked_before)
+        if let Some(at) = record.revoked_before
             && issued_at.unix_timestamp() < at.unix_timestamp()
         {
             let at = at.format(&Rfc3339).unwrap_or_else(|_| at.to_string());
@@ -189,15 +195,6 @@ impl HookApplication {
                 format!("This sign-in ended at {at}. Sign in to Hook again."),
             ));
         }
-        self.require_active_token(token).await?;
-        let record = match cached {
-            Some(record) if record.public_id == id || id.is_none() => record,
-            _ => self
-                .store
-                .observe_token_account(&uuid, kind, id.as_ref(), issued_at)
-                .await
-                .map_err(map_store_error)?,
-        };
         if kind == ActorKind::Silicon && record.custodian_checked_at.is_none() {
             // Tokens do not name a Silicon's custodian. Learn it once, so the
             // custodian's list of Silicons includes this one; a failure here

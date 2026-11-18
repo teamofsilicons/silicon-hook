@@ -319,6 +319,61 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn browser_preflight_and_auth_errors_are_readable_without_cookies()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let Some(api) = test_api().await? else {
+            return Ok(());
+        };
+        let origin = "https://standalone.example";
+        let preflight = Request::builder()
+            .method("OPTIONS")
+            .uri("/api/v3/silicons/si:cos/hooks")
+            .header("origin", origin)
+            .header("access-control-request-method", "PATCH")
+            .header(
+                "access-control-request-headers",
+                "authorization,content-type,idempotency-key",
+            )
+            .body(Body::empty())?;
+        let (status, headers, _) = call(&api, preflight).await?;
+        assert!(status.is_success());
+        assert_eq!(headers["access-control-allow-origin"], "*");
+        assert!(
+            headers["access-control-allow-methods"]
+                .to_str()?
+                .contains("PATCH")
+        );
+        assert!(
+            headers["access-control-allow-headers"]
+                .to_str()?
+                .contains("authorization")
+        );
+        assert!(!headers.contains_key("access-control-allow-credentials"));
+
+        let request = Request::get("/api/v3/auth/status")
+            .header("origin", origin)
+            .body(Body::empty())?;
+        let (status, headers, _) = call(&api, request).await?;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(headers["access-control-allow-origin"], "*");
+        assert!(
+            headers["access-control-expose-headers"]
+                .to_str()?
+                .contains("x-request-id")
+        );
+
+        let webhook = Request::builder()
+            .method("OPTIONS")
+            .uri("/webhook")
+            .header("origin", origin)
+            .body(Body::empty())?;
+        let (status, headers, _) = call(&api, webhook).await?;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert!(!headers.contains_key("access-control-allow-origin"));
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn sign_in_discovery_is_public_and_status_reports_the_account()
     -> Result<(), Box<dyn std::error::Error>> {
         let Some(api) = test_api().await? else {

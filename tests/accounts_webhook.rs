@@ -354,8 +354,8 @@ async fn a_token_from_the_sign_out_second_is_settled_by_silicon_accounts() -> Re
     assert_eq!(status_of(&api, &newer).await?.0, StatusCode::OK);
     assert_eq!(
         api.accounts.introspections(),
-        asked + 1,
-        "only the newer token can be admitted and requires introspection"
+        asked + 2,
+        "both locally valid tokens are checked with Accounts"
     );
 
     let after_it = token(second, 601);
@@ -367,7 +367,7 @@ async fn a_token_from_the_sign_out_second_is_settled_by_silicon_accounts() -> Re
     assert_eq!(status_of(&api, &after_it).await?.0, StatusCode::OK);
     assert_eq!(
         api.accounts.introspections(),
-        asked + 3,
+        asked + 4,
         "each admitted request checks again"
     );
 
