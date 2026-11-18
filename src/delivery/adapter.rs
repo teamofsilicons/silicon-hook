@@ -2,11 +2,11 @@
 //!
 //! - Sends and receipts use an App verification proof for Ting's app
 //!   (`HOOK_TING_APP_ID`, `ting` by default; scopes `tings.send` and
-//!   `sent.query`). Hook keeps each proof and
+//!   `tings.read`). Hook keeps each proof and
 //!   its rotating refresh token in memory, refreshes single-flight shortly
 //!   before expiry, and issues a new proof when a refresh is refused.
 //! - Enrolling a recipient uses a User verification proof (scope
-//!   `tings.subscribe`) issued from the caller's own Hook access token while
+//!   `subscriptions.register`) issued from the caller's own Hook access token while
 //!   the request is live; it is used once and never stored.
 //!
 //! - A failed proof request pauses further ones for that scope (30 seconds,
@@ -37,9 +37,9 @@ pub const TING_APP_ID: &str = crate::config::DEFAULT_TING_APP_ID;
 /// Scope of the App verification proof Hook sends with.
 pub const SEND_SCOPE: &str = "tings.send";
 /// Scope of the App verification proof Hook reads receipts with.
-pub const RECEIPT_SCOPE: &str = "sent.query";
+pub const RECEIPT_SCOPE: &str = "tings.read";
 /// Scope of the User verification proof that enrols a recipient.
-pub const SUBSCRIBE_SCOPE: &str = "tings.subscribe";
+pub const SUBSCRIBE_SCOPE: &str = "subscriptions.register";
 /// A cached proof is renewed this long before it expires.
 const RENEW_BEFORE_EXPIRY: time::Duration = time::Duration::seconds(60);
 /// Pause after a first failed proof request; it doubles with each consecutive

@@ -3,14 +3,27 @@ on:
   push:
     branches: ['proof/**']
   workflow_dispatch:
+    inputs:
+      version:
+        description: Version of the packed Hook CLI
+        required: true
+        type: string
+      build_run_id:
+        description: Successful release archive workflow run
+        required: true
+        type: string
+      source_commit:
+        description: Full Git commit built by the release archive workflow
+        required: true
+        type: string
 permissions:
   contents: read
   actions: read
 env:
   RELEASE_APP_ID: hook
-  RELEASE_VERSION: 1.0.0
-  BUILD_RUN_ID: '38056559921'
-  BUILD_SOURCE_COMMIT: 49db2fd473e104e594fe823d2310d6eb8bbf50c9
+  RELEASE_VERSION: ${{ inputs.version || '1.0.0' }}
+  BUILD_RUN_ID: ${{ inputs.build_run_id || '38056559921' }}
+  BUILD_SOURCE_COMMIT: ${{ inputs.source_commit || '49db2fd473e104e594fe823d2310d6eb8bbf50c9' }}
 jobs:
   native:
     name: Verify ${{ matrix.target }}

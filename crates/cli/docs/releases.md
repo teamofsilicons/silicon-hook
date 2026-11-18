@@ -19,7 +19,7 @@ handed to Silicon Apps.
 ## Versions
 
 The service (`silicon-hook`), the client (`silicon-hook-client`) and the CLI
-(`silicon-hook-cli`) share one version, `1.1.0` today. A release tag is
+(`silicon-hook-cli`) share one version, `1.1.2` today. A release tag is
 `v<version>` and must equal `crates/cli/Cargo.toml`; the package manifest takes
 its version from the same file, so the three never disagree. Breaking API changes
 also need a new API major ([contracts](contracts.md)).
@@ -58,7 +58,7 @@ To package a build yourself:
 
 ```sh
 cargo build --locked --release -p silicon-hook-cli
-scripts/package-apps.sh 1.1.0 macos-aarch64 target/release/hook
+scripts/package-apps.sh 1.1.2 macos-aarch64 target/release/hook
 ```
 
 It needs Python 3.9 or newer and `silicon-apps` 0.2
@@ -70,20 +70,20 @@ without packing.
 
 ## Hand the release to Silicon Apps
 
-Silicon Apps validates every uploaded package by running the three commands on a
-worker for its target. Today the four Linux workers are live, so `linux-x86_64`
-and `linux-aarch64` (what the Silicons' hosts run) can be uploaded. The macOS
-and Windows archives are built with every release and kept for when their
-workers go live; `silicon-apps capabilities` shows which are live now.
+Silicon Apps validates Linux packages on its workers. For macOS and Windows,
+run the **Verify existing native Apps archives** workflow using the release
+version, archive build run ID and source commit. Each job executes the packaged
+binary on its target. After the checks pass, supply `--confirm-platform-checks`
+when uploading the matching macOS and Windows archives.
 
 An author of the `hook` app uploads after review, from a signed-in
 `silicon-apps`:
 
 ```sh
-silicon-apps upload hook --target linux-x86_64 hook-1.1.0-linux-x86_64.tar.gz
-silicon-apps upload hook --target linux-aarch64 hook-1.1.0-linux-aarch64.tar.gz
-silicon-apps release hook --version 1.1.0 --package PACKAGE_ID --package PACKAGE_ID
-silicon-apps promote hook DEVELOPMENT_RELEASE_ID --version 1.1.0
+silicon-apps upload hook --target linux-x86_64 hook-1.1.2-linux-x86_64.tar.gz
+silicon-apps upload hook --target linux-aarch64 hook-1.1.2-linux-aarch64.tar.gz
+silicon-apps release hook --version 1.1.2 --package PACKAGE_ID --package PACKAGE_ID
+silicon-apps promote hook DEVELOPMENT_RELEASE_ID --version 1.1.2
 ```
 
 A new release starts in the development channel (`hook>dev`); promoting it makes
@@ -114,7 +114,13 @@ ignored by git.
 
 ## Release notes
 
-### 1.1.0 (not yet released)
+### 1.1.2
+
+Standalone interfaces can use every Hook management operation from their own origin. Hook publishes its OpenAPI contract at `/api/openapi.yaml` and checks each protected call against live Accounts access. [Interface guide](https://docs.hook.teamofsilicons.com/interfaces/)
+
+New Ting notifications use `hook.webhookReceived`. The Rust receiver accepts this type and the older `hook.webhook.received` found in history. Update type filters in standalone receivers to accept both names.
+
+### 1.1.0
 
 - Hook records no telemetry. The service, worker, CLI and client no longer
   collect, store or send diagnostic events, and `POST /api/v3/telemetry` is gone.

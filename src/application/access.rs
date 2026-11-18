@@ -166,6 +166,7 @@ impl HookApplication {
                     .map(|exp| exp - ACCESS_TOKEN_LIFETIME)
             })
             .unwrap_or(OffsetDateTime::UNIX_EPOCH);
+        self.require_active_token(token).await?;
         let cached = self.store.account(&uuid).await.map_err(map_store_error)?;
         let record = match cached {
             Some(record) if record.public_id == id || id.is_none() => record,
@@ -182,20 +183,16 @@ impl HookApplication {
                 "This account was deleted in Silicon Accounts; its tokens no longer work.",
             ));
         }
-        if let Some(revoked_before) = record.revoked_before
-            && self
-                .ended_by_sign_out(token, issued_at, revoked_before)
-                .await?
+        // A JWT has whole-second precision. In the sign-out second, live
+        // introspection distinguishes a new sign-in from one that just ended.
+        if let Some(at) = record.revoked_before
+            && issued_at.unix_timestamp() < at.unix_timestamp()
         {
-            let at = revoked_before
-                .format(&Rfc3339)
-                .unwrap_or_else(|_| revoked_before.to_string());
+            let at = at.format(&Rfc3339).unwrap_or_else(|_| at.to_string());
             return Err(refused(
                 401,
                 "session_ended",
-                format!(
-                    "This sign-in ended at {at} (signed out or Hook's access removed in Silicon Accounts). Sign in again: hook login (Carbons) or hook login --slt with a token from silicon-accounts login --app hook -q (Silicons)."
-                ),
+                format!("This sign-in ended at {at}. Sign in to Hook again."),
             ));
         }
         if kind == ActorKind::Silicon && record.custodian_checked_at.is_none() {
@@ -215,34 +212,7 @@ impl HookApplication {
         ))
     }
 
-    /// Whether a sign-out Hook was told about (at `revoked_before`) ended the
-    /// sign-in this token belongs to. `iat` has whole seconds: a token from an
-    /// earlier second is older, one from a later second newer, and one from
-    /// the sign-out's own second is settled by Silicon Accounts.
-    async fn ended_by_sign_out(
-        &self,
-        token: &str,
-        issued_at: OffsetDateTime,
-        revoked_before: OffsetDateTime,
-    ) -> Result<bool, ApplicationError> {
-        let sign_out_second = revoked_before
-            .replace_nanosecond(0)
-            .unwrap_or(revoked_before);
-        if issued_at < sign_out_second {
-            return Ok(true);
-        }
-        if issued_at >= revoked_before {
-            return Ok(false);
-        }
-        self.accounts
-            .issued_after_sign_out(token, revoked_before)
-            .await
-            .map(|after| !after)
-            .map_err(accounts_unavailable)
-    }
-
-    /// Confirms with Silicon Accounts that the token is still active, for
-    /// operations that reveal secrets or change who has access.
+    /// Confirms that Silicon Accounts still recognizes this bearer as a Hook access token.
     ///
     /// # Errors
     ///

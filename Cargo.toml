@@ -1,6 +1,6 @@
 [package]
 name = "silicon-hook"
-version = "1.1.0"
+version = "1.1.2"
 edition = "2024"
 rust-version = "1.98"
 publish = false
@@ -62,7 +62,7 @@ thiserror = "2.0.17"
 time = { version = "0.3.55", features = ["formatting", "macros", "parsing", "serde"] }
 tokio = { version = "1.53.1", features = ["macros", "net", "rt-multi-thread", "signal", "sync", "time"] }
 tower = { version = "0.5.2", features = ["buffer", "limit", "load-shed", "timeout", "util"] }
-tower-http = { version = "0.7.0", features = ["catch-panic", "limit", "request-id", "sensitive-headers", "set-header", "timeout", "trace"] }
+tower-http = { version = "0.7.0", features = ["catch-panic", "cors", "limit", "request-id", "sensitive-headers", "set-header", "timeout", "trace"] }
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.20", features = ["env-filter", "json"] }
 url = { version = "2.5.7", features = ["serde"] }

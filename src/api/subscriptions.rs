@@ -5,7 +5,7 @@ use http::{HeaderMap, StatusCode};
 use serde::Serialize;
 
 use super::{
-    auth::{self, Check},
+    auth,
     delivery::{delivery, delivery_error},
     handlers::{map_application_error, require_empty_body, secret_response_headers},
     state::ApiState,
@@ -51,7 +51,7 @@ pub(super) async fn get(
     Path(silicon): Path<String>,
     headers: HeaderMap,
 ) -> Result<(HeaderMap, Json<SubscriptionResponse>), AppError> {
-    let (_, context) = auth::authorize(&state, &headers, &silicon, Check::Local).await?;
+    let (_, context) = auth::authorize(&state, &headers, &silicon).await?;
     require_observer(&context)?;
     let subscription = subscriptions::get(
         state.application.store(),
@@ -78,9 +78,9 @@ pub(super) async fn subscribe(
     body: Bytes,
 ) -> Result<(HeaderMap, Json<SubscriptionResponse>), AppError> {
     require_empty_body(&body)?;
-    let ting = delivery(&state)?;
-    let (caller, context) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    let (caller, context) = auth::authorize(&state, &headers, &silicon).await?;
     require_observer(&context)?;
+    let ting = delivery(&state)?;
     let recipient = TingRecipient {
         uuid: caller.actor.uuid().as_str().to_owned(),
         id: caller.actor.id().map(|id| id.as_str().to_owned()),
@@ -113,7 +113,7 @@ pub(super) async fn unsubscribe(
     body: Bytes,
 ) -> Result<StatusCode, AppError> {
     require_empty_body(&body)?;
-    let caller = auth::authenticate(&state, &headers, Check::Local).await?;
+    let caller = auth::authenticate(&state, &headers).await?;
     let silicon = state
         .application
         .resolve_silicon(&silicon)

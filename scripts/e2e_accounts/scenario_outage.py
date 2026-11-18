@@ -33,7 +33,7 @@ def stop_relay(h, process):
 
 
 def scenario_9(h):
-    h.begin(9, "Silicon Accounts stops answering: local checks and ingress keep working, the rest says why")
+    h.begin(9, "Silicon Accounts stops answering: protected reads and writes fail closed, ingress keeps working")
     relay_port = h.dev.base + 3
     target_port = urllib.parse.urlsplit(h.accounts_api).port or 80
     stack = dict(h.dev.stack, accounts_api_url=f"http://127.0.0.1:{relay_port}")
@@ -51,8 +51,9 @@ def scenario_9(h):
         h.check("with Silicon Accounts reachable, the custodian reads the hooks (keys fetched)", status == 200,
                 {"status": status})
         stop_relay(h, relay)
-        status, _ = h.call("GET", f"silicons/{h.s1.uuid}/hooks", h.c1)
-        h.check("cut off: reads verified locally keep working", status == 200, {"status": status})
+        status, denied = h.call("GET", f"silicons/{h.s1.uuid}/hooks", h.c1)
+        h.check("cut off: protected reads require live introspection",
+                status == 503 and denied["error"]["code"] == "accounts_unavailable", {"status": status})
         code, out, err = h.hook(h.s1.home, "login", "status", "--json")
         h.check("cut off: hook login status still says signed in", code == 0 and out.get("authenticated") is True,
                 out or err)

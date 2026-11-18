@@ -109,7 +109,7 @@ async fn query(
             .map(|(_, (_, _, sent))| sent.clone())
     });
     let sent = sent.unwrap_or_default();
-    let mut detail = json!({"id": body["id"], "type": "hook.webhook.received", "for": sent["for"],
+    let mut detail = json!({"id": body["id"], "type": "hook.webhookReceived", "for": sent["for"],
         "read": true, "silent": false,
         "deliveries": [{"webhook_id": "wh_1", "delivery_acked": true, "read_acked": true}]});
     if sent["delivery"] == "required" {
@@ -179,13 +179,10 @@ async fn accepted_events_reach_the_silicon_and_its_observers_with_accounts_proof
     let enrolment = ting.calls("subscribe");
     assert_eq!(enrolment.len(), 1);
     assert!(
-        enrolment[0].0.starts_with("Proof sap_stub_"),
+        enrolment[0].0.starts_with("Bearer sap_stub_"),
         "{enrolment:?}"
     );
-    assert_eq!(
-        enrolment[0].1["for"],
-        json!({"uuid": "CAlice1", "id": "c:alice"})
-    );
+    assert_eq!(enrolment[0].1["for"], json!("CAlice1"));
     assert_eq!(
         api.call(Method::POST, subscription, Some(&bob), None)
             .await?
@@ -221,10 +218,10 @@ async fn accepted_events_reach_the_silicon_and_its_observers_with_accounts_proof
     assert_eq!(sends.len(), 2);
     for (authorization, body) in &sends {
         assert!(
-            authorization.starts_with("Proof sap_stub_"),
+            authorization.starts_with("Bearer sap_stub_"),
             "{authorization}"
         );
-        assert_eq!(body["type"], "hook.webhook.received");
+        assert_eq!(body["type"], "hook.webhookReceived");
         assert_eq!(
             body["data"]["data"]["metadata"]["silicon"],
             json!({"uuid": "SCos1", "id": "si:cos"})
@@ -232,18 +229,12 @@ async fn accepted_events_reach_the_silicon_and_its_observers_with_accounts_proof
     }
     let to_silicon = sends
         .iter()
-        .find(|(_, body)| body["for"]["uuid"] == "SCos1")
+        .find(|(_, body)| body["for"] == "SCos1")
         .context("send to Cos")?;
-    assert_eq!(
-        (
-            to_silicon.1["for"]["id"].clone(),
-            to_silicon.1["delivery"].clone()
-        ),
-        (json!("si:cos"), json!("required"))
-    );
+    assert_eq!(to_silicon.1["delivery"], "required");
     let to_alice = sends
         .iter()
-        .find(|(_, body)| body["for"]["uuid"] == "CAlice1")
+        .find(|(_, body)| body["for"] == "CAlice1")
         .context("copy for Alice")?;
     assert!(
         to_alice.1.get("delivery").is_none(),
@@ -263,7 +254,7 @@ async fn accepted_events_reach_the_silicon_and_its_observers_with_accounts_proof
             .iter()
             .any(|proof| proof["kind"] == "user_verification"
                 && proof["subject_token"] == alice.as_str()
-                && proof["scopes"] == json!(["tings.subscribe"])),
+                && proof["scopes"] == json!(["subscriptions.register"])),
         "{proofs:?}"
     );
 

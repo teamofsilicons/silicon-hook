@@ -7,6 +7,11 @@ ignore = [
   # never loads, stores, or uses an RSA private key, so the affected code path
   # is unreachable. No fixed release of `rsa` exists; revisit when one ships.
   { id = "RUSTSEC-2023-0071", reason = "public-key verification only; no RSA private-key operations" },
+  # The Accounts SDK still pulls crypto-bigint 0.5 through jsonwebtoken 11.
+  # Hook verifies Accounts tokens with EdDSA. Its P-256 provider path only
+  # parses public keys and verifies public signatures. Revisit when the SDK
+  # supports jsonwebtoken 12, or before adding any private EC operations.
+  { id = "RUSTSEC-2026-0387", reason = "the affected EC arithmetic handles only public verification inputs" },
 ]
 
 [bans]

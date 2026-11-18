@@ -16,7 +16,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use crate::domain::{AccountUuid, EventId, EventRecord};
-use crate::infrastructure::ting::{TingDeliveryMode, TingRecipient, deserialize_delivery};
+use crate::infrastructure::ting::{TingDeliveryMode, deserialize_delivery};
 
 use super::{PostgresStore, Result, StoreError};
 
@@ -148,7 +148,7 @@ impl TingSendFailure {
 #[serde(deny_unknown_fields)]
 struct PreparedTing {
     #[serde(rename = "for")]
-    recipient: TingRecipient,
+    recipient: String,
     #[serde(rename = "type")]
     notification_type: String,
     key: String,
@@ -174,7 +174,7 @@ fn prepared_key(body: &[u8], recipient: &AccountUuid) -> Result<String> {
     let request: PreparedTing = serde_json::from_slice(body).map_err(|_| invalid())?;
     // Parsing validates the optional mode without changing these immutable bytes.
     let _ = request.delivery;
-    if request.recipient.uuid != recipient.as_str()
+    if request.recipient != recipient.as_str()
         || request.key.is_empty()
         || request.key.len() > 200
         || request.key.chars().any(char::is_control)
@@ -453,7 +453,7 @@ mod tests {
     fn body(recipient: &str, key: &str) -> Vec<u8> {
         serde_json::to_vec(&serde_json::json!({
             "type": "hook.webhook.received",
-            "for": {"uuid": recipient, "id": "si:cos"},
+            "for": recipient,
             "key": key,
             "data": {"type": "new_event", "data": {"sender": "GitHub", "metadata": {}}},
             "metadata": {},
@@ -472,7 +472,7 @@ mod tests {
         assert!(prepared_key(&body("8Hv", "event-key"), &recipient).is_err());
         let legacy = br#"{"org_id":"tos","for":"si:cos","type":"hook.webhook.received","key":"k","data":{}}"#;
         assert!(prepared_key(legacy, &recipient).is_err());
-        let with_token = br#"{"for":{"uuid":"8HV","id":"si:cos"},"type":"t","key":"k","data":{},"token":"secret"}"#;
+        let with_token = br#"{"for":"8HV","type":"t","key":"k","data":{},"token":"secret"}"#;
         assert!(prepared_key(with_token, &recipient).is_err());
         Ok(())
     }
@@ -535,11 +535,25 @@ mod tests {
         migrate(store.pool()).await?;
         let silicon = AccountUuid::new("8HV")?;
         let event = seed_event(&store, &silicon).await?;
+        let recipient = crate::infrastructure::ting::TingRecipient {
+            uuid: "8HV".into(),
+            id: Some("si:cos".into()),
+        };
+        let reference = crate::delivery::ReferencedSilicon {
+            uuid: "8HV".into(),
+            id: Some("si:cos".into()),
+        };
+        let prepared = crate::delivery::prepare_event(
+            "hook",
+            &event,
+            &reference,
+            &recipient,
+            crate::infrastructure::ting::TingDeliveryMode::Required,
+        )?;
+        assert!(prepared_key(&prepared, &silicon)?.starts_with("hook:"));
         let mut transaction = store.pool().begin().await?;
-        let first =
-            enqueue_ting(&mut transaction, &event, &silicon, &body("8HV", "k1"), None).await?;
-        let again =
-            enqueue_ting(&mut transaction, &event, &silicon, &body("8HV", "k1"), None).await?;
+        let first = enqueue_ting(&mut transaction, &event, &silicon, &prepared, None).await?;
+        let again = enqueue_ting(&mut transaction, &event, &silicon, &prepared, None).await?;
         assert_eq!(first, again, "the same bytes enqueue once");
         assert!(
             enqueue_ting(&mut transaction, &event, &silicon, &body("8HV", "k2"), None)

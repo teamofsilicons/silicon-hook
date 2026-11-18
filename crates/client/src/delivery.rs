@@ -34,7 +34,7 @@ const MAX_BATCH_ITEMS: usize = 100;
 /// The receiving account, chosen by the host (never taken from a callback).
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct DeliveryContext {
-    /// Hook's app id (`hook`); notifications have type `{app_id}.webhook.received`.
+    /// Hook's app id (`hook`); notifications have type `{app_id}.webhookReceived`.
     pub app_id: String,
     /// The receiving account's Silicon Accounts uuid.
     pub recipient_uuid: String,
@@ -80,7 +80,7 @@ pub struct TingNotification {
     pub id: String,
     /// RFC 3339.
     pub created_at: String,
-    /// `{app_id}.webhook.received`.
+    /// `{app_id}.webhookReceived`.
     #[serde(rename = "type")]
     pub event_type: String,
     /// The recipient, when Ting includes it.
@@ -320,11 +320,13 @@ pub(crate) fn reference(
     notification: &TingNotification,
 ) -> Result<HookData> {
     validate_context(context)?;
-    if notification.event_type != format!("{}.webhook.received", context.app_id)
-        || notification
-            .recipient
-            .as_ref()
-            .is_some_and(|value| !names_recipient(context, value))
+    if !matches!(
+        notification.event_type.strip_prefix(&context.app_id),
+        Some(".webhookReceived" | ".webhook.received")
+    ) || notification
+        .recipient
+        .as_ref()
+        .is_some_and(|value| !names_recipient(context, value))
         || !identifier(&notification.id, 255)
         || !identifier(&notification.key, 200)
         || !notification.metadata.is_object()

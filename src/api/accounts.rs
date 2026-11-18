@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
 use super::{
-    auth::{self, Check},
+    auth,
     dto::{AccountResponse, HookResponse, SiliconResponse},
     extractors,
     handlers::{
@@ -42,7 +42,10 @@ pub(super) async fn sign_in_information(
                 "issuer": accounts.issuer(),
                 "jwks_url": format!("{}/.well-known/jwks.json", accounts.issuer()),
             },
+            "interface_api_documentation_url": "https://docs.hook.teamofsilicons.com/interfaces/",
+            "openapi_url": "/api/openapi.yaml",
             "sign_in": {
+                "interfaces": format!("Use apps[\"{}\"].access_token from Silicon Accounts interface authorization as the Bearer token.", accounts.app_id()),
                 "carbons": "device flow with client_id hook (hook login), or the web console",
                 "silicons": format!(
                     "a short-lived token from `silicon-accounts login --app {} -q`, exchanged with grant_type urn:silicon:params:oauth:grant-type:slt and client_id {} (hook login --slt)",
@@ -60,7 +63,7 @@ pub(super) async fn status(
     Extension(state): Extension<ApiState>,
     headers: HeaderMap,
 ) -> Result<(HeaderMap, Json<serde_json::Value>), AppError> {
-    let caller = auth::authenticate(&state, &headers, Check::Local).await?;
+    let caller = auth::authenticate(&state, &headers).await?;
     Ok((
         secret_response_headers(),
         Json(serde_json::json!({
@@ -109,7 +112,7 @@ pub(super) async fn list_silicons(
     Extension(state): Extension<ApiState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let caller = auth::authenticate(&state, &headers, Check::Local).await?;
+    let caller = auth::authenticate(&state, &headers).await?;
     let silicons = state
         .application
         .accessible_silicons(&caller.actor)
@@ -175,7 +178,7 @@ pub(super) async fn access(
     Path(silicon): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let (_, context) = auth::authorize(&state, &headers, &silicon, Check::Local).await?;
+    let (_, context) = auth::authorize(&state, &headers, &silicon).await?;
     let summary = state
         .application
         .access_summary(&context)
@@ -225,7 +228,7 @@ pub(super) async fn grant(
             "level must be `view` (read hooks, events and blocked requests) or `manage` (also create and change hooks)",
         )
     })?;
-    let (_, context) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    let (_, context) = auth::authorize(&state, &headers, &silicon).await?;
     let request_id = request_context::current_request_id();
     let (grant, grantee) = state
         .application
@@ -253,7 +256,7 @@ pub(super) async fn revoke(
     body: Bytes,
 ) -> Result<StatusCode, AppError> {
     require_empty_body(&body)?;
-    let caller = auth::authenticate(&state, &headers, Check::Introspect).await?;
+    let caller = auth::authenticate(&state, &headers).await?;
     let request_id = request_context::current_request_id();
     state
         .application
@@ -277,7 +280,7 @@ pub(super) async fn allow_list(
     Path(silicon): Path<String>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    let (_, context) = auth::authorize(&state, &headers, &silicon, Check::Local).await?;
+    let (_, context) = auth::authorize(&state, &headers, &silicon).await?;
     let (entries, accounts) = state
         .application
         .allow_list(&context)
@@ -297,7 +300,7 @@ pub(super) async fn allow(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_empty_body(&body)?;
-    let (_, context) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    let (_, context) = auth::authorize(&state, &headers, &silicon).await?;
     let request_id = request_context::current_request_id();
     let (entry, record) = state
         .application
@@ -315,7 +318,7 @@ pub(super) async fn disallow(
     body: Bytes,
 ) -> Result<StatusCode, AppError> {
     require_empty_body(&body)?;
-    let (_, context) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    let (_, context) = auth::authorize(&state, &headers, &silicon).await?;
     let request_id = request_context::current_request_id();
     state
         .application
@@ -335,7 +338,7 @@ pub(super) async fn connect_accounts_hook(
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_empty_body(&body)?;
     let idempotency_key = extractors::idempotency_key(&headers)?;
-    let (_, context) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    let (_, context) = auth::authorize(&state, &headers, &silicon).await?;
     let hook = state
         .application
         .prepare_accounts_hook(ConnectAccountsHookCommand {
@@ -363,6 +366,6 @@ fn next_steps(actor: &Actor, silicon: &SiliconRef, hook_id: &str, url: &str) -> 
         "store_secret": format!(
             "PATCH /api/v3/silicons/{silicon_id}/hooks/{hook_id} with {{\"signature\": {{\"secret\": \"<the whsec_ secret Silicon Accounts printed>\"}}}} (the Hook CLI's set-secret command does this)"
         ),
-        "explanation": "Silicon Accounts creates the signing secret when the webhook is set and prints it once. Until Hook stores it on this hook, deliveries are withheld as unverified.",
+        "explanation": "Hosted Silicon Accounts delivers a Silicon’s own notifications through Ting. See https://developers.teamofsilicons.com/docs/accounts/start/silicon-notifications. The direct webhook commands apply only to Accounts installations supporting Silicon webhooks.",
     })
 }

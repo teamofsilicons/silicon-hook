@@ -24,7 +24,9 @@ subscriptions, and `state: delivery_disabled` in publication status.
 
 Before setting `HOOK_TING_URL`, Ting must accept Silicon Accounts proofs from
 Hook (Ting's own migration is outside Hook), and Ting's operator must register
-the `hook.webhook.received` type. Until then keep it unset.
+the `hook.webhookReceived` type. Receivers that filter by type can accept this
+name for new notifications and `hook.webhook.received` for existing history.
+Update any type-specific Ting preference to cover the new name.
 
 ## How Hook talks to Ting
 
@@ -33,13 +35,13 @@ app credentials:
 
 | Call | Proof | Scope |
 | --- | --- | --- |
-| Send a notification, read its receipt | App verification (no user) | `tings.send`, `sent.query` |
-| Enrol a recipient | User verification, from the recipient's own Hook access token | `tings.subscribe` |
+| Send a notification, read its receipt | App verification (no user) | `tings.send`, `tings.read` |
+| Enrol a recipient | User verification, from the recipient's own Hook access token | `subscriptions.register` |
 
 App verification proofs are kept in memory and renewed one at a time; a User
 verification proof is made for each enrolment while the recipient's request is
 live. Hook stores no delegated tokens. Recipients are addressed by their Silicon
-Accounts uuid and current id, `{"uuid", "id"}`.
+Accounts UUID string.
 
 When Silicon Accounts refuses or cannot answer a proof request (for example
 because `HOOK_TING_APP_ID` names no app yet), Hook logs why once and waits before

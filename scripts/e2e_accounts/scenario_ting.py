@@ -98,7 +98,7 @@ def delivery(h, receiver, evidence, forward):
             code == 0 and (out or {}).get("ting_subscription_id") and entry.get("valid")
             and entry.get("kind") == "user_verification" and entry.get("user") == h.s1.uuid
             and entry.get("issuing_app") == h.app_id and entry.get("receiving_app") == receiver
-            and entry.get("scopes") == ["tings.subscribe"], {"cli": out or err, "verified": proof_view(entry)})
+            and entry.get("scopes") == ["subscriptions.register"], {"cli": out or err, "verified": proof_view(entry)})
 
     code, out, err = h.hook(h.c1.home, "--silicon", h.s1.id, "receiving", "subscribe")
     entries = wait_journal(h, lambda e: e["call"] == "subscribe" and e.get("for") == h.c1.uuid, 5)
@@ -135,9 +135,9 @@ def delivery(h, receiver, evidence, forward):
     code, publication, err = h.hook(h.s1.home, "publication", event_id)
     receipts = wait_journal(h, lambda e: e["call"] == "receipt" and e.get("outcome") == "receipt", 5)
     receipt = receipts[-1] if receipts else {}
-    h.check("hook publication: accepted by Ting, with the receipt read through an App verification proof (sent.query)",
+    h.check("hook publication: accepted by Ting, with the receipt read through an App verification proof (tings.read)",
             code == 0 and publication.get("state") == "accepted_by_ting" and publication.get("recipient_receipt")
-            and receipt.get("valid") and receipt.get("scopes") == ["sent.query"],
+            and receipt.get("valid") and receipt.get("scopes") == ["tings.read"],
             {"state": (publication or {}).get("state"), "receipt_proof": proof_view(receipt)})
     tokens_in_journal = any(key in line for line in h.dev.ting_journal.read_text().splitlines()
                             for key in ("sap_", "sapr_", "Bearer"))

@@ -25,7 +25,16 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
         .route("/healthz", get(handlers::liveness))
         .route("/readyz", get(handlers::readiness))
         .route("/api/version", get(handlers::negotiate_api_version))
-        .route("/api/contracts", get(super::contracts::catalog));
+        .route("/api/contracts", get(super::contracts::catalog))
+        .route(
+            "/api/openapi.yaml",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "application/yaml")],
+                    include_str!("../../openapi.yaml"),
+                )
+            }),
+        );
     let webhook = Router::new()
         .route("/webhook/", post(accounts::receive_webhook))
         .route("/webhook", post(accounts::receive_webhook))
@@ -79,6 +88,10 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
         ))
         .layer(CatchPanicLayer::custom(middleware::handle_panic))
         .layer(axum_middleware::from_fn(middleware::request_scope))
+        .layer(axum_middleware::from_fn_with_state(
+            middleware::interface_cors(),
+            middleware::apply_interface_cors,
+        ))
 }
 
 /// API v1 and v2 signed in with Silicon IAM; they end with Hook 1.0.
@@ -303,6 +316,61 @@ mod tests {
             request = request.header("authorization", format!("Bearer {token}"));
         }
         request.body(Body::empty())
+    }
+
+    #[tokio::test]
+    async fn browser_preflight_and_auth_errors_are_readable_without_cookies()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let Some(api) = test_api().await? else {
+            return Ok(());
+        };
+        let origin = "https://standalone.example";
+        let preflight = Request::builder()
+            .method("OPTIONS")
+            .uri("/api/v3/silicons/si:cos/hooks")
+            .header("origin", origin)
+            .header("access-control-request-method", "PATCH")
+            .header(
+                "access-control-request-headers",
+                "authorization,content-type,idempotency-key",
+            )
+            .body(Body::empty())?;
+        let (status, headers, _) = call(&api, preflight).await?;
+        assert!(status.is_success());
+        assert_eq!(headers["access-control-allow-origin"], "*");
+        assert!(
+            headers["access-control-allow-methods"]
+                .to_str()?
+                .contains("PATCH")
+        );
+        assert!(
+            headers["access-control-allow-headers"]
+                .to_str()?
+                .contains("authorization")
+        );
+        assert!(!headers.contains_key("access-control-allow-credentials"));
+
+        let request = Request::get("/api/v3/auth/status")
+            .header("origin", origin)
+            .body(Body::empty())?;
+        let (status, headers, _) = call(&api, request).await?;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+        assert_eq!(headers["access-control-allow-origin"], "*");
+        assert!(
+            headers["access-control-expose-headers"]
+                .to_str()?
+                .contains("x-request-id")
+        );
+
+        let webhook = Request::builder()
+            .method("OPTIONS")
+            .uri("/webhook")
+            .header("origin", origin)
+            .body(Body::empty())?;
+        let (status, headers, _) = call(&api, webhook).await?;
+        assert_eq!(status, StatusCode::METHOD_NOT_ALLOWED);
+        assert!(!headers.contains_key("access-control-allow-origin"));
+        Ok(())
     }
 
     #[tokio::test]

@@ -122,9 +122,9 @@ One Rust modular monolith with independently scalable processes:
 - `hook-contract` reports and changes API major lifecycle state.
 
 Every API call carries a Silicon Accounts access token issued to Hook (audience
-`hook`), verified locally against Silicon Accounts' published keys; routes that
-reveal secrets or change access also confirm with Silicon Accounts that the
-token is still active. The official `silicon-accounts-client` crate does both.
+`hook`), verified against Silicon Accounts' published keys and confirmed active
+through app-token introspection on every protected request. Interfaces use the
+[standalone API guide](docs/interfaces/README.md). The official `silicon-accounts-client` crate does both.
 PostgreSQL is authoritative: hooks, encrypted secrets, request logs, delivery
 sequences, pending publications, grants, allow-lists, the account cache and
 address blocks all live there.
@@ -178,7 +178,7 @@ tokens: a Carbon signed in like the web manages its Silicon's hooks over the API
 Silicon and a Carbon use the CLI (short-lived token, device flow, refresh, logout),
 access follows custodians and grants, every Silicon Accounts webhook event changes
 what it should (forged and replayed deliveries change nothing), a restart keeps
-sessions working, reads and ingress keep working while Silicon Accounts is cut off,
+sessions working, protected calls fail closed and provider ingress continues during an Accounts outage,
 Hook's proofs to Ting verify and renew and the Silicon's receiving host hydrates
 what Ting delivers, and the packaged CLI answers the Silicon Apps discovery
 commands. It needs `HOOK_E2E_MINT` and

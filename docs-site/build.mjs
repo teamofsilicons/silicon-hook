@@ -54,7 +54,7 @@ const titles = new Map(
     ]),
   ),
 );
-const navigation = ["README.md", "accounts/README.md", "cli/README.md", "client/README.md", "client/relay.md", "ting-delivery.md", "api/README.md", "contracts.md", "configuration.md", "releases.md", "deployment.md"];
+const navigation = ["README.md", "accounts/README.md", "interfaces/README.md", "cli/README.md", "client/README.md", "client/relay.md", "ting-delivery.md", "api/README.md", "contracts.md", "configuration.md", "releases.md", "deployment.md"];
 await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 const search = [];
@@ -121,6 +121,7 @@ for (const file of ["styles.css", "search.js"])
   await cp(path.join(root, "docs-site", file), path.join(output, file));
 await cp(path.join(root, "docs-site/fonts"), path.join(output, "fonts"), { recursive: true });
 await cp(path.join(source, "install.sh"), path.join(output, "install.sh"));
+await cp(path.join(source, "interfaces/README.md"), path.join(output, "interfaces.md"));
 await cp(path.join(root, "openapi.yaml"), path.join(output, "openapi.yaml"));
 await cp(path.join(root, "docs-site/favicon.svg"), path.join(output, "favicon.svg"));
 await writeFile(path.join(output, "search-index.json"), JSON.stringify(search));

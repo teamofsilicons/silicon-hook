@@ -78,7 +78,7 @@ pub fn prepare_event(
     let recipient_digest = hex::encode(Sha256::digest(recipient.uuid.as_bytes()));
     let mut body = serde_json::json!({
         "type": format!("{app_id}{EVENT_TYPE_SUFFIX}"),
-        "for": recipient,
+        "for": recipient.uuid,
         "key": format!("hook:{}:{recipient_digest}", event.id()),
         "data": {
             "type": "new_event",

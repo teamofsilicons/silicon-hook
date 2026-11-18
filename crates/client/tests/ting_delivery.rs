@@ -67,7 +67,7 @@ fn notification_value(event_id: &str, ting_id: &str, sequence: i64) -> Value {
     json!({
         "id": ting_id,
         "created_at": "2026-09-22T10:00:01Z",
-        "type": "hook.webhook.received",
+        "type": "hook.webhookReceived",
         "data": {
             "type": "new_event",
             "data": {
@@ -396,8 +396,10 @@ async fn a_renamed_silicon_still_hydrates_because_references_match_by_uuid() -> 
     let mut renamed = event_value(EVENT_ID, 42, "body");
     renamed["silicon"]["id"] = json!("si:cosmo");
     fixture.respond(EVENT_ID, StatusCode::OK, renamed);
-    let notification: TingNotification =
-        serde_json::from_value(notification_value(EVENT_ID, TING_ID, 42))?;
+    let mut value = notification_value(EVENT_ID, TING_ID, 42);
+    // Notifications retained before Ting introduced two-part names still hydrate.
+    value["type"] = json!("hook.webhook.received");
+    let notification: TingNotification = serde_json::from_value(value)?;
     let received = fixture
         .client
         .hydrate_notification(&context(), &notification)
@@ -412,6 +414,7 @@ async fn foreign_or_pre_1_0_references_are_rejected_before_any_http() -> TestRes
     let fixture = Fixture::start().await?;
     let valid = notification_value(EVENT_ID, TING_ID, 42);
     let changes = [
+        ("/type", json!("foreign-hook.webhookReceived")),
         ("/type", json!("foreign-hook.webhook.received")),
         ("/data/type", json!("another_event")),
         ("/data/data/metadata/delivery_sequence", json!(-1)),

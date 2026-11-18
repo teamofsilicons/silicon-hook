@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Silicon Hook API
-  version: 1.1.0
+  version: 1.1.2
   summary: Signed webhook endpoints for Silicons, with verified history and optional delivery through Ting.
   description: |
     Silicon Hook gives each Silicon signed webhook endpoints at
@@ -13,9 +13,10 @@ info:
 
     **Sign-in.** Every management route takes `Authorization: Bearer <access token>`:
     a Silicon Accounts access token issued to Hook (an EdDSA JWT whose audience is
-    Hook's app id, `hook`). `GET /api/v3/auth/accounts` says where to get one. Routes
-    that reveal a signing secret, change who has access, or delete and restore hooks
-    also confirm with Silicon Accounts that the token is still active.
+    Hook's app id, `hook`). `GET /api/v3/auth/accounts` says where to get one. Interfaces send
+    `apps["hook"].access_token` with browser credentials omitted. Every protected
+    call requires Accounts to confirm an active access token issued to Hook.
+    See the [interface guide](https://docs.hook.teamofsilicons.com/interfaces/).
 
     **Who can do what.** Hooks belong to a Silicon. The Silicon itself and its
     custodian (a Carbon) have full control; the custodian acts as itself, never as
@@ -69,10 +70,25 @@ tags:
 - name: Accounts webhook
   description: Silicon Accounts notifies Hook about account changes.
 x-ting-notification:
-  description: "Hook publishes this schema in the data field of Ting type <Hook app_id>.webhook.received. The outer Ting transport envelope is owned by Ting."
+  description: "Hook publishes this schema in the data field of Ting type <Hook app_id>.webhookReceived. The outer Ting transport envelope is owned by Ting."
   dataSchema:
     "$ref": "#/components/schemas/TingHookEvent"
 paths:
+  "/api/openapi.yaml":
+    get:
+      tags: [System]
+      operationId: getOpenApi
+      summary: Download the contract embedded in this API build
+      security: []
+      responses:
+        '200':
+          description: The OpenAPI 3.1 document in YAML.
+          content:
+            application/yaml:
+              schema:
+                type: string
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
   "/healthz":
     get:
       tags: [System]
@@ -273,6 +289,8 @@ paths:
                 "$ref": "#/components/schemas/SiliconList"
         '401':
           "$ref": "#/components/responses/Unauthorized"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/access":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -296,6 +314,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '410':
           "$ref": "#/components/responses/Gone"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/access/{account}":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -332,6 +352,8 @@ paths:
           "$ref": "#/components/responses/UnsupportedMediaType"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     delete:
       tags: [Silicons]
       operationId: revokeAccess
@@ -347,6 +369,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/allow-list":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -367,6 +391,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/allow-list/{account}":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -391,6 +417,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '409':
           "$ref": "#/components/responses/Conflict"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     delete:
       tags: [Silicons]
       operationId: disallowAccount
@@ -405,6 +433,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -433,6 +463,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '410':
           "$ref": "#/components/responses/Gone"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     post:
       tags: [Hooks]
       operationId: createHook
@@ -468,6 +500,8 @@ paths:
           "$ref": "#/components/responses/UnsupportedMediaType"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     patch:
       tags: [Hooks]
       operationId: setHooksEnabled
@@ -495,6 +529,8 @@ paths:
           "$ref": "#/components/responses/Conflict"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/accounts":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -524,6 +560,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '409':
           "$ref": "#/components/responses/Conflict"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -545,6 +583,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     patch:
       tags: [Hooks]
       operationId: updateHook
@@ -578,6 +618,8 @@ paths:
           "$ref": "#/components/responses/UnsupportedMediaType"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     delete:
       tags: [Hooks]
       operationId: deleteHook
@@ -594,6 +636,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '409':
           "$ref": "#/components/responses/Conflict"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}/restore":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -622,6 +666,8 @@ paths:
           "$ref": "#/components/responses/Conflict"
         '410':
           "$ref": "#/components/responses/Gone"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}/secret/rotate":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -650,6 +696,8 @@ paths:
           "$ref": "#/components/responses/Conflict"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}/endpoint/rotate":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -676,6 +724,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '409':
           "$ref": "#/components/responses/Conflict"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}/events":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -697,6 +747,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}/blocked-requests":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -718,6 +770,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/events":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -739,6 +793,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/events/{event_id}":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -760,6 +816,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/blocked-requests":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -781,6 +839,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/events/{event_id}/publication":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -820,6 +880,8 @@ paths:
                 "$ref": "#/components/schemas/DeliveryStatus"
         '401':
           "$ref": "#/components/responses/Unauthorized"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/delivery/recipient":
     post:
       tags: [Delivery]
@@ -866,6 +928,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     post:
       tags: [Delivery]
       operationId: observeSilicon
@@ -908,6 +972,8 @@ paths:
           "$ref": "#/components/responses/Unauthorized"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/silicon/{silicon}/{endpoint_key}":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -1383,7 +1449,7 @@ components:
           properties:
             set_webhook:
               type: string
-              description: The Silicon Accounts command that points the Silicon's webhook at this hook.
+              description: The command for Accounts installations supporting direct Silicon webhooks. Hosted Accounts routes Silicon notifications through Ting.
               example: silicon-accounts silicon webhook set si:cos https://api.hook.teamofsilicons.com/silicon/si:cos/A1B2C3D4
             store_secret:
               type: string
@@ -1392,11 +1458,18 @@ components:
     SignInInformation:
       type: object
       additionalProperties: false
-      required: [app_id, accounts_url, token, sign_in, delivery]
+      required: [app_id, accounts_url, token, sign_in, delivery, interface_api_documentation_url, openapi_url]
       properties:
         app_id:
           type: string
           example: hook
+        interface_api_documentation_url:
+          type: string
+          format: uri
+        openapi_url:
+          type: string
+          format: uri-reference
+          description: Resolve against the Hook API origin.
         accounts_url:
           type: string
           format: uri
@@ -1420,8 +1493,10 @@ components:
         sign_in:
           type: object
           additionalProperties: false
-          required: [carbons, silicons]
+          required: [carbons, silicons, interfaces]
           properties:
+            interfaces:
+              type: string
             carbons:
               type: string
             silicons:

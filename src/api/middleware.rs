@@ -7,6 +7,9 @@ use axum::{
     middleware::Next,
     response::{IntoResponse as _, Response},
 };
+use http::{HeaderName, Method, header};
+use tower::{Layer as _, ServiceExt as _};
+use tower_http::cors::{Any, CorsLayer};
 use tracing::{Instrument as _, info_span};
 use uuid::Uuid;
 
@@ -15,6 +18,61 @@ use crate::{error::AppError, request_context};
 const REQUEST_ID_HEADER: http::HeaderName = http::HeaderName::from_static("x-request-id");
 const MAX_REQUEST_ID_BYTES: usize = 64;
 const MANAGEMENT_VARY: &str = "authorization";
+
+/// Interfaces can use their app bearer from any origin. Provider ingress also
+/// accepts OPTIONS as a provider event, so it must never pass through this layer.
+pub(super) fn interface_cors() -> CorsLayer {
+    CorsLayer::new()
+        .allow_origin(Any)
+        .allow_methods([
+            Method::GET,
+            Method::HEAD,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
+        .allow_headers([
+            header::AUTHORIZATION,
+            header::CONTENT_TYPE,
+            header::ACCEPT,
+            HeaderName::from_static("idempotency-key"),
+            REQUEST_ID_HEADER,
+            super::version::API_VERSION_HEADER,
+            super::version::SUPPORTED_API_VERSIONS_HEADER,
+        ])
+        .expose_headers([
+            REQUEST_ID_HEADER,
+            super::version::API_VERSION_HEADER,
+            header::RETRY_AFTER,
+            header::WWW_AUTHENTICATE,
+            header::LINK,
+            HeaderName::from_static("deprecation"),
+            HeaderName::from_static("sunset"),
+        ])
+        .max_age(Duration::from_secs(600))
+}
+
+pub(super) async fn apply_interface_cors(
+    State(cors): State<CorsLayer>,
+    request: Request,
+    next: Next,
+) -> Response {
+    let path = request.uri().path();
+    if path.starts_with("/api/v3/")
+        || matches!(
+            path,
+            "/api/version" | "/api/contracts" | "/api/openapi.yaml" | "/healthz" | "/readyz"
+        )
+    {
+        return cors
+            .layer(next)
+            .oneshot(request)
+            .await
+            .unwrap_or_else(|never| match never {});
+    }
+    next.run(request).await
+}
 
 pub(super) async fn request_scope(mut request: Request, next: Next) -> Response {
     let contains_management_data = is_management_path(request.uri().path());
