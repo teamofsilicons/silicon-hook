@@ -11,7 +11,7 @@ use axum::{
 use serde::de::DeserializeOwned;
 
 use super::{
-    auth::{self, Check},
+    auth,
     dto::{
         AccountResponse, BlockedRequestResponse, CreateHookRequest, EventResponse, HealthResponse,
         HistoryPageResponse, HistoryQuery, HookPageResponse, HookResponse, HookWithSecretResponse,
@@ -90,7 +90,7 @@ pub(super) async fn list_hooks(
     headers: HeaderMap,
 ) -> Result<Json<HookPageResponse>, AppError> {
     let Query(query) = query.map_err(|_| AppError::validation("invalid_query"))?;
-    let (_, authorization) = auth::authorize(&state, &headers, &silicon, Check::Local).await?;
+    let (_, authorization) = auth::authorize(&state, &headers, &silicon).await?;
     let hooks = state
         .application
         .list_hooks(&authorization, query.include_deleted)
@@ -120,7 +120,7 @@ pub(super) async fn create_hook(
         .transpose()?
         .unwrap_or_default();
     // Creation returns a signing secret once: confirm the session is live.
-    let (_, authorization) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    let (_, authorization) = auth::authorize(&state, &headers, &silicon).await?;
     let result = state
         .application
         .create_hook(CreateHookCommand {
@@ -146,7 +146,7 @@ pub(super) async fn get_hook(
     headers: HeaderMap,
 ) -> Result<Json<HookResponse>, AppError> {
     let hook_id = parse_hook_id(&hook_id)?;
-    let (_, authorization) = auth::authorize(&state, &headers, &silicon, Check::Local).await?;
+    let (_, authorization) = auth::authorize(&state, &headers, &silicon).await?;
     let hook = state
         .application
         .get_hook(&authorization, hook_id)
@@ -185,17 +185,7 @@ pub(super) async fn update_hook(
     if patch.enabled.is_none() && !patch.changes_metadata() {
         return Err(AppError::validation("empty_update"));
     }
-    // Replacing a signing secret is a credential change: confirm the session.
-    let check = if patch
-        .signing
-        .as_ref()
-        .is_some_and(|signing| signing.secret.is_some())
-    {
-        Check::Introspect
-    } else {
-        Check::Local
-    };
-    let (_, authorization) = auth::authorize(&state, &headers, &silicon, check).await?;
+    let (_, authorization) = auth::authorize(&state, &headers, &silicon).await?;
     let hook = state
         .application
         .update_hook(UpdateHookCommand {
@@ -217,7 +207,7 @@ pub(super) async fn delete_hook(
 ) -> Result<StatusCode, AppError> {
     require_empty_body(&body)?;
     let hook_id = parse_hook_id(&hook_id)?;
-    let (_, authorization) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    let (_, authorization) = auth::authorize(&state, &headers, &silicon).await?;
     state
         .application
         .delete_hook(DeleteHookCommand {
@@ -238,7 +228,7 @@ pub(super) async fn set_hooks_enabled(
 ) -> Result<Json<HookPageResponse>, AppError> {
     extractors::require_json(&headers)?;
     let request: SetHooksEnabledRequest = parse_json(&body)?;
-    let (_, authorization) = auth::authorize(&state, &headers, &silicon, Check::Local).await?;
+    let (_, authorization) = auth::authorize(&state, &headers, &silicon).await?;
     let hooks = state
         .application
         .set_hooks_enabled(SetHooksEnabledCommand {
@@ -263,7 +253,7 @@ pub(super) async fn restore_hook(
     require_empty_body(&body)?;
     let hook_id = parse_hook_id(&hook_id)?;
     let idempotency_key = extractors::idempotency_key(&headers)?;
-    let (_, authorization) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    let (_, authorization) = auth::authorize(&state, &headers, &silicon).await?;
     let hook = state
         .application
         .restore_hook(HookMutationCommand {
@@ -284,7 +274,7 @@ pub(super) async fn rotate_hook_secret(
     require_empty_body(&body)?;
     let hook_id = parse_hook_id(&hook_id)?;
     let idempotency_key = extractors::idempotency_key(&headers)?;
-    let (_, authorization) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    let (_, authorization) = auth::authorize(&state, &headers, &silicon).await?;
     let result = state
         .application
         .rotate_hook_secret(HookMutationCommand {
@@ -314,7 +304,7 @@ pub(super) async fn rotate_hook_endpoint(
     let hook_id = parse_hook_id(&hook_id)?;
     let idempotency_key = extractors::idempotency_key(&headers)?;
     // Rotation retires a URL providers may hold: confirm the session.
-    let (_, authorization) = auth::authorize(&state, &headers, &silicon, Check::Introspect).await?;
+    let (_, authorization) = auth::authorize(&state, &headers, &silicon).await?;
     let hook = state
         .application
         .rotate_hook_endpoint(HookMutationCommand {
@@ -429,7 +419,7 @@ pub(super) async fn get_event(
     let event_id: EventId = event_id
         .parse()
         .map_err(|_| AppError::validation("invalid_event_id"))?;
-    let (_, authorization) = auth::authorize(&state, &headers, &silicon, Check::Local).await?;
+    let (_, authorization) = auth::authorize(&state, &headers, &silicon).await?;
     let event = state
         .application
         .get_event(&authorization, event_id)
@@ -452,7 +442,7 @@ async fn history_command(
     if hook_id.is_some() && query.hook_id.is_some_and(|filter| Some(filter) != hook_id) {
         return Err(AppError::validation("invalid_hook_id"));
     }
-    let (_, authorization) = auth::authorize(state, headers, silicon, Check::Local).await?;
+    let (_, authorization) = auth::authorize(state, headers, silicon).await?;
     Ok(ListHistoryCommand {
         authorization,
         hook_id: hook_id.or(query.hook_id),

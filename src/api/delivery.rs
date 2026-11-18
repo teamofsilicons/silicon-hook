@@ -12,7 +12,7 @@ use time::OffsetDateTime;
 use uuid::Uuid;
 
 use super::{
-    auth::{self, Check},
+    auth,
     handlers::{map_application_error, require_empty_body, secret_response_headers},
     state::ApiState,
 };
@@ -76,7 +76,7 @@ pub(super) async fn status(
     Extension(state): Extension<ApiState>,
     headers: HeaderMap,
 ) -> Result<Json<serde_json::Value>, AppError> {
-    auth::authenticate(&state, &headers, Check::Local).await?;
+    auth::authenticate(&state, &headers).await?;
     Ok(Json(match state.application.delivery() {
         Some(_) => serde_json::json!({"enabled": true, "transport": "ting"}),
         None => serde_json::json!({"enabled": false, "reason": DELIVERY_DISABLED}),
@@ -92,8 +92,8 @@ pub(super) async fn register_recipient(
     body: Bytes,
 ) -> Result<Json<serde_json::Value>, AppError> {
     require_empty_body(&body)?;
+    let caller = auth::authenticate(&state, &headers).await?;
     let ting = delivery(&state)?;
-    let caller = auth::authenticate(&state, &headers, Check::Introspect).await?;
     let recipient = TingRecipient {
         uuid: caller.actor.uuid().as_str().to_owned(),
         id: caller.actor.id().map(|id| id.as_str().to_owned()),
@@ -138,7 +138,7 @@ pub(super) async fn publication_status(
     let event_id: EventId = event_id
         .parse()
         .map_err(|_| AppError::validation("invalid_event_id"))?;
-    let (_, context) = auth::authorize(&state, &headers, &silicon, Check::Local).await?;
+    let (_, context) = auth::authorize(&state, &headers, &silicon).await?;
     if !authorize(&context, Action::ReadEvents).is_allowed() {
         return Err(AppError::Forbidden);
     }

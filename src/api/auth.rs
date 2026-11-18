@@ -2,9 +2,7 @@
 //!
 //! Every management route takes `Authorization: Bearer <access token>`, an
 //! `EdDSA` JWT Silicon Accounts issued to Hook (`aud` = Hook's app id), verified
-//! locally against the cached JWKS. Routes that reveal secrets or change who
-//! has access also confirm with Silicon Accounts (introspection) that the
-//! token is still active.
+//! against the published keys and confirmed active by Silicon Accounts.
 
 use http::HeaderMap;
 use secrecy::{ExposeSecret as _, SecretString};
@@ -21,19 +19,9 @@ pub(super) struct Authenticated {
     pub(super) token: SecretString,
 }
 
-/// Whether a route must see revocation at once.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub(super) enum Check {
-    /// Local verification (signature, audience, issuer, expiry, sign-outs Hook was told about).
-    Local,
-    /// Local verification plus introspection at Silicon Accounts.
-    Introspect,
-}
-
 pub(super) async fn authenticate(
     state: &ApiState,
     headers: &HeaderMap,
-    check: Check,
 ) -> Result<Authenticated, AppError> {
     let token = extractors::bearer_token(headers)?;
     let actor = state
@@ -41,13 +29,6 @@ pub(super) async fn authenticate(
         .authenticate(token.expose_secret())
         .await
         .map_err(map_application_error)?;
-    if check == Check::Introspect {
-        state
-            .application
-            .require_active_token(token.expose_secret())
-            .await
-            .map_err(map_application_error)?;
-    }
     Ok(Authenticated { actor, token })
 }
 
@@ -57,9 +38,8 @@ pub(super) async fn authorize(
     state: &ApiState,
     headers: &HeaderMap,
     silicon: &str,
-    check: Check,
 ) -> Result<(Authenticated, AuthorizationContext), AppError> {
-    let caller = authenticate(state, headers, check).await?;
+    let caller = authenticate(state, headers).await?;
     let context = state
         .application
         .authorize_silicon(&caller.actor, silicon)

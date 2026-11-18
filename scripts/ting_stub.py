@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """A stand-in for Ting that checks Hook's Silicon Accounts proofs for real.
 
-Hook calls Ting with `Authorization: Proof sap_...`. This stub answers Hook's
+Hook calls Ting with `Authorization: Bearer sap_...`. This stub answers Hook's
 three Ting calls (POST /v1/tings, /v1/subscriptions, /v1/sent/query) in the
 shapes of Hook's Ting contract, and verifies every proof with Silicon Accounts
 (`POST /v1/proofs/verify`) using the receiving app's own credentials, as Ting
@@ -76,7 +76,7 @@ def forward(sent):
         status = error.code
     except (urllib.error.URLError, OSError):
         status = 0
-    record({"call": "forward", "ting_id": sent["id"], "key": body["key"], "for": body["for"].get("uuid"),
+    record({"call": "forward", "ting_id": sent["id"], "key": body["key"], "for": body["for"],
             "status": status})
 
 
@@ -123,9 +123,9 @@ class Handler(BaseHTTPRequestHandler):
             return self.answer(404, {"error": {"code": "not_found"}})
         header = self.headers.get("Authorization", "")
         entry = {"call": call}
-        if not header.startswith("Proof "):
+        if not header.startswith("Bearer "):
             return self.refuse(401, "authentication_required", entry)
-        proof = header[len("Proof "):].strip()
+        proof = header[len("Bearer "):].strip()
         verdict = verify(proof)
         entry.update({
             "proof_sha256": hashlib.sha256(proof.encode()).hexdigest()[:16],
@@ -138,16 +138,16 @@ class Handler(BaseHTTPRequestHandler):
             "scopes": verdict.get("scopes"),
             "expires_at": verdict.get("expires_at"),
         })
-        expected = {"send": ("app_verification", "tings.send"), "subscribe": ("user_verification", "tings.subscribe"),
-                    "receipt": ("app_verification", "sent.query")}[call]
+        expected = {"send": ("app_verification", "tings.send"), "subscribe": ("user_verification", "subscriptions.register"),
+                    "receipt": ("app_verification", "tings.read")}[call]
         if not (entry["valid"] and entry["kind"] == expected[0] and entry["issuing_app"] == CONFIG["issuer"]
                 and entry["receiving_app"] == CONFIG["app_id"] and expected[1] in (entry["scopes"] or [])):
             return self.refuse(401, "invalid_proof", entry)
         getattr(self, call)(body, entry)
 
     def send(self, body, entry):
-        recipient = body.get("for") or {}
-        entry.update({"for": recipient.get("uuid"), "key": body.get("key"), "delivery": body.get("delivery", "ordinary"),
+        recipient = body.get("for") or ""
+        entry.update({"for": recipient, "key": body.get("key"), "delivery": body.get("delivery", "ordinary"),
                       "type": body.get("type")})
         if CONFIG["refuse_first"]:
             with LOCK:
@@ -155,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["refused_once"] = True
             if first:
                 return self.refuse(401, "invalid_proof", {**entry, "on_purpose": True})
-        if body.get("type") != f"{CONFIG['issuer']}.webhook.received" or not recipient.get("uuid") or not body.get("key"):
+        if body.get("type") != f"{CONFIG['issuer']}.webhook.received" or not isinstance(recipient, str) or not recipient or not body.get("key"):
             return self.refuse(400, "invalid_input", entry)
         with LOCK:
             existing = STATE["keys"].get(body["key"])
@@ -164,7 +164,7 @@ class Handler(BaseHTTPRequestHandler):
                 existing = {"id": f"ting_{uuid.uuid4().hex}", "created_at": iso_now(), "body": body}
                 STATE["keys"][body["key"]] = existing
                 STATE["sends"][existing["id"]] = existing
-        if created and CONFIG.get("forward_url") and recipient.get("uuid") == CONFIG.get("forward_for"):
+        if created and CONFIG.get("forward_url") and recipient == CONFIG.get("forward_for"):
             threading.Thread(target=forward, args=(existing,), daemon=True).start()
         answer = {"id": existing["id"], "key": body["key"], "status": "accepted", "silent": False,
                   "created_at": existing["created_at"]}
@@ -175,9 +175,9 @@ class Handler(BaseHTTPRequestHandler):
         self.answer(202, answer)
 
     def subscribe(self, body, entry):
-        recipient = body.get("for") or {}
-        entry.update({"for": recipient.get("uuid")})
-        if recipient.get("uuid") != entry["user"] or body.get("app_id") != CONFIG["issuer"]:
+        recipient = body.get("for") or ""
+        entry.update({"for": recipient})
+        if recipient != entry["user"] or body.get("app_id") != CONFIG["issuer"]:
             return self.refuse(403, "permission_denied", entry)
         entry["outcome"] = "subscribed"
         record(entry)

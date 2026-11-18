@@ -3,11 +3,8 @@
 //!
 //! Access tokens are verified locally against a cached JWKS that is fetched
 //! again (at most once every [`JWKS_REFETCH_INTERVAL`]) when a token names a
-//! key the cache does not hold. Introspection, used only where revocation must
-//! be seen at once, never reuses an "active" answer; an "inactive" one is
-//! remembered for [`INACTIVE_TOKEN_MEMORY`]. Introspection also settles the one
-//! case local verification cannot: a token issued in the same second as a
-//! sign-out (see [`AccountsGateway::issued_after_sign_out`]).
+//! key the cache does not hold. Every accepted bearer must also pass live
+//! app-token introspection. Only inactive answers are cached.
 
 use std::{
     collections::HashMap,
@@ -23,7 +20,6 @@ use silicon_accounts_client::{
     IssueAppVerification, IssueUserVerification, IssuedProof, Jwks, TokenError, VerifyOptions,
     WebhookError, WebhookEvent, verify_access_token, verify_and_parse_webhook,
 };
-use time::OffsetDateTime;
 use tokio::sync::RwLock;
 
 use crate::config::AccountsSettings;
@@ -41,7 +37,6 @@ pub const INACTIVE_TOKEN_MEMORY: Duration = Duration::from_mins(30);
 /// Silicon Accounts allows one app, leaving room for other replicas.
 pub const LOOKUPS_PER_MINUTE: u32 = 300;
 const MAX_REMEMBERED_INACTIVE_TOKENS: usize = 10_000;
-const MAX_REMEMBERED_SAME_SECOND_TOKENS: usize = 10_000;
 
 /// Why an access token was refused, with a message that says what to do.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,9 +133,6 @@ struct Inner {
     jwks: RwLock<JwksState>,
     jwks_fetch: tokio::sync::Mutex<()>,
     inactive_tokens: Mutex<HashMap<[u8; 32], Instant>>,
-    /// Tokens from a sign-out's own second that Silicon Accounts confirmed
-    /// were issued after it, with that sign-out's instant.
-    after_sign_out: Mutex<HashMap<[u8; 32], OffsetDateTime>>,
     lookups: Mutex<(Instant, u32)>,
 }
 
@@ -183,7 +175,6 @@ impl AccountsGateway {
                 jwks: RwLock::new(JwksState::default()),
                 jwks_fetch: tokio::sync::Mutex::new(()),
                 inactive_tokens: Mutex::new(HashMap::new()),
-                after_sign_out: Mutex::new(HashMap::new()),
                 lookups: Mutex::new((Instant::now(), 0)),
             }),
         })
@@ -215,8 +206,9 @@ impl AccountsGateway {
     /// Hook, and [`VerifyFailure::Unavailable`] when the signing keys cannot
     /// be fetched.
     pub async fn verify(&self, token: &str) -> Result<Claims, VerifyFailure> {
-        let options =
+        let mut options =
             VerifyOptions::for_app(&self.inner.app_id).with_issuer(self.inner.issuer.clone());
+        options.leeway_seconds = 0;
         let keys = self.current_keys().await?;
         match verify_access_token(&keys, token, &options) {
             Err(ClientError::Token(TokenError::UnknownKey { .. })) => {
@@ -285,10 +277,8 @@ impl AccountsGateway {
         }
         let answer = self.app().introspect(token).await?;
         let active = answer.active
-            && answer
-                .client_id
-                .as_deref()
-                .is_none_or(|app| app == self.app_id());
+            && answer.token_type.as_deref() == Some("access_token")
+            && answer.client_id.as_deref() == Some(self.app_id());
         if !active && let Ok(mut remembered) = self.inner.inactive_tokens.lock() {
             if remembered.len() >= MAX_REMEMBERED_INACTIVE_TOKENS {
                 remembered.retain(|_, at| at.elapsed() < INACTIVE_TOKEN_MEMORY);
@@ -297,40 +287,6 @@ impl AccountsGateway {
                 }
             }
             remembered.insert(digest, Instant::now());
-        }
-        Ok(active)
-    }
-
-    /// Whether a token issued in the same second as a sign-out Hook recorded
-    /// (`signed_out_at`) was issued after it.
-    ///
-    /// Access tokens state their issue time in whole seconds while sign-outs
-    /// carry milliseconds, so a token from the sign-out's own second may be
-    /// older or newer than it (a Silicon that signs in again right after its
-    /// STK was rotated). Only Silicon Accounts can tell: an active token was
-    /// not ended by that sign-out. A confirmation is remembered per token and
-    /// sign-out instant; a later sign-out moves the instant and asks again.
-    ///
-    /// # Errors
-    ///
-    /// Returns an error when Accounts cannot answer.
-    pub async fn issued_after_sign_out(
-        &self,
-        token: &str,
-        signed_out_at: OffsetDateTime,
-    ) -> Result<bool, AccountsError> {
-        let digest: [u8; 32] = Sha256::digest(token.as_bytes()).into();
-        if let Ok(confirmed) = self.inner.after_sign_out.lock()
-            && confirmed.get(&digest) == Some(&signed_out_at)
-        {
-            return Ok(true);
-        }
-        let active = self.introspect_active(token).await?;
-        if active && let Ok(mut confirmed) = self.inner.after_sign_out.lock() {
-            if confirmed.len() >= MAX_REMEMBERED_SAME_SECOND_TOKENS {
-                confirmed.clear();
-            }
-            confirmed.insert(digest, signed_out_at);
         }
         Ok(active)
     }

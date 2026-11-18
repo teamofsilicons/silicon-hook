@@ -334,11 +334,9 @@ async fn grants_give_view_or_manage_and_a_grantee_can_leave() -> Result<()> {
     Ok(())
 }
 
-/// While Silicon Accounts does not answer, routes verified locally keep
-/// working and the routes that must confirm a sign-in say exactly why they
-/// cannot (never a 401 that would end a client's sign-in).
+/// Cached signing keys alone cannot authorize a request during an Accounts outage.
 #[tokio::test]
-async fn an_unanswering_silicon_accounts_is_named_and_local_routes_keep_working() -> Result<()> {
+async fn an_unanswering_silicon_accounts_blocks_protected_routes() -> Result<()> {
     let Some(api) = TestApi::start().await? else {
         return Ok(());
     };
@@ -358,8 +356,8 @@ async fn an_unanswering_silicon_accounts_is_named_and_local_routes_keep_working(
     api.accounts.set_down(true);
     assert_eq!(
         list_hooks(&api, "si:cos", &p.cos).await?.0,
-        StatusCode::OK,
-        "verified locally with the cached keys"
+        StatusCode::SERVICE_UNAVAILABLE,
+        "cached signing keys do not establish live access"
     );
     let (status, refused) = create_hook(&api, "si:cos", &p.cos, "During").await?;
     assert_eq!(
@@ -451,8 +449,7 @@ async fn a_silicon_outside_the_circle_receives_access_only_after_allowing_the_sh
 }
 
 #[tokio::test]
-async fn routes_that_reveal_secrets_or_change_access_confirm_the_token_is_still_active()
--> Result<()> {
+async fn reads_and_writes_require_a_live_hook_access_token() -> Result<()> {
     let Some(api) = TestApi::start().await? else {
         return Ok(());
     };
@@ -461,8 +458,10 @@ async fn routes_that_reveal_secrets_or_change_access_confirm_the_token_is_still_
     let hook_id = hook["id"].as_str().unwrap_or_default().to_owned();
     api.accounts.deactivate(&p.cos);
 
-    // Local checks still pass: the token is valid until it expires.
-    assert_eq!(list_hooks(&api, "si:cos", &p.cos).await?.0, StatusCode::OK);
+    assert_eq!(
+        list_hooks(&api, "si:cos", &p.cos).await?.0,
+        StatusCode::UNAUTHORIZED
+    );
     for (method, path, body) in [
         (
             Method::POST,
@@ -666,5 +665,31 @@ async fn uuid128_accounts_work_and_retired_tokens_cannot_recreate_accounts() -> 
             .fetch_one(api.owner.pool())
             .await?;
     assert_eq!(count, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn introspection_must_confirm_both_access_token_type_and_hook_client() -> Result<()> {
+    let Some(api) = TestApi::start().await? else {
+        return Ok(());
+    };
+    let now = support::accounts::now();
+    for (i, reply) in [
+        json!({"active":true, "client_id":"hook", "token_type":"refresh_token"}),
+        json!({"active":true, "client_id":"hook"}),
+        json!({"active":true, "token_type":"access_token"}),
+        json!({"active":true, "client_id":"other", "token_type":"access_token"}),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let token = api.accounts.sign(&json!({"iss":api.accounts.url,"aud":"hook",
+            "sub":"SCos1","id":"si:cos","kind":"silicon","exp":now+600,"iat":now,"jti":i.to_string()}));
+        api.accounts.set_introspection(reply);
+        let (status, _) = api
+            .call(Method::GET, "/api/v3/auth/status", Some(&token), None)
+            .await?;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
     Ok(())
 }

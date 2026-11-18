@@ -343,13 +343,19 @@ async fn a_token_from_the_sign_out_second_is_settled_by_silicon_accounts() -> Re
 
     let asked = api.accounts.introspections();
     let older = token(second - 1, 600);
-    assert_eq!(status_of(&api, &older).await?.0, StatusCode::UNAUTHORIZED);
+    let (status, refused) = status_of(&api, &older).await?;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    assert!(
+        refused["error"]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains(&stamp))
+    );
     let newer = token(second + 1, 600);
     assert_eq!(status_of(&api, &newer).await?.0, StatusCode::OK);
     assert_eq!(
         api.accounts.introspections(),
-        asked,
-        "other seconds are settled locally"
+        asked + 1,
+        "only the newer token can be admitted and requires introspection"
     );
 
     let after_it = token(second, 601);
@@ -361,8 +367,8 @@ async fn a_token_from_the_sign_out_second_is_settled_by_silicon_accounts() -> Re
     assert_eq!(status_of(&api, &after_it).await?.0, StatusCode::OK);
     assert_eq!(
         api.accounts.introspections(),
-        asked + 1,
-        "asked once, then remembered"
+        asked + 3,
+        "each admitted request checks again"
     );
 
     let before_it = token(second, 602);
@@ -372,11 +378,6 @@ async fn a_token_from_the_sign_out_second_is_settled_by_silicon_accounts() -> Re
         (status, refused["error"]["code"].clone()),
         (StatusCode::UNAUTHORIZED, json!("session_ended")),
         "issued before the sign-out in the same second"
-    );
-    let message = refused["error"]["message"].as_str().unwrap_or_default();
-    assert!(
-        message.contains(&stamp),
-        "the time reads as RFC 3339: {message}"
     );
     Ok(())
 }

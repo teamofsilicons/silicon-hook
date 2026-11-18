@@ -45,6 +45,7 @@ pub struct StubAccount {
 struct StubState {
     accounts: HashMap<String, StubAccount>,
     inactive_tokens: HashSet<String>,
+    introspection_override: Option<Value>,
     introspections: usize,
     refuse_proofs: bool,
     refused_proofs: usize,
@@ -169,6 +170,11 @@ impl StubAccounts {
         self.with_state(|state| {
             state.inactive_tokens.insert(token.to_owned());
         });
+    }
+
+    /// Returns a chosen introspection response to exercise the app-token contract.
+    pub fn set_introspection(&self, answer: Value) {
+        self.with_state(|state| state.introspection_override = Some(answer));
     }
 
     /// Makes proof requests fail as for an app id Silicon Accounts does not know.
@@ -372,6 +378,13 @@ async fn introspect(
     let token = form.get("token").cloned().unwrap_or_default();
     if state.lock().is_ok_and(|state| state.down) {
         return error(StatusCode::SERVICE_UNAVAILABLE, "unavailable", "down");
+    }
+    if let Some(reply) = state
+        .lock()
+        .ok()
+        .and_then(|s| s.introspection_override.clone())
+    {
+        return Json(reply).into_response();
     }
     let inactive = state.lock().map_or(true, |mut state| {
         state.introspections += 1;

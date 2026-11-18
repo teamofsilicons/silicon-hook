@@ -1,13 +1,13 @@
 //! Internal Ting delivery: the hardened HTTP transport.
 //!
-//! Every request carries a Silicon Accounts proof (`Authorization: Proof
+//! Every request carries a Silicon Accounts proof (`Authorization: Bearer
 //! sap_...`) that the caller obtained for the receiving app `ting`: an App
 //! verification proof to send and to read receipts, a User verification proof
 //! to enrol a recipient. Redirects are never followed (a proof is only ever
 //! sent to the configured origin) and response bodies are bounded.
 //!
 //! The request shapes are Hook's Accounts-era contract with Ting: no
-//! account-grouping field; recipients addressed by Silicon Accounts `{uuid, id}`.
+//! account-grouping field; recipients addressed by their Silicon Accounts UUID.
 
 use std::{fmt, net::IpAddr, time::Duration};
 
@@ -190,7 +190,7 @@ pub struct TingSubscription {
     pub app_id: String,
     /// The recipient the User verification proof speaks for.
     #[serde(rename = "for")]
-    pub recipient: TingRecipient,
+    pub recipient: String,
     /// Whether Ting confirmed the grant is active.
     pub active: bool,
     /// Current recipient opt-in; ordinary registration never enables it.
@@ -232,7 +232,7 @@ struct SentDetail {
     #[serde(rename = "type")]
     event_type: String,
     #[serde(rename = "for")]
-    recipient: TingRecipient,
+    recipient: String,
     read: bool,
     silent: bool,
     #[serde(default, deserialize_with = "deserialize_delivery")]
@@ -334,8 +334,9 @@ impl TingClient {
         if !identifier(&recipient.uuid, 64) || !identifier(app_id, 80) {
             return Err(TingError::InvalidInput("invalid_ting_registration"));
         }
-        let body = serde_json::to_vec(&serde_json::json!({"app_id": app_id, "for": recipient}))
-            .map_err(|_| TingError::InvalidInput("invalid_ting_registration"))?;
+        let body =
+            serde_json::to_vec(&serde_json::json!({"app_id": app_id, "for": recipient.uuid}))
+                .map_err(|_| TingError::InvalidInput("invalid_ting_registration"))?;
         let (status, response) = self.post("/v1/subscriptions", &body, proof).await?;
         if !matches!(status, 200 | 201) {
             return Err(TingError::InvalidResponse);
@@ -345,7 +346,7 @@ impl TingClient {
         if !identifier(&subscription.id, 255)
             || !subscription.active
             || subscription.app_id != app_id
-            || subscription.recipient.uuid != recipient.uuid
+            || subscription.recipient != recipient.uuid
         {
             return Err(TingError::InvalidResponse);
         }
@@ -376,7 +377,7 @@ impl TingClient {
         let detail: SentDetail =
             serde_json::from_slice(&body).map_err(|_| TingError::InvalidResponse)?;
         if detail.id != ting_id
-            || detail.recipient.uuid != recipient_uuid
+            || detail.recipient != recipient_uuid
             || detail.event_type != format!("{app_id}{EVENT_TYPE_SUFFIX}")
             || detail.delivery != delivery
             || detail.deliveries.len() > 100
@@ -413,7 +414,7 @@ impl TingClient {
             .header(reqwest::header::CONTENT_TYPE, "application/json")
             .header(
                 reqwest::header::AUTHORIZATION,
-                format!("Proof {}", proof.expose_secret()),
+                format!("Bearer {}", proof.expose_secret()),
             )
             .body(body.to_vec())
             .send()
@@ -455,7 +456,7 @@ struct SendRequest {
     #[serde(rename = "type")]
     event_type: String,
     #[serde(rename = "for")]
-    recipient: TingRecipient,
+    recipient: String,
     key: String,
     data: serde_json::Map<String, serde_json::Value>,
     #[serde(default)]
@@ -475,7 +476,7 @@ fn send_request(app_id: &str, body: &[u8]) -> Result<SendRequest, TingError> {
     let request: SendRequest =
         serde_json::from_slice(body).map_err(|_| TingError::InvalidInput("invalid_ting_send"))?;
     if request.event_type != format!("{app_id}{EVENT_TYPE_SUFFIX}")
-        || !identifier(&request.recipient.uuid, 64)
+        || !identifier(&request.recipient, 64)
         || !identifier(&request.key, 200)
     {
         return Err(TingError::InvalidInput("invalid_ting_send"));
@@ -586,7 +587,7 @@ mod tests {
     fn send_body(key: &str) -> Vec<u8> {
         serde_json::to_vec(&json!({
             "key": key, "type": "hook.webhook.received",
-            "for": {"uuid": "8HV", "id": "si:worker"},
+            "for": "8HV",
             "data": {"type": "new_event", "data": {}}
         }))
         .unwrap_or_default()
@@ -617,7 +618,7 @@ mod tests {
     fn sends_must_be_hook_events_addressed_by_uuid() {
         assert!(send_request("hook", &send_body("k")).is_ok());
         assert!(send_request("other", &send_body("k")).is_err());
-        let legacy = br#"{"org_id":"tos","key":"k","type":"hook.webhook.received","for":"si:worker","data":{}}"#;
+        let legacy = br#"{"org_id":"tos","key":"k","type":"hook.webhook.received","for":{"uuid":"8HV"},"data":{}}"#;
         assert!(send_request("hook", legacy).is_err());
     }
 
@@ -684,7 +685,7 @@ mod tests {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/tings"))
-            .and(header("authorization", "Proof sap_fixture-proof"))
+            .and(header("authorization", "Bearer sap_fixture-proof"))
             .respond_with(ResponseTemplate::new(202).set_body_json(acceptance("key-fixture")))
             .expect(2)
             .mount(&server)
@@ -704,7 +705,7 @@ mod tests {
         Mock::given(method("POST"))
             .and(path("/v1/subscriptions"))
             .respond_with(ResponseTemplate::new(201).set_body_json(json!({
-                "id":"sub_fixture","app_id":"hook","for":{"uuid":"zQo","id":"c:other"},"active":true})))
+                "id":"sub_fixture","app_id":"hook","for":"zQo","active":true})))
             .mount(&server)
             .await;
         let client = TingClient::new(&server.uri(), Duration::from_secs(2))?;
@@ -718,10 +719,31 @@ mod tests {
         assert!(matches!(result, Err(TingError::InvalidResponse)));
         let requests = server.received_requests().await.ok_or("missing requests")?;
         let sent: Value = serde_json::from_slice(&requests[0].body)?;
-        assert_eq!(
-            sent,
-            json!({"app_id":"hook","for":{"uuid":"8HV","id":"si:worker"}})
-        );
+        assert_eq!(sent, json!({"app_id":"hook","for":"8HV"}));
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn enrolment_accepts_tings_uuid_string_response() -> TestResult {
+        let server = MockServer::start().await;
+        Mock::given(method("POST"))
+            .and(path("/v1/subscriptions"))
+            .and(header("authorization", "Bearer sap_fixture-proof"))
+            .respond_with(ResponseTemplate::new(201).set_body_json(json!({
+                "id":"sub_fixture","app_id":"hook","for":"8HV","active":true,
+                "required_delivery":false})))
+            .mount(&server)
+            .await;
+        let client = TingClient::new(&server.uri(), Duration::from_secs(2))?;
+        let recipient = TingRecipient {
+            uuid: "8HV".into(),
+            id: Some("si:worker".into()),
+        };
+        let result = client
+            .register_recipient(&proof(), "hook", &recipient)
+            .await?;
+        assert_eq!(result.recipient, "8HV");
+        assert!(!result.required_delivery);
         Ok(())
     }
 
@@ -729,7 +751,7 @@ mod tests {
     async fn receipt_validates_identity_and_preserves_incomplete_destination_state() -> TestResult {
         let server = MockServer::start().await;
         let detail = json!({"id":"msg_fixture", "type":"hook.webhook.received",
-            "for":{"uuid":"8HV","id":"si:worker"},
+            "for":"8HV",
             "read":false,"silent":false,"deliveries":[{"webhook_id":"hook_a","delivery_acked":true,"read_acked":false}],
             "deliveries_next_cursor":"another-page"});
         Mock::given(method("POST"))

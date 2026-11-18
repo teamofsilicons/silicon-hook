@@ -79,6 +79,10 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
         ))
         .layer(CatchPanicLayer::custom(middleware::handle_panic))
         .layer(axum_middleware::from_fn(middleware::request_scope))
+        .layer(axum_middleware::from_fn_with_state(
+            middleware::interface_cors(),
+            middleware::apply_interface_cors,
+        ))
 }
 
 /// API v1 and v2 signed in with Silicon IAM; they end with Hook 1.0.
