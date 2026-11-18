@@ -62,16 +62,16 @@ pub(super) async fn apply_interface_cors(
     if path.starts_with("/api/v3/")
         || matches!(
             path,
-            "/api/version" | "/api/contracts" | "/healthz" | "/readyz"
+            "/api/version" | "/api/contracts" | "/api/openapi.yaml" | "/healthz" | "/readyz"
         )
     {
-        cors.layer(next)
+        return cors
+            .layer(next)
             .oneshot(request)
             .await
-            .unwrap_or_else(|never| match never {})
-    } else {
-        next.run(request).await
+            .unwrap_or_else(|never| match never {});
     }
+    next.run(request).await
 }
 
 pub(super) async fn request_scope(mut request: Request, next: Next) -> Response {

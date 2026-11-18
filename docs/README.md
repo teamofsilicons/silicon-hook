@@ -7,6 +7,8 @@ a separate log, and, when the server delivers through Ting, passes a reference
 to the Silicon. The app that hosts the Silicon handles delivery; nobody sets up
 Hook or Ting by hand.
 
+Build a standalone client with the [interface API guide](interfaces/README.md).
+
 ## Install
 
 ```sh

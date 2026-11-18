@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Silicon Hook API
-  version: 1.1.0
+  version: 1.1.1
   summary: Signed webhook endpoints for Silicons, with verified history and optional delivery through Ting.
   description: |
     Silicon Hook gives each Silicon signed webhook endpoints at
@@ -13,9 +13,10 @@ info:
 
     **Sign-in.** Every management route takes `Authorization: Bearer <access token>`:
     a Silicon Accounts access token issued to Hook (an EdDSA JWT whose audience is
-    Hook's app id, `hook`). `GET /api/v3/auth/accounts` says where to get one. Routes
-    that reveal a signing secret, change who has access, or delete and restore hooks
-    also confirm with Silicon Accounts that the token is still active.
+    Hook's app id, `hook`). `GET /api/v3/auth/accounts` says where to get one. Interfaces send
+    `apps["hook"].access_token` with browser credentials omitted. Every protected
+    call requires Accounts to confirm an active access token issued to Hook.
+    See the [interface guide](https://docs.hook.teamofsilicons.com/interfaces/).
 
     **Who can do what.** Hooks belong to a Silicon. The Silicon itself and its
     custodian (a Carbon) have full control; the custodian acts as itself, never as
@@ -73,6 +74,21 @@ x-ting-notification:
   dataSchema:
     "$ref": "#/components/schemas/TingHookEvent"
 paths:
+  "/api/openapi.yaml":
+    get:
+      tags: [System]
+      operationId: getOpenApi
+      summary: Download the contract embedded in this API build
+      security: []
+      responses:
+        '200':
+          description: The OpenAPI 3.1 document in YAML.
+          content:
+            application/yaml:
+              schema:
+                type: string
+        '408':
+          "$ref": "#/components/responses/RequestTimeout"
   "/healthz":
     get:
       tags: [System]
@@ -1383,7 +1399,7 @@ components:
           properties:
             set_webhook:
               type: string
-              description: The Silicon Accounts command that points the Silicon's webhook at this hook.
+              description: The command for Accounts installations supporting direct Silicon webhooks. Hosted Accounts routes Silicon notifications through Ting.
               example: silicon-accounts silicon webhook set si:cos https://api.hook.teamofsilicons.com/silicon/si:cos/A1B2C3D4
             store_secret:
               type: string
@@ -1397,6 +1413,13 @@ components:
         app_id:
           type: string
           example: hook
+        interface_api_documentation_url:
+          type: string
+          format: uri
+        openapi_url:
+          type: string
+          format: uri-reference
+          description: Resolve against the Hook API origin.
         accounts_url:
           type: string
           format: uri
@@ -1422,6 +1445,8 @@ components:
           additionalProperties: false
           required: [carbons, silicons]
           properties:
+            interfaces:
+              type: string
             carbons:
               type: string
             silicons:

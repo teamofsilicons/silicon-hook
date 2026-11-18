@@ -33,13 +33,13 @@ app credentials:
 
 | Call | Proof | Scope |
 | --- | --- | --- |
-| Send a notification, read its receipt | App verification (no user) | `tings.send`, `sent.query` |
-| Enrol a recipient | User verification, from the recipient's own Hook access token | `tings.subscribe` |
+| Send a notification, read its receipt | App verification (no user) | `tings.send`, `tings.read` |
+| Enrol a recipient | User verification, from the recipient's own Hook access token | `subscriptions.register` |
 
 App verification proofs are kept in memory and renewed one at a time; a User
 verification proof is made for each enrolment while the recipient's request is
 live. Hook stores no delegated tokens. Recipients are addressed by their Silicon
-Accounts uuid and current id, `{"uuid", "id"}`.
+Accounts UUID string.
 
 When Silicon Accounts refuses or cannot answer a proof request (for example
 because `HOOK_TING_APP_ID` names no app yet), Hook logs why once and waits before

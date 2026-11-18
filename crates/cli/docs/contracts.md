@@ -31,7 +31,7 @@ URLs already registered with providers survive the upgrade.
 
 v3 is a new major because the sign-in and the identity model changed:
 
-- The bearer is a Silicon Accounts access token issued to Hook, verified locally;
+- The bearer is a Silicon Accounts access token issued to Hook, verified locally and confirmed active online;
   no other identity header is read, and Hook no longer exchanges tokens itself.
 - Hooks belong to a Silicon keyed by its uuid; responses show accounts as
   `{uuid, id}` and `created_by` adds `kind`.

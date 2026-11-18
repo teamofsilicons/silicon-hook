@@ -25,7 +25,16 @@ pub(super) fn router(state: ApiState, settings: &ServerSettings) -> Router {
         .route("/healthz", get(handlers::liveness))
         .route("/readyz", get(handlers::readiness))
         .route("/api/version", get(handlers::negotiate_api_version))
-        .route("/api/contracts", get(super::contracts::catalog));
+        .route("/api/contracts", get(super::contracts::catalog))
+        .route(
+            "/api/openapi.yaml",
+            get(|| async {
+                (
+                    [(header::CONTENT_TYPE, "application/yaml")],
+                    include_str!("../../openapi.yaml"),
+                )
+            }),
+        );
     let webhook = Router::new()
         .route("/webhook/", post(accounts::receive_webhook))
         .route("/webhook", post(accounts::receive_webhook))

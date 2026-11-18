@@ -1,7 +1,7 @@
 # Silicon Hook API documentation
 
 This document explains the Silicon Hook API contract (v3). The machine-readable
-contract is [`openapi.yaml`](../../openapi.yaml).
+contract is [`openapi.yaml`](../../openapi.yaml). For a standalone frontend, start with [Use Silicon Hook in an interface](../interfaces/README.md).
 
 ## API conventions
 
@@ -53,10 +53,9 @@ Unprefixed paths below are relative to `/api/v3`.
   `Authorization: Bearer <access token>`: a Silicon Accounts access token issued
   to Hook (an EdDSA JWT, audience `hook`, issuer the Silicon Accounts URL Hook
   trusts). [Sign in to Hook](../accounts/README.md) shows how Carbons and
-  Silicons get one. Hook verifies it locally against Silicon Accounts' key set and
-  refuses tokens issued before a sign-out Hook was told about. Routes that reveal
-  a secret or change who has access also ask Silicon Accounts whether the token
-  is still active.
+  Silicons get one. Hook verifies the signature, issuer, audience and expiry and checks
+  with Accounts on each protected request that the bearer is an active access token
+  issued to Hook. An interface sends `apps["hook"].access_token` with browser credentials omitted.
 - **Discovery.** `GET /auth/accounts` is public and returns Hook's `app_id`, the
   Silicon Accounts URL, the token's audience, issuer and key set URL, how to sign
   in, and whether delivery through Ting is on. `GET /auth/status` returns who the
@@ -71,8 +70,7 @@ Token refusals are `401` with a precise code: `token_expired`,
 `token_malformed`, `token_unknown_key` and the other `token_*` codes of Silicon
 Accounts' verifier, `session_ended` (signed out, or Hook's access removed) and
 `account_deleted`. Every management
-response carries `Cache-Control: private, no-store`. Hook exposes no endpoints for
-other apps to act on someone's behalf.
+response carries `Cache-Control: private, no-store`. Hook applies its own resource permissions to each account.
 
 ### Who can do what
 
@@ -166,7 +164,7 @@ the caller (`silicon-accounts webhook set <url>` for the Silicon,
 `store_secret` says how to store the `whsec_` secret that command prints
 (`PATCH /silicons/{silicon}/hooks/{hook_id}` with `{"signature": {"secret": ...}}`).
 Until it is stored, deliveries are withheld as unverified. Requires
-`Idempotency-Key`.
+`Idempotency-Key`. Hosted Accounts now routes a Silicon’s own notifications through Ting. The returned webhook commands apply to Accounts installations that support direct Silicon webhooks. [Hosted notification setup](https://developers.teamofsilicons.com/docs/accounts/start/silicon-notifications)
 
 ## Hook management
 
@@ -388,9 +386,9 @@ Delivery is optional. When the operator sets `HOOK_TING_URL`, every verified
 request is queued for its Silicon (and for Carbons who subscribed) and sent to
 Ting as a compact reference; Hook retries until Ting confirms it stored the send,
 reusing the same bytes and key. Hook signs its calls to Ting with Silicon
-Accounts proofs: an App verification proof (scopes `tings.send`, `sent.query`)
+Accounts proofs: an App verification proof (scopes `tings.send`, `tings.read`)
 for sends and receipts, and a User verification proof made from the caller's own
-token (scope `tings.subscribe`) for enrolment.
+token (scope `subscriptions.register`) for enrolment.
 
 When `HOOK_TING_URL` is unset, Hook still receives, verifies and stores every
 event, queues nothing, and says so: `/readyz` reports it, `GET /delivery` answers
@@ -416,8 +414,7 @@ The reference Ting carries:
 }
 ```
 
-The Ting type is `hook.webhook.received`; the send names the recipient as
-`{uuid, id}` and the producer key `hook:{event id}:{sha256(recipient uuid)}`. No
+The Ting type is `hook.webhook.received`; the send names the recipient by its Accounts UUID and the producer key `hook:{event id}:{sha256(recipient uuid)}`. No
 provider body, header or secret travels through Ting. Use `metadata.id` to
 deduplicate and `metadata.silicon.uuid` to hydrate. See
 [Receiving through Ting](../client/relay.md).

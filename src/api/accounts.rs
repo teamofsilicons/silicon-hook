@@ -43,7 +43,7 @@ pub(super) async fn sign_in_information(
                 "jwks_url": format!("{}/.well-known/jwks.json", accounts.issuer()),
             },
             "interface_api_documentation_url": "https://docs.hook.teamofsilicons.com/interfaces/",
-            "openapi_url": "https://docs.hook.teamofsilicons.com/openapi.yaml",
+            "openapi_url": "/api/openapi.yaml",
             "sign_in": {
                 "interfaces": format!("Use apps[\"{}\"].access_token from Silicon Accounts interface authorization as the Bearer token.", accounts.app_id()),
                 "carbons": "device flow with client_id hook (hook login), or the web console",
@@ -366,6 +366,6 @@ fn next_steps(actor: &Actor, silicon: &SiliconRef, hook_id: &str, url: &str) -> 
         "store_secret": format!(
             "PATCH /api/v3/silicons/{silicon_id}/hooks/{hook_id} with {{\"signature\": {{\"secret\": \"<the whsec_ secret Silicon Accounts printed>\"}}}} (the Hook CLI's set-secret command does this)"
         ),
-        "explanation": "Silicon Accounts creates the signing secret when the webhook is set and prints it once. Until Hook stores it on this hook, deliveries are withheld as unverified.",
+        "explanation": "Hosted Silicon Accounts delivers a Silicon’s own notifications through Ting. See https://developers.teamofsilicons.com/docs/accounts/start/silicon-notifications. The direct webhook commands apply only to Accounts installations supporting Silicon webhooks.",
     })
 }
