@@ -1,7 +1,7 @@
 # Silicon Hook API documentation
 
 This document explains the Silicon Hook API contract (v3). The machine-readable
-contract is [`openapi.yaml`](../../openapi.yaml). For a standalone frontend, start with [Use Silicon Hook in an interface](../interfaces/README.md).
+contract is [`openapi.yaml`](../../openapi.yaml). For a standalone frontend, start with [Use Silicon Hook in an interface](https://docs.hook.teamofsilicons.com/interfaces/).
 
 ## API conventions
 

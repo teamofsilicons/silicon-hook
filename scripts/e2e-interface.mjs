@@ -13,7 +13,7 @@ const { chromium } = requireWeb("@playwright/test");
 const api = new URL(process.env.HOOK_INTERFACE_API ?? "https://api.hook.teamofsilicons.com").origin;
 let input = "";
 for await (const part of process.stdin) input += part;
-const { access_token: token, silicon_uuid: silicon, refused_tokens: refused = [] } = JSON.parse(input);
+const { access_token: token, silicon_uuid: silicon, refused_tokens: refused = [], expect_ting_acceptance: expectTing } = JSON.parse(input);
 assert.ok(token && silicon, "A fixture bearer and its Silicon UUID are required");
 const server = createServer((_request, response) => {
   response.setHeader("Content-Type", "text/html");
@@ -126,7 +126,16 @@ try {
     assert.equal((await request(scope + "/events?hook_id=" + made.id, 200)).items.length, 2);
     assert.equal((await request(hook + "/blocked-requests", 200)).items.length, 1);
     assert.equal((await request(scope + "/blocked-requests?hook_id=" + made.id, 200)).items.length, 1);
-    const publication = await request(eventPath + "/publication", 200);
+    let publication = await request(eventPath + "/publication", 200);
+    if (expectTing) {
+      const accepted = () => ["accepted_by_ting", "accepted_silently"].includes(publication.state) && publication.recipient_receipt;
+      for (let attempt = 0; !accepted() && attempt < 20; attempt++) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        publication = await request(eventPath + "/publication", 200);
+      }
+      assert.ok(accepted(), `Ting publication: ${publication.state} (${publication.last_error_code ?? publication.recipient_status_error ?? "no receipt"})`);
+      passed.push("Ting accepted the event and returned its recipient receipt");
+    }
     assert.equal(publication.event_id, event.id);
     assert.equal(typeof publication.state, "string");
     passed.push("signed provider requests, withheld request, cursor pagination, event hydration and publication");

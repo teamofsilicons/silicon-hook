@@ -699,7 +699,7 @@ async fn endpoint_rotation_retires_the_previous_key_forever() -> Result<()> {
     assert!(matches!(accepted, ReceiveOutcome::Accepted(_)));
 
     sqlx::query(
-        "UPDATE hook.hooks SET created_at = clock_timestamp() - INTERVAL '50 days', \
+        "UPDATE hook.hooks SET created_at = LEAST(created_at, clock_timestamp() - INTERVAL '50 days'), \
          disabled_at = NULL, deleted_at = clock_timestamp() - INTERVAL '46 days', \
          updated_at = clock_timestamp() WHERE id = $1",
     )
