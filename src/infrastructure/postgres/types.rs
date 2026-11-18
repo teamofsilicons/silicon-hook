@@ -310,7 +310,7 @@ pub struct AcceptEvent {
 /// Ting delivery queued in the same transaction as an accepted event.
 #[derive(Clone, Debug)]
 pub struct EventDelivery {
-    /// App owning the outgoing Ting type (`{app_id}.webhook.received`).
+    /// App owning the outgoing Ting type (`{app_id}.webhookReceived`).
     pub app_id: String,
 }
 

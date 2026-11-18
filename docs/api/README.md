@@ -414,7 +414,7 @@ The reference Ting carries:
 }
 ```
 
-The Ting type is `hook.webhook.received`; the send names the recipient by its Accounts UUID and the producer key `hook:{event id}:{sha256(recipient uuid)}`. No
+The Ting type is `hook.webhookReceived`; the send names the recipient by its Accounts UUID and the producer key `hook:{event id}:{sha256(recipient uuid)}`. No
 provider body, header or secret travels through Ting. Use `metadata.id` to
 deduplicate and `metadata.silicon.uuid` to hydrate. See
 [Receiving through Ting](../client/relay.md).

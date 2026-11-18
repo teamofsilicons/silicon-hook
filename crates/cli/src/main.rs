@@ -127,12 +127,13 @@ fn commands_tree(json: bool) -> CliResult<()> {
     }
 }
 
-const TOPICS: &str = "overview, signin, cli, client, receiving, signatures (or api), delivery, contracts, configuration, deployment, releases";
+const TOPICS: &str = "overview, signin, interfaces, cli, client, receiving, signatures (or api), delivery, contracts, configuration, deployment, releases";
 
 fn docs(topic: &str) -> CliResult<()> {
     let text = match topic {
         "overview" => include_str!("../docs/README.md"),
         "signin" | "accounts" | "iam" => include_str!("../docs/accounts/README.md"),
+        "interfaces" => include_str!("../docs/interfaces/README.md"),
         "cli" => include_str!("../docs/cli/README.md"),
         "client" => include_str!("../docs/client/README.md"),
         "receiving" | "relay" => include_str!("../docs/client/relay.md"),

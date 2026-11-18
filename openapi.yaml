@@ -2,7 +2,7 @@
 openapi: 3.1.0
 info:
   title: Silicon Hook API
-  version: 1.1.1
+  version: 1.1.2
   summary: Signed webhook endpoints for Silicons, with verified history and optional delivery through Ting.
   description: |
     Silicon Hook gives each Silicon signed webhook endpoints at
@@ -70,7 +70,7 @@ tags:
 - name: Accounts webhook
   description: Silicon Accounts notifies Hook about account changes.
 x-ting-notification:
-  description: "Hook publishes this schema in the data field of Ting type <Hook app_id>.webhook.received. The outer Ting transport envelope is owned by Ting."
+  description: "Hook publishes this schema in the data field of Ting type <Hook app_id>.webhookReceived. The outer Ting transport envelope is owned by Ting."
   dataSchema:
     "$ref": "#/components/schemas/TingHookEvent"
 paths:

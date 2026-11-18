@@ -2727,7 +2727,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-hook"
-version = "1.1.1"
+version = "1.1.2"
 dependencies = [
  "aes-gcm",
  "anyhow",
@@ -2778,7 +2778,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-hook-cli"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "axum",
  "clap",
@@ -2794,7 +2794,7 @@ dependencies = [
 
 [[package]]
 name = "silicon-hook-client"
-version = "1.1.0"
+version = "1.1.2"
 dependencies = [
  "axum",
  "hex",

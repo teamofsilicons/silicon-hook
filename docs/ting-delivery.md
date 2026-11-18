@@ -24,7 +24,9 @@ subscriptions, and `state: delivery_disabled` in publication status.
 
 Before setting `HOOK_TING_URL`, Ting must accept Silicon Accounts proofs from
 Hook (Ting's own migration is outside Hook), and Ting's operator must register
-the `hook.webhook.received` type. Until then keep it unset.
+the `hook.webhookReceived` type. Receivers that filter by type can accept this
+name for new notifications and `hook.webhook.received` for existing history.
+Update any type-specific Ting preference to cover the new name.
 
 ## How Hook talks to Ting
 

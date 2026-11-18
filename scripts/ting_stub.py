@@ -155,7 +155,7 @@ class Handler(BaseHTTPRequestHandler):
                 STATE["refused_once"] = True
             if first:
                 return self.refuse(401, "invalid_proof", {**entry, "on_purpose": True})
-        if body.get("type") != f"{CONFIG['issuer']}.webhook.received" or not isinstance(recipient, str) or not recipient or not body.get("key"):
+        if body.get("type") != f"{CONFIG['issuer']}.webhookReceived" or not isinstance(recipient, str) or not recipient or not body.get("key"):
             return self.refuse(400, "invalid_input", entry)
         with LOCK:
             existing = STATE["keys"].get(body["key"])

@@ -109,7 +109,7 @@ async fn query(
             .map(|(_, (_, _, sent))| sent.clone())
     });
     let sent = sent.unwrap_or_default();
-    let mut detail = json!({"id": body["id"], "type": "hook.webhook.received", "for": sent["for"],
+    let mut detail = json!({"id": body["id"], "type": "hook.webhookReceived", "for": sent["for"],
         "read": true, "silent": false,
         "deliveries": [{"webhook_id": "wh_1", "delivery_acked": true, "read_acked": true}]});
     if sent["delivery"] == "required" {
@@ -221,7 +221,7 @@ async fn accepted_events_reach_the_silicon_and_its_observers_with_accounts_proof
             authorization.starts_with("Bearer sap_stub_"),
             "{authorization}"
         );
-        assert_eq!(body["type"], "hook.webhook.received");
+        assert_eq!(body["type"], "hook.webhookReceived");
         assert_eq!(
             body["data"]["data"]["metadata"]["silicon"],
             json!({"uuid": "SCos1", "id": "si:cos"})

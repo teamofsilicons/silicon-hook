@@ -8,7 +8,7 @@ parser.add_argument('--check', action='store_true')
 args = parser.parse_args()
 root = Path(__file__).resolve().parents[1]
 # Every guide `hook docs <topic>` prints; keep in sync with crates/cli/src/main.rs.
-paths = ['README.md', 'accounts/README.md', 'api/README.md', 'client/README.md',
+paths = ['README.md', 'accounts/README.md', 'interfaces/README.md', 'api/README.md', 'client/README.md',
          'cli/README.md', 'client/relay.md', 'contracts.md', 'configuration.md',
          'deployment.md', 'releases.md', 'ting-delivery.md']
 stale = []

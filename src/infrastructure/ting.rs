@@ -300,7 +300,8 @@ impl TingClient {
         &self.origin
     }
 
-    /// Sends the exact persisted bytes with an App verification proof.
+    /// Sends a persisted request with an App verification proof, translating the
+    /// retired Ting type on older requests while preserving their producer key.
     ///
     /// # Errors
     /// Rejects invalid payloads before any network I/O, Ting failures, and a
@@ -312,7 +313,20 @@ impl TingClient {
         prepared_body: &[u8],
     ) -> Result<TingAcceptance, TingError> {
         let request = send_request(app_id, prepared_body)?;
-        let (status, body) = self.post("/v1/tings", prepared_body, proof).await?;
+        // Pending sends from before Ting required two-part names retain their
+        // original producer key. Only their type changes on the wire.
+        let updated;
+        let wire_body = if request.event_type.ends_with(LEGACY_EVENT_TYPE_SUFFIX) {
+            let mut value: serde_json::Value = serde_json::from_slice(prepared_body)
+                .map_err(|_| TingError::InvalidInput("invalid_ting_send"))?;
+            value["type"] = format!("{app_id}{EVENT_TYPE_SUFFIX}").into();
+            updated = serde_json::to_vec(&value)
+                .map_err(|_| TingError::InvalidInput("invalid_ting_send"))?;
+            &updated[..]
+        } else {
+            prepared_body
+        };
+        let (status, body) = self.post("/v1/tings", wire_body, proof).await?;
         if !matches!(status, 200 | 202) {
             return Err(TingError::InvalidResponse);
         }
@@ -378,7 +392,7 @@ impl TingClient {
             serde_json::from_slice(&body).map_err(|_| TingError::InvalidResponse)?;
         if detail.id != ting_id
             || detail.recipient != recipient_uuid
-            || detail.event_type != format!("{app_id}{EVENT_TYPE_SUFFIX}")
+            || !is_hook_event_type(&detail.event_type, app_id)
             || detail.delivery != delivery
             || detail.deliveries.len() > 100
             || detail
@@ -448,7 +462,15 @@ impl TingClient {
 }
 
 /// Ting type suffix owned by the Hook application.
-pub const EVENT_TYPE_SUFFIX: &str = ".webhook.received";
+pub const EVENT_TYPE_SUFFIX: &str = ".webhookReceived";
+const LEGACY_EVENT_TYPE_SUFFIX: &str = ".webhook.received";
+
+fn is_hook_event_type(event_type: &str, app_id: &str) -> bool {
+    matches!(
+        event_type.strip_prefix(app_id),
+        Some(EVENT_TYPE_SUFFIX | LEGACY_EVENT_TYPE_SUFFIX)
+    )
+}
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -475,7 +497,7 @@ fn send_request(app_id: &str, body: &[u8]) -> Result<SendRequest, TingError> {
     }
     let request: SendRequest =
         serde_json::from_slice(body).map_err(|_| TingError::InvalidInput("invalid_ting_send"))?;
-    if request.event_type != format!("{app_id}{EVENT_TYPE_SUFFIX}")
+    if !is_hook_event_type(&request.event_type, app_id)
         || !identifier(&request.recipient, 64)
         || !identifier(&request.key, 200)
     {
@@ -586,7 +608,7 @@ mod tests {
 
     fn send_body(key: &str) -> Vec<u8> {
         serde_json::to_vec(&json!({
-            "key": key, "type": "hook.webhook.received",
+            "key": key, "type": "hook.webhookReceived",
             "for": "8HV",
             "data": {"type": "new_event", "data": {}}
         }))
@@ -681,21 +703,34 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn sends_exact_bytes_with_the_proof_scheme() -> TestResult {
+    async fn sends_stable_bytes_and_upgrades_only_the_type_on_queued_legacy_sends() -> TestResult {
         let server = MockServer::start().await;
         Mock::given(method("POST"))
             .and(path("/v1/tings"))
             .and(header("authorization", "Bearer sap_fixture-proof"))
             .respond_with(ResponseTemplate::new(202).set_body_json(acceptance("key-fixture")))
-            .expect(2)
+            .expect(4)
             .mount(&server)
             .await;
         let client = TingClient::new(&server.uri(), Duration::from_secs(2))?;
         let body = send_body("key-fixture");
         client.send(&proof(), "hook", &body).await?;
         client.send(&proof(), "hook", &body).await?;
+        let expected: Value = serde_json::from_slice(&body)?;
+        let mut legacy = expected.clone();
+        legacy["type"] = json!("hook.webhook.received");
+        let old_body = serde_json::to_vec(&legacy)?;
+        client.send(&proof(), "hook", &old_body).await?;
+        client.send(&proof(), "hook", &old_body).await?;
         let requests = server.received_requests().await.ok_or("missing requests")?;
-        assert!(requests.iter().all(|request| request.body == body));
+        assert_eq!(requests.len(), 4);
+        assert_eq!(requests[0].body, body);
+        assert_eq!(requests[1].body, body);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&requests[2].body)?,
+            expected
+        );
+        assert_eq!(requests[2].body, requests[3].body);
         Ok(())
     }
 

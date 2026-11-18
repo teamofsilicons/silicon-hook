@@ -45,7 +45,7 @@ let receiver = Receiver::new(
 ## Callback acceptance
 
 Ting sends `{"tings": [...]}`. Each Hook notification has the type
-`hook.webhook.received`, the producer key `hook:{event id}:{sha256(recipient uuid)}`,
+`hook.webhookReceived` (or the earlier `hook.webhook.received` in history), the producer key `hook:{event id}:{sha256(recipient uuid)}`,
 and inside `data` the envelope `{"type": "new_event", "data": {"sender", "metadata"}}`
 where `metadata` is the reference:
 
