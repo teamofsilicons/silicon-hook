@@ -8,8 +8,8 @@ Add `hook` to your interface’s app IDs. Hook gives a Silicon signed webhook UR
 | Management, history and delivery | `https://api.hook.teamofsilicons.com/api/v3` |
 | Provider ingress | The `endpoint_url` returned by Hook |
 | This guide as plain text | [Download Markdown](https://docs.hook.teamofsilicons.com/interfaces.md) |
-| Full request and response schemas | [Live OpenAPI 3.1](https://api.hook.teamofsilicons.com/api/openapi.yaml) · [Documentation copy](../../openapi.yaml) |
-| Signature expressions, status codes and wire examples | [HTTP reference](../api/README.md) |
+| Full request and response schemas | [Live OpenAPI 3.1](https://api.hook.teamofsilicons.com/api/openapi.yaml) · [Documentation copy](https://docs.hook.teamofsilicons.com/openapi.yaml) |
+| Signature expressions, status codes and wire examples | [HTTP reference](https://docs.hook.teamofsilicons.com/api/) |
 
 ## Sign in and open a Silicon
 
@@ -53,7 +53,7 @@ const account = await callHook(token, "/auth/status");
 const { items: silicons } = await callHook(token, "/silicons");
 ```
 
-For example, the account response contains `{"authenticated":true,"app_id":"hook","uuid":"912fff6e-e7f8-4057-ab03-201aceac9513","id":"si:saket-agents","kind":"silicon"}`. The list returns entries with `silicon: {uuid, id}`, `access` and `custodian`. Let the user select a Silicon. Keep its immutable UUID for later calls. Show an empty state if there are no entries. A custodian can also open a known Silicon by its current ID and Hook checks custody with Accounts. Access levels come from Hook’s resource permissions.
+For example, the account response contains `{"authenticated":true,"app_id":"hook","uuid":"0198c21a-6330-7000-8000-000000000003","id":"si:scout","kind":"silicon"}`. The list returns entries with `silicon: {uuid, id}`, `access` and `custodian`. Let the user select a Silicon. Keep its immutable UUID for later calls. Show an empty state if there are no entries. A custodian can also open a known Silicon by its current ID and Hook checks custody with Accounts. Access levels come from Hook’s resource permissions.
 
 ## Create a hook and inspect a delivery
 
@@ -68,7 +68,7 @@ const created = await callHook(token, scope + "/hooks", {
 const { id, endpoint_url, signing_secret } = created;
 ```
 
-HTTP 201 returns the hook’s fields directly. Hand the provider its `endpoint_url` and generated `signing_secret` at setup time. A subsequent GET contains the signature policy and `has_secret`. Hook’s default verifies HMAC-SHA256 using the UTF-8 secret, over `webhook-id.webhook-timestamp.raw_body`, with a base64 `webhook-signature` header. For GitHub, Stripe or a different signing scheme, supply the provider’s policy and key. Send provider requests separately from the call helper above. Hook records their headers and body. [Signature policies and expressions](../api/README.md#signature-policy)
+HTTP 201 returns the hook’s fields directly. Hand the provider its `endpoint_url` and generated `signing_secret` at setup time. A subsequent GET contains the signature policy and `has_secret`. Hook’s default verifies HMAC-SHA256 using the UTF-8 secret, over `webhook-id.webhook-timestamp.raw_body`, with a base64 `webhook-signature` header. For GitHub, Stripe or a different signing scheme, supply the provider’s policy and key. Send provider requests separately from the call helper above. Hook records their headers and body. [Signature policies and expressions](https://docs.hook.teamofsilicons.com/api/#signature-policy)
 
 A provider POST receives `{"status":"webhook.ok","receipt_id":"…"}` for both a verified and a withheld request. Open the hook’s verified history to see the result, or its blocked log to diagnose a missing or mismatched signature.
 
@@ -113,7 +113,7 @@ All paths below are relative to `/api/v3`. In the table, `S` is `/silicons/{sili
 
 ## Notifications and recovery
 
-When `GET /delivery` reports `enabled: true`, Hook queues each verified event to Ting. A Silicon opts into required delivery in Ting. An observing Carbon can subscribe to ordinary copies of future events. An interface with a Ting receiver can open the full event with its Hook token using the Silicon UUID and event ID from `data.metadata` inside the Hook `new_event` reference. Deduplicate on event ID. Delivery may be replayed or arrive out of order. When delivery is disabled, keep history available and hide enrollment controls. An interface can refresh or poll Hook history without a Ting receiver. [Delivery and receipts](../ting-delivery.md)
+When `GET /delivery` reports `enabled: true`, Hook queues each verified event to Ting. A Silicon opts into required delivery in Ting. An observing Carbon can subscribe to ordinary copies of future events. An interface with a Ting receiver can open the full event with its Hook token using the Silicon UUID and event ID from `data.metadata` inside the Hook `new_event` reference. Deduplicate on event ID. Delivery may be replayed or arrive out of order. When delivery is disabled, keep history available and hide enrollment controls. An interface can refresh or poll Hook history without a Ting receiver. [Delivery and receipts](https://docs.hook.teamofsilicons.com/ting-delivery/)
 
 Hook checks the JWT signature, issuer, audience and expiry, confirms live access with Accounts on every protected call, then checks Hook permissions for the requested Silicon. On 401, use the interface’s Accounts refresh flow for `hook` if appropriate. If access has ended or consent was withdrawn, clear the affected view and request authorization again. For an ordinary interface refresh, post `grant_type: "refresh_token"`, the interface ID and its refresh token to Accounts’ `/v1/interface-auth/token` with an idempotency key. Read the new `apps["hook"].access_token`; keep the returned refresh token on your backend. Omit the optional `app_id` field when refreshing existing grants. A 403 from Hook is a resource permission decision. A 503 from Accounts or storage is retryable; keep the session and retry with backoff.
 

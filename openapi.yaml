@@ -289,6 +289,8 @@ paths:
                 "$ref": "#/components/schemas/SiliconList"
         '401':
           "$ref": "#/components/responses/Unauthorized"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/access":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -312,6 +314,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '410':
           "$ref": "#/components/responses/Gone"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/access/{account}":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -348,6 +352,8 @@ paths:
           "$ref": "#/components/responses/UnsupportedMediaType"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     delete:
       tags: [Silicons]
       operationId: revokeAccess
@@ -363,6 +369,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/allow-list":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -383,6 +391,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/allow-list/{account}":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -407,6 +417,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '409':
           "$ref": "#/components/responses/Conflict"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     delete:
       tags: [Silicons]
       operationId: disallowAccount
@@ -421,6 +433,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -449,6 +463,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '410':
           "$ref": "#/components/responses/Gone"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     post:
       tags: [Hooks]
       operationId: createHook
@@ -484,6 +500,8 @@ paths:
           "$ref": "#/components/responses/UnsupportedMediaType"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     patch:
       tags: [Hooks]
       operationId: setHooksEnabled
@@ -511,6 +529,8 @@ paths:
           "$ref": "#/components/responses/Conflict"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/accounts":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -540,6 +560,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '409':
           "$ref": "#/components/responses/Conflict"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -561,6 +583,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     patch:
       tags: [Hooks]
       operationId: updateHook
@@ -594,6 +618,8 @@ paths:
           "$ref": "#/components/responses/UnsupportedMediaType"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     delete:
       tags: [Hooks]
       operationId: deleteHook
@@ -610,6 +636,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '409':
           "$ref": "#/components/responses/Conflict"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}/restore":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -638,6 +666,8 @@ paths:
           "$ref": "#/components/responses/Conflict"
         '410':
           "$ref": "#/components/responses/Gone"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}/secret/rotate":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -666,6 +696,8 @@ paths:
           "$ref": "#/components/responses/Conflict"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}/endpoint/rotate":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -692,6 +724,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '409':
           "$ref": "#/components/responses/Conflict"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}/events":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -713,6 +747,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/hooks/{hook_id}/blocked-requests":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -734,6 +770,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/events":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -755,6 +793,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/events/{event_id}":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -776,6 +816,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/blocked-requests":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -797,6 +839,8 @@ paths:
           "$ref": "#/components/responses/NotFound"
         '422':
           "$ref": "#/components/responses/UnprocessableEntity"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/silicons/{silicon}/events/{event_id}/publication":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -836,6 +880,8 @@ paths:
                 "$ref": "#/components/schemas/DeliveryStatus"
         '401':
           "$ref": "#/components/responses/Unauthorized"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/api/v3/delivery/recipient":
     post:
       tags: [Delivery]
@@ -882,6 +928,8 @@ paths:
           "$ref": "#/components/responses/Forbidden"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
     post:
       tags: [Delivery]
       operationId: observeSilicon
@@ -924,6 +972,8 @@ paths:
           "$ref": "#/components/responses/Unauthorized"
         '404':
           "$ref": "#/components/responses/NotFound"
+        '503':
+          "$ref": "#/components/responses/ServiceUnavailable"
   "/silicon/{silicon}/{endpoint_key}":
     parameters:
     - "$ref": "#/components/parameters/Silicon"
@@ -1408,7 +1458,7 @@ components:
     SignInInformation:
       type: object
       additionalProperties: false
-      required: [app_id, accounts_url, token, sign_in, delivery]
+      required: [app_id, accounts_url, token, sign_in, delivery, interface_api_documentation_url, openapi_url]
       properties:
         app_id:
           type: string
@@ -1443,7 +1493,7 @@ components:
         sign_in:
           type: object
           additionalProperties: false
-          required: [carbons, silicons]
+          required: [carbons, silicons, interfaces]
           properties:
             interfaces:
               type: string
